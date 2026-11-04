@@ -156,6 +156,7 @@
 - 移动端远程桌面快照与推送绑定集成（`ScreenCaptureCardItem`、`captureScreen`、`registerPushToken` in `apps/mobile`）：支持在会话时间线中渲染桌面屏幕快照卡片并向 Bridge 注册 iOS/Android 推送凭据
 - 生成 Flutter iOS 与 Android 原生宿主工程（`apps/mobile/ios` & `apps/mobile/android`）：配置 `cn.quniv.nienie_mobile` 包名及不依赖外部包的内联静态分析规则（`analysis_options.yaml`）
 - 实现通用 JSONL 命令 Agent 适配器（`CustomJsonlAdapter` in `@nienie/agent-events` & `@nienie/bridge-core`）：支持接入任意自定义 JSONL CLI Agent，并将未知错误事件安全保留为 `UNRECOGNIZED_AGENT_ERROR`
+- 移动端会话工具栏操作按钮（`btn-load-diffs` & `btn-capture-screen` in `apps/mobile`）：在会话输入栏提供一键查看文件变更 Diff 与一键获取桌面屏幕快照的触控入口
 
 ## MVP 规划
 

@@ -1578,6 +1578,19 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
+                IconButton(
+                  key: const Key('btn-load-diffs'),
+                  tooltip: 'Load Session Diffs',
+                  onPressed: () => client.loadSessionDiffs(active.id),
+                  icon: const Icon(Icons.difference_outlined),
+                ),
+                IconButton(
+                  key: const Key('btn-capture-screen'),
+                  tooltip: 'Capture Desktop Screen',
+                  onPressed: () => client.captureScreen('main'),
+                  icon: const Icon(Icons.desktop_windows_outlined),
+                ),
+                const SizedBox(width: 4),
                 Expanded(
                   child: TextField(
                     key: const Key('input-session-prompt'),

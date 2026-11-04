@@ -223,8 +223,8 @@ void main() {
         'decision': 'allow_once',
       });
 
-      // 9. Load session file diffs and render Diff card
-      await client.loadSessionDiffs('ses_alpha');
+      // 9. Tap toolbar buttons to load session file diffs and capture desktop screen
+      await tester.tap(find.byKey(const Key('btn-load-diffs')));
       await tester.pumpAndSettle();
       await tester.drag(find.byType(ListView).last, const Offset(0, -300));
       await tester.pumpAndSettle();
@@ -240,7 +240,7 @@ void main() {
       await client.sendMessage('use selected model');
       expect(transport.sentModelIds.last, 'anthropic/claude-sonnet-4');
 
-      // 11. Register push token and request remote desktop fallback screen capture
+      // 11. Register push token and tap toolbar button to request remote desktop fallback screen capture
       await client.registerPushToken(
         platform: 'ios',
         provider: 'apns',
@@ -248,7 +248,7 @@ void main() {
       );
       expect(transport.registeredPushes.single['pushToken'], 'apns_mobile_tok_1');
 
-      await client.captureScreen('main');
+      await tester.tap(find.byKey(const Key('btn-capture-screen')));
       await tester.pumpAndSettle();
       await tester.drag(find.byType(ListView).last, const Offset(0, -300));
       await tester.pumpAndSettle();
