@@ -191,3 +191,9 @@ export {
   type PushNotificationRouterOptions,
   type PushRegistration,
 } from './push.js';
+export {
+  runDaemonCli,
+  runRelayCli,
+  type DaemonCliHandle,
+  type RelayCliHandle,
+} from './cli.js';

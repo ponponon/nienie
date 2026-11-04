@@ -151,6 +151,7 @@
 - 移动端模型加载与切换（`loadModels` & `selectModel` in `apps/mobile`）：拉取 `models.list` 并在发送 Prompt 时附带当前选中的 `modelId`
 - 远程桌面快照兜底（`ScreenCaptureProvider` & `screen.capture`）：支持已认证手机在极端 GUI 弹窗场景下请求受控的桌面窗口/屏幕快照帧（未授权请求严格返回 `UNAUTHORIZED`）
 - 完成 Rust Bridge 架构评估与迁移规范（`docs/architecture/rust-bridge-evaluation.md`）：明确内存/启动基准、公网 Relay 优先迁移路径与 Wire Protocol v1 二进制兼容契约
+- 实现 Relay 与 Headless Daemon CLI 启动器（`runRelayCli` & `runDaemonCli` in `@nienie/bridge-core`）：支持通过命令行参数或环境变量直接启动公网 Relay 与无 GUI 守护进程
 
 ## MVP 规划
 

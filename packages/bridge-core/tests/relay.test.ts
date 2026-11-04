@@ -11,6 +11,8 @@ import {
   BridgeRelayClient,
   BridgeServer,
   RelayServer,
+  runDaemonCli,
+  runRelayCli,
 } from '../src/index.js';
 
 function createTestAdapter(): AgentAdapter & { emit(event: CanonicalAgentEvent): void } {
@@ -227,6 +229,24 @@ describe('Public Relay server and outbound Bridge/Mobile routing', () => {
     await waitFor(() =>
       mobileInbox.some((m) => m.type === 'relay.presence' && m.bridgeOnline === true),
     );
+  });
+
+  it('starts standalone Relay and Headless Daemon via CLI runners', async () => {
+    const relayCli = await runRelayCli(['--host=127.0.0.1', '--port=0']);
+    cleanups.push(() => relayCli.stop());
+    expect(relayCli.url).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
+
+    const daemonCli = await runDaemonCli([
+      '--machine-id=cli_daemon_box',
+      '--host=127.0.0.1',
+      '--port=0',
+      `--relay-url=${relayCli.url}`,
+    ]);
+    cleanups.push(() => daemonCli.stop());
+
+    expect(daemonCli.status.machineId).toBe('cli_daemon_box');
+    expect(daemonCli.status.relayUrl).toBe(relayCli.url);
+    expect(daemonCli.status.pairingCode).toMatch(/^\d{6}$/);
   });
 });
 
