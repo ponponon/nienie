@@ -255,6 +255,13 @@ void main() {
 
       expect(find.text('Screen Capture (main)'), findsOneWidget);
       expect(find.text('1440x900'), findsOneWidget);
+
+      // 12. Tap New Session button to create and switch to a new session
+      await tester.tap(find.byKey(const Key('btn-new-session')));
+      await tester.pumpAndSettle();
+
+      expect(client.activeSession?.id, 'ses_created_mobile');
+      expect(find.text('Mobile Session'), findsOneWidget);
     },
   );
 }

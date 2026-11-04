@@ -1491,27 +1491,52 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     final active = client.activeSession;
     return Column(
       children: [
-        // Agent list bar
+        // Agent list bar + New Session button
         SizedBox(
           height: 60,
-          child: ListView.separated(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            scrollDirection: Axis.horizontal,
-            itemCount: client.agents.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final agent = client.agents[index];
-              return Chip(
-                avatar: Icon(
-                  agent.available ? Icons.check_circle_outline : Icons.cancel_outlined,
-                  size: 16,
-                  color: agent.available
-                      ? const Color(0xFF10B981)
-                      : const Color(0xFF9CA3AF),
+          child: Row(
+            children: [
+              Expanded(
+                child: ListView.separated(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  scrollDirection: Axis.horizontal,
+                  itemCount: client.agents.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) {
+                    final agent = client.agents[index];
+                    return Chip(
+                      avatar: Icon(
+                        agent.available
+                            ? Icons.check_circle_outline
+                            : Icons.cancel_outlined,
+                        size: 16,
+                        color: agent.available
+                            ? const Color(0xFF10B981)
+                            : const Color(0xFF9CA3AF),
+                      ),
+                      label: Text(agent.name),
+                    );
+                  },
                 ),
-                label: Text(agent.name),
-              );
-            },
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: IconButton.filledTonal(
+                  key: const Key('btn-new-session'),
+                  tooltip: 'New Session',
+                  onPressed: () {
+                    final defaultAgent =
+                        client.agents.where((a) => a.available).firstOrNull?.id ??
+                            'opencode';
+                    client.createSession(
+                      agentId: defaultAgent,
+                      title: 'Mobile Session',
+                    );
+                  },
+                  icon: const Icon(Icons.add),
+                ),
+              ),
+            ],
           ),
         ),
         // Session selector list
