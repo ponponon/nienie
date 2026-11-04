@@ -172,6 +172,7 @@
   - 手机端默认使用中文界面，并在顶栏提供 `中文 / English / 日本語 / 한국어` 实时语言切换菜单
   - 桌面端控制台支持 `zh`、`en`、`ja`、`ko` 四语渲染与顶栏语言下拉切换器
 - 移动端代码模块化分层重构（`apps/mobile/lib/src/*`）：将 `lib/main.dart` 拆分为 `i18n`、`models`、`storage`、`transport`、`state`、`ui` 六大职责子模块，`main.dart` 仅保留 26 行启动入口
+- 移动端 UI 与传输测试替身细粒度拆分（`pairing_panel.dart`、`timeline_card_list.dart`、`fake_bridge_transport.dart`）：将配对面板、时间线卡片列表与测试替身进一步解耦为独立小文件
 
 ## MVP 规划
 

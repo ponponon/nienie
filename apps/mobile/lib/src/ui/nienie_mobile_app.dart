@@ -1,9 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../i18n/app_strings.dart';
-import '../models/protocol_models.dart';
-import '../models/timeline_items.dart';
 import '../state/mobile_bridge_client.dart';
+import 'pairing_panel.dart';
+import 'timeline_card_list.dart';
 
 class NienieMobileApp extends StatefulWidget {
   final MobileBridgeClient client;
@@ -96,7 +95,12 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             ),
             body: SafeArea(
               child: client.connectionState != BridgeConnectionState.connected
-                  ? _buildPairingPanel(client)
+                  ? PairingPanel(
+                      client: client,
+                      wsUrlController: _wsUrlController,
+                      pairingCodeController: _pairingCodeController,
+                      qrUriController: _qrUriController,
+                    )
                   : _buildConnectedWorkspace(client),
             ),
           );
@@ -130,139 +134,6 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         label,
         style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
       ),
-    );
-  }
-
-  Widget _buildPairingPanel(MobileBridgeClient client) {
-    final s = client.strings;
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.qr_code_scanner, size: 18, color: Color(0xFF3B82F6)),
-                    const SizedBox(width: 8),
-                    Text(
-                      s.connectTitle,
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  key: const Key('input-ws-url'),
-                  controller: _wsUrlController,
-                  decoration: InputDecoration(
-                    labelText: s.wsUrlLabel,
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  key: const Key('input-pairing-code'),
-                  controller: _pairingCodeController,
-                  decoration: InputDecoration(
-                    labelText: s.pairingCodeLabel,
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  key: const Key('btn-connect-pair'),
-                  onPressed: () {
-                    client.pairAndConnect(
-                      wsUrl: _wsUrlController.text,
-                      pairingCode: _pairingCodeController.text,
-                    );
-                  },
-                  icon: const Icon(Icons.link),
-                  label: Text(s.pairAndConnectBtn),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  key: const Key('input-qr-uri'),
-                  controller: _qrUriController,
-                  decoration: InputDecoration(
-                    labelText: s.qrUriLabel,
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  key: const Key('btn-pair-qr-uri'),
-                  onPressed: () {
-                    client.pairWithQrUri(_qrUriController.text);
-                  },
-                  icon: const Icon(Icons.qr_code),
-                  label: Text(s.pairWithQrBtn),
-                ),
-                if (client.savedMachines.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Text(
-                    s.savedComputersTitle,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  for (final machine in client.savedMachines)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.computer, size: 16, color: Color(0xFF10B981)),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  machine.machineId,
-                                  style: const TextStyle(fontWeight: FontWeight.w600),
-                                ),
-                                Text(
-                                  machine.wsUrl,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Color(0xFF9CA3AF),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          FilledButton.tonal(
-                            key: Key('btn-reconnect-machine-${machine.machineId}'),
-                            onPressed: () =>
-                                client.reconnectWithSavedCredential(machine.machineId),
-                            child: Text(s.reconnectBtn),
-                          ),
-                          const SizedBox(width: 4),
-                          IconButton(
-                            key: Key('btn-remove-machine-${machine.machineId}'),
-                            tooltip: 'Remove Machine',
-                            onPressed: () => client.removeSavedMachine(machine.machineId),
-                            icon: const Icon(Icons.delete_outline, size: 18),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-                if (client.errorMessage != null) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    client.errorMessage!,
-                    style: const TextStyle(color: Color(0xFFEF4444)),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ],
     );
   }
 
@@ -395,7 +266,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         Expanded(
           child: active == null
               ? Center(child: Text(client.strings.selectSessionHint))
-              : _buildSessionTimeline(client, active),
+              : SessionTimelineList(client: client, session: active),
         ),
         // Prompt composer bar
         if (active != null)
@@ -447,245 +318,6 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             ),
           ),
       ],
-    );
-  }
-
-  Widget _buildSessionTimeline(MobileBridgeClient client, AgentSession session) {
-    final items = client.timelineFor(session.id);
-    return ListView.separated(
-      padding: const EdgeInsets.all(12),
-      itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, index) {
-        final item = items[index];
-        return switch (item) {
-          UserPromptItem() => Card(
-              color: const Color(0xFF1E293B),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.person_outline, size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(item.message)),
-                  ],
-                ),
-              ),
-            ),
-          StreamingTextItem() => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      item.isThinking ? Icons.psychology_outlined : Icons.smart_toy_outlined,
-                      size: 16,
-                      color: const Color(0xFF3B82F6),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(item.text)),
-                  ],
-                ),
-              ),
-            ),
-          ToolCallCardItem() => Card(
-              shape: RoundedRectangleBorder(
-                side: BorderSide(
-                  color: item.isError
-                      ? const Color(0xFFEF4444)
-                      : const Color(0xFF2B2B2B),
-                ),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.terminal, size: 16, color: Color(0xFF10B981)),
-                        const SizedBox(width: 6),
-                        Text(
-                          item.name,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      jsonEncode(item.input),
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                    ),
-                    if (item.resultContent != null) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        item.resultContent!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: item.isError
-                              ? const Color(0xFFEF4444)
-                              : const Color(0xFFF3F4F6),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ErrorCardItem() => Card(
-              color: const Color(0xFFEF4444).withValues(alpha: 0.14),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.error_outline, size: 16, color: Color(0xFFEF4444)),
-                        const SizedBox(width: 6),
-                        Text(
-                          item.code,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFFEF4444),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(item.message),
-                  ],
-                ),
-              ),
-            ),
-          PermissionRequestCardItem() => Card(
-              color: const Color(0xFFF59E0B).withValues(alpha: 0.14),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.shield_outlined, size: 16, color: Color(0xFFF59E0B)),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            item.detail,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (item.patterns.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        item.patterns.join(', '),
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                      ),
-                    ],
-                    const SizedBox(height: 8),
-                    if (item.resolvedDecision != null)
-                      Text('Decision: ${item.resolvedDecision}')
-                    else
-                      Row(
-                        children: [
-                          FilledButton(
-                            key: Key('btn-perm-allow-once-${item.permissionId}'),
-                            onPressed: () => client.replyPermission(
-                              sessionId: session.id,
-                              permissionId: item.permissionId,
-                              decision: 'allow_once',
-                            ),
-                            child: Text(client.strings.allowOnceBtn),
-                          ),
-                          const SizedBox(width: 8),
-                          FilledButton.tonal(
-                            key: Key('btn-perm-allow-always-${item.permissionId}'),
-                            onPressed: () => client.replyPermission(
-                              sessionId: session.id,
-                              permissionId: item.permissionId,
-                              decision: 'allow_always',
-                            ),
-                            child: Text(client.strings.allowAlwaysBtn),
-                          ),
-                          const SizedBox(width: 8),
-                          OutlinedButton(
-                            key: Key('btn-perm-reject-${item.permissionId}'),
-                            onPressed: () => client.replyPermission(
-                              sessionId: session.id,
-                              permissionId: item.permissionId,
-                              decision: 'reject',
-                            ),
-                            child: Text(client.strings.rejectBtn),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          FileDiffCardItem() => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.difference_outlined, size: 16, color: Color(0xFF3B82F6)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        item.file,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    Text(
-                      '+${item.additions} / -${item.deletions}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF10B981)),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ScreenCaptureCardItem() => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.desktop_windows_outlined, size: 16, color: Color(0xFF3B82F6)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Screen Capture (${item.displayId})',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    Text(
-                      '${item.width}x${item.height}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          UsageSummaryItem() => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.analytics_outlined, size: 16, color: Color(0xFF10B981)),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${item.inputTokens} in · ${item.outputTokens} out · \$${item.costUsd.toStringAsFixed(4)}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        };
-      },
     );
   }
 }
