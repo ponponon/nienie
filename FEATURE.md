@@ -125,6 +125,9 @@
   - 实现 `createDesktopPreloadApi(ipcRenderer)` 桥接 Renderer 与主进程 IPC
   - 在 `renderDesktopAppHtml()` 中展示已配对设备列表（含平台、最后在线时间与一键撤销按钮）及 `window.nienieDesktop` 交互脚本
   - 实现 `DesktopPreviewServer` 本地可交互控制台服务（暴露 `GET /`、`GET /api/state` 与 `POST /api/ipc`）
+- 移动端公网 Relay 传输层（`RelayBridgeTransport` in `apps/mobile`）：
+  - 支持连接默认 `wss://nienie-replay.quniv.cn` 或用户自定义 Relay 地址并自动注册 `mobile` 角色
+  - 实时感知 `relay.presence` 的 `bridgeOnline` 在线状态，并通过 `relay.forward` 双向收发命令与 `session.event`
 
 ## MVP 规划
 

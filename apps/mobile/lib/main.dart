@@ -439,6 +439,117 @@ class IoBridgeTransport implements BridgeTransport {
   }
 }
 
+class RelayBridgeTransport implements BridgeTransport {
+  final String machineId;
+  final String clientId;
+  bool bridgeOnline = false;
+
+  WebSocket? _socket;
+  final StreamController<Map<String, dynamic>> _incomingController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final Map<String, Completer<Map<String, dynamic>>> _pending = {};
+
+  RelayBridgeTransport({
+    required this.machineId,
+    required this.clientId,
+  });
+
+  @override
+  Stream<Map<String, dynamic>> get incomingMessages => _incomingController.stream;
+
+  @override
+  Future<void> connect(String relayUrl) async {
+    await close();
+    final targetUrl = relayUrl.trim().isNotEmpty ? relayUrl.trim() : DEFAULT_RELAY_URL;
+    final socket = await WebSocket.connect(targetUrl);
+    _socket = socket;
+    final regCompleter = Completer<void>();
+
+    socket.listen(
+      (dynamic raw) {
+        final msg = jsonDecode(raw as String) as Map<String, dynamic>;
+        final type = msg['type'] as String?;
+
+        if (type == 'relay.registered') {
+          bridgeOnline = msg['bridgeOnline'] as bool? ?? false;
+          if (!regCompleter.isCompleted) {
+            regCompleter.complete();
+          }
+          return;
+        }
+
+        if (type == 'relay.presence') {
+          bridgeOnline = msg['bridgeOnline'] as bool? ?? false;
+          return;
+        }
+
+        if (type == 'relay.forward') {
+          final payloadText = msg['payload'] as String?;
+          if (payloadText == null) return;
+          final inner = jsonDecode(payloadText) as Map<String, dynamic>;
+          if (inner['type'] == 'response') {
+            final reqId = inner['requestId'] as String?;
+            final completer = reqId != null ? _pending.remove(reqId) : null;
+            completer?.complete(inner);
+          } else {
+            _incomingController.add(inner);
+          }
+        }
+      },
+      onDone: () {
+        bridgeOnline = false;
+        for (final completer in _pending.values) {
+          if (!completer.isCompleted) {
+            completer.completeError(StateError('Relay WebSocket closed'));
+          }
+        }
+        _pending.clear();
+      },
+    );
+
+    socket.add(
+      jsonEncode({
+        'type': 'relay.register',
+        'role': 'mobile',
+        'machineId': machineId,
+        'clientId': clientId,
+      }),
+    );
+
+    await regCompleter.future;
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendRequest(Map<String, dynamic> request) {
+    final socket = _socket;
+    if (socket == null) {
+      throw StateError('Not connected to Relay WebSocket');
+    }
+    final requestId = request['requestId'] as String;
+    final completer = Completer<Map<String, dynamic>>();
+    _pending[requestId] = completer;
+
+    socket.add(
+      jsonEncode({
+        'type': 'relay.forward',
+        'machineId': machineId,
+        'fromClientId': clientId,
+        'payload': jsonEncode(request),
+      }),
+    );
+    return completer.future;
+  }
+
+  @override
+  Future<void> close() async {
+    final socket = _socket;
+    _socket = null;
+    if (socket != null) {
+      await socket.close();
+    }
+  }
+}
+
 class FakeBridgeTransport implements BridgeTransport {
   final StreamController<Map<String, dynamic>> _incomingController =
       StreamController<Map<String, dynamic>>.broadcast();

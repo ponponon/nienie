@@ -157,4 +157,79 @@ void main() {
       expect((timeline[1] as StreamingTextItem).text, 'Real WebSocket E2E OK');
     },
   );
+
+  test(
+    'RelayBridgeTransport registers mobile role, tracks bridgeOnline presence, and forwards requests/events through Relay',
+    () async {
+      final relayServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() async => relayServer.close(force: true));
+
+      final List<Map<String, dynamic>> relayReceived = [];
+      relayServer.transform(WebSocketTransformer()).listen((WebSocket ws) {
+        ws.listen((dynamic raw) {
+          final msg = jsonDecode(raw as String) as Map<String, dynamic>;
+          relayReceived.add(msg);
+
+          if (msg['type'] == 'relay.register') {
+            ws.add(
+              jsonEncode({
+                'type': 'relay.registered',
+                'role': 'mobile',
+                'machineId': msg['machineId'],
+                'clientId': msg['clientId'],
+                'bridgeOnline': true,
+              }),
+            );
+          } else if (msg['type'] == 'relay.forward') {
+            final inner = jsonDecode(msg['payload'] as String) as Map<String, dynamic>;
+            final reqId = inner['requestId'] as String;
+            ws.add(
+              jsonEncode({
+                'type': 'relay.forward',
+                'machineId': msg['machineId'],
+                'fromClientId': 'bridge_server_1',
+                'toClientId': msg['fromClientId'],
+                'payload': jsonEncode({
+                  'type': 'response',
+                  'requestId': reqId,
+                  'ok': true,
+                  'data': {
+                    'agents': [
+                      {'id': 'opencode', 'name': 'OpenCode', 'available': true},
+                    ],
+                  },
+                }),
+              }),
+            );
+            ws.add(
+              jsonEncode({
+                'type': 'relay.presence',
+                'machineId': msg['machineId'],
+                'bridgeOnline': false,
+              }),
+            );
+          }
+        });
+      });
+
+      final relayUrl = 'ws://127.0.0.1:${relayServer.port}';
+      final relayTransport = RelayBridgeTransport(
+        machineId: 'machine_remote_1',
+        clientId: 'mobile_rel_1',
+      );
+      addTearDown(relayTransport.close);
+
+      await relayTransport.connect(relayUrl);
+      expect(relayTransport.bridgeOnline, isTrue);
+
+      final res = await relayTransport.sendRequest({
+        'type': 'agents.list',
+        'requestId': 'req_via_relay',
+      });
+      expect(res['ok'], isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(relayTransport.bridgeOnline, isFalse);
+      expect(relayReceived.first['type'], 'relay.register');
+    },
+  );
 }
