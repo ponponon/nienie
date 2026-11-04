@@ -201,5 +201,25 @@ describe('protocol', () => {
         sessionId: 'ses_alpha',
       },
     });
+
+    const pushReq = parseBridgeRequest(
+      JSON.stringify({
+        type: 'push.register',
+        requestId: 'req_push_1',
+        platform: 'ios',
+        provider: 'apns',
+        pushToken: 'apns_device_token_123',
+      }),
+    );
+    expect(pushReq).toEqual({
+      ok: true,
+      request: {
+        type: 'push.register',
+        requestId: 'req_push_1',
+        platform: 'ios',
+        provider: 'apns',
+        pushToken: 'apns_device_token_123',
+      },
+    });
   });
 });

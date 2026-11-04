@@ -6,8 +6,10 @@ import {
   BridgeServer,
   HeadlessBridgeDaemon,
   PairingManager,
+  PushNotificationRouter,
   RelayServer,
   SessionRouter,
+  type PushNotificationMessage,
 } from '../src/index.js';
 
 function adapter(id: 'opencode' | 'codex'): AgentAdapter & { emit(event: CanonicalAgentEvent): void } {
@@ -688,6 +690,101 @@ describe('bridge core', () => {
       requestId: 'req_headless_pair',
       ok: true,
     });
+  });
+
+  it('registers mobile push tokens and dispatches redacted iOS/Android notifications when mobile is offline', async () => {
+    const dispatched: PushNotificationMessage[] = [];
+    const pushRouter = new PushNotificationRouter({
+      sender: async (notification) => {
+        dispatched.push(notification);
+      },
+    });
+
+    const pairingManager = new PairingManager({ machineId: 'machine_push' });
+    const registry = new AgentRegistry();
+    const opencode = adapter('opencode');
+    registry.register(opencode);
+
+    const server = new BridgeServer({
+      registry,
+      pairingManager,
+      pushRouter,
+      machineId: 'machine_push',
+      port: 0,
+    });
+    const { url } = await server.start();
+    cleanups.push(() => server.stop());
+
+    const client = await connectWsClient(url);
+    cleanups.push(async () => client.close());
+
+    // Pair first
+    const challenge = pairingManager.createPairingCode({ wsUrl: url });
+    await client.request({
+      type: 'pair.confirm',
+      requestId: 'req_pair_push',
+      pairingCode: challenge.pairingCode,
+      deviceName: 'Push iPhone',
+      platform: 'ios',
+    });
+
+    // Register push token
+    const regRes = await client.request({
+      type: 'push.register',
+      requestId: 'req_push_reg',
+      platform: 'ios',
+      provider: 'apns',
+      pushToken: 'apns_tok_abc',
+    });
+    expect(regRes).toMatchObject({
+      type: 'response',
+      requestId: 'req_push_reg',
+      ok: true,
+      data: { registered: true, provider: 'apns' },
+    });
+
+    // Disconnect mobile client so Bridge sees 0 connected clients (offline)
+    client.close();
+    await waitFor(() => server.getConnectedClientCount() === 0);
+
+    // Emit waiting permission event and error event with sensitive secret
+    opencode.emit({
+      version: 1,
+      eventId: 'evt_push_1',
+      agentId: 'opencode',
+      sessionId: 'ses_seed_1',
+      sequence: 1,
+      timestamp: '2026-11-04T10:00:00Z',
+      type: 'status',
+      payload: {
+        status: 'waiting',
+        detail: 'Permission requested: bash',
+      },
+    });
+    opencode.emit({
+      version: 1,
+      eventId: 'evt_push_2',
+      agentId: 'opencode',
+      sessionId: 'ses_seed_1',
+      sequence: 2,
+      timestamp: '2026-11-04T10:00:01Z',
+      type: 'error',
+      payload: {
+        code: 'APIError',
+        message: 'Failed with key=sk-secret999',
+      },
+    });
+
+    await waitFor(() => dispatched.length === 2);
+    expect(dispatched[0]).toMatchObject({
+      platform: 'ios',
+      provider: 'apns',
+      pushToken: 'apns_tok_abc',
+      title: 'Nienie Permission Needed',
+      body: 'Permission requested: bash',
+    });
+    expect(dispatched[1]?.body).not.toContain('sk-secret999');
+    expect(dispatched[1]?.body).toContain('[REDACTED]');
   });
 });
 

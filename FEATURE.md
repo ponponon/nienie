@@ -147,6 +147,7 @@
 - 实现 `@nienie/adapter-openclaw`（`OpenClawAdapter`）：对接 OpenClaw Gateway HTTP 会话与事件接口
 - 实现 `@nienie/adapter-pty`（`PtyFallbackAdapter` & `stripAnsiSequences`）：清洗终端 ANSI 转义序列并转为 `text_delta` 事件，诚实声明受限 capability
 - 实现独立后台守护进程与 Linux 无 GUI 模式（`HeadlessBridgeDaemon` in `@nienie/bridge-core`）：支持脱离 Electron UI 独立启动 Bridge、探测 Agent、生成一次性配对码并自动建立公网 Relay 出站连接
+- 实现 iOS 和 Android 离线推送通知路由（`PushNotificationRouter` & `push.register`）：当无活跃手机连接且会话进入 `waiting`（等待审批）或 `error` 状态时，自动向已注册的 APNs/FCM/Webhook 设备派发经 `redactLogText` 脱敏的推送通知
 
 ## MVP 规划
 
@@ -175,7 +176,7 @@
 - [x] ACP 适配器
 - [x] PTY/TUI 兜底模式
 - [ ] 完整远程桌面兜底
-- [ ] iOS 和 Android 推送通知
+- [x] iOS 和 Android 推送通知
 - [x] Bridge 独立后台进程
 - [x] Linux 无 GUI 模式
 - [ ] Rust Bridge 评估和迁移

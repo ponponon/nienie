@@ -14,6 +14,7 @@ Flutter Mobile App <-- WebSocket --> Electron Main Process Bridge
 hello
 ping
 pair.confirm
+push.register
 machine.get
 agents.list
 models.list

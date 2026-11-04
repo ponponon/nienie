@@ -229,6 +229,7 @@ export type CanonicalAgentEvent = {
 };
 
 export type PermissionDecision = 'allow_once' | 'allow_always' | 'reject';
+export type PushProvider = 'apns' | 'fcm' | 'webhook';
 
 export type BridgeRequest =
   | { type: 'hello'; requestId: string; protocolVersion: typeof PROTOCOL_VERSION; deviceToken?: string | undefined }
@@ -239,6 +240,13 @@ export type BridgeRequest =
       pairingCode: string;
       deviceName: string;
       platform?: DevicePlatform | undefined;
+    }
+  | {
+      type: 'push.register';
+      requestId: string;
+      platform: DevicePlatform;
+      provider: PushProvider;
+      pushToken: string;
     }
   | { type: 'machine.get'; requestId: string }
   | { type: 'agents.list'; requestId: string }
@@ -395,6 +403,34 @@ export function parseBridgeRequest(
           pairingCode: obj.pairingCode.trim(),
           deviceName: obj.deviceName.trim(),
           ...(platform ? { platform } : {}),
+        },
+      };
+    }
+
+    case 'push.register': {
+      if (
+        !isDevicePlatform(obj.platform) ||
+        !isPushProvider(obj.provider) ||
+        typeof obj.pushToken !== 'string' ||
+        !obj.pushToken.trim()
+      ) {
+        return {
+          ok: false,
+          requestId,
+          error: {
+            code: 'BAD_REQUEST',
+            message: 'Invalid platform, provider, or pushToken',
+          },
+        };
+      }
+      return {
+        ok: true,
+        request: {
+          type: 'push.register',
+          requestId,
+          platform: obj.platform,
+          provider: obj.provider,
+          pushToken: obj.pushToken.trim(),
         },
       };
     }
@@ -634,4 +670,8 @@ function isDevicePlatform(value: unknown): value is DevicePlatform {
 
 function isPermissionDecision(value: unknown): value is PermissionDecision {
   return value === 'allow_once' || value === 'allow_always' || value === 'reject';
+}
+
+function isPushProvider(value: unknown): value is PushProvider {
+  return value === 'apns' || value === 'fcm' || value === 'webhook';
 }

@@ -12,6 +12,7 @@ import {
 } from '@nienie/protocol';
 import { type AgentRegistry, SessionRouter } from './index.js';
 import type { PairingManager } from './pairing.js';
+import type { PushNotificationRouter } from './push.js';
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const DEFAULT_HOST = '127.0.0.1';
@@ -22,6 +23,7 @@ const DEFAULT_MAX_EVENTS_PER_SESSION = 500;
 export type BridgeServerOptions = {
   registry: AgentRegistry;
   pairingManager?: PairingManager | undefined;
+  pushRouter?: PushNotificationRouter | undefined;
   host?: string | undefined;
   port?: number | undefined;
   machineId?: string | undefined;
@@ -52,6 +54,7 @@ export class BridgeServer {
   private readonly registry: AgentRegistry;
   private readonly router: SessionRouter;
   private readonly pairingManager: PairingManager | undefined;
+  private readonly pushRouter: PushNotificationRouter | undefined;
   private readonly host: string;
   private readonly requestedPort: number;
   private readonly machineId: string;
@@ -72,6 +75,7 @@ export class BridgeServer {
     this.registry = options.registry;
     this.router = new SessionRouter(options.registry);
     this.pairingManager = options.pairingManager;
+    this.pushRouter = options.pushRouter;
     this.host = options.host ?? DEFAULT_HOST;
     this.requestedPort = options.port ?? 0;
     this.machineId = options.machineId ?? options.pairingManager?.machineId ?? 'machine_local';
@@ -480,6 +484,22 @@ export class BridgeServer {
         };
       }
 
+      case 'push.register': {
+        if (!bypassAuth) this.requireAuthenticated(client);
+        const deviceId = client.authenticatedDeviceId ?? client.id;
+        this.pushRouter?.registerDevice({
+          deviceId,
+          platform: request.platform,
+          provider: request.provider,
+          pushToken: request.pushToken,
+        });
+        return {
+          registered: true,
+          deviceId,
+          provider: request.provider,
+        };
+      }
+
       case 'agents.list': {
         if (!bypassAuth) this.requireAuthenticated(client);
         const agents = await this.registry.detectAll();
@@ -654,10 +674,15 @@ export class BridgeServer {
       type: 'session.event',
       event,
     };
+    let deliveredCount = 0;
     for (const client of this.clients.values()) {
       if (this.isClientAuthorized(client)) {
         this.sendMessage(client, response);
+        deliveredCount++;
       }
+    }
+    if (deliveredCount === 0 && this.pushRouter) {
+      void this.pushRouter.notifyEvent(event);
     }
   }
 
