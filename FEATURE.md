@@ -56,6 +56,17 @@
   - 支持 `revokeDevice()` 单独撤销设备凭据，并在 `BridgeServer` 中实时吊销活跃连接权限与事件广播订阅
   - 未授权设备发起 `agents.list`、`sessions.list`、`session.create`、`session.load`、`session.send`、`session.cancel` 请求一律拦截并返回 `UNAUTHORIZED`
 
+### 2026-11-04 实现 Electron 桌面端最小 UI 与主进程控制器
+
+- 在 `@nienie/desktop` 中实现 `DesktopBridgeController` 与 `registerDesktopIpcHandlers()`：
+  - 通过 IPC 管理本地 Bridge 启动/停止与状态快照
+  - 探测并展示本机 OpenCode 与 Codex Agent 可用性、版本号与能力标签
+  - 生成一次性配对码与内联 SVG 二维码（`renderPairingQrSvg`）
+  - 支持在默认公网 Relay（`wss://nienie-replay.quniv.cn`）与用户自定义 Relay 地址之间切换并同步更新配对载荷
+  - 聚合 Bridge 生命周期日志与脱敏后的会话事件诊断日志
+- 实现 `renderDesktopAppHtml()` 与 `createDesktopWindowOptions()`：
+  - 采用深色 Design System CSS Tokens、原生 macOS 窗口 `trafficLightPosition` 留白（`padding-left: 78px`）、CSP 安全策略与纯内联 SVG 图标（零 Emoji）
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查
@@ -70,7 +81,7 @@
 - [ ] 手机发送 Prompt
 - [ ] WebSocket 断线重连
 - [ ] 公网 Relay 连接和设备路由
-- [ ] 自定义 Relay 地址配置
+- [x] 自定义 Relay 地址配置
 - [ ] Relay 端到端加密消息转发
 - [ ] 基础权限请求展示
 

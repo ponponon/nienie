@@ -23,3 +23,19 @@ export function createDesktopBridgeServer(options: DesktopBridgeOptions = {}): B
     registry,
   });
 }
+
+export {
+  createDesktopWindowOptions,
+  DesktopBridgeController,
+  NIENIE_IPC_CHANNELS,
+  registerDesktopIpcHandlers,
+  renderPairingQrSvg,
+  type DesktopBridgeControllerOptions,
+  type DesktopDashboardState,
+  type DesktopLogEntry,
+  type DesktopPairingView,
+  type DesktopRelayConfig,
+  type IpcMainLike,
+  type SetRelayInput,
+} from './controller.js';
+export { renderDesktopAppHtml } from './renderer.js';

@@ -100,6 +100,17 @@ export class SessionRouter {
 }
 
 export {
+  DEFAULT_RELAY_URL,
+  resolveRelayUrl,
+  type AgentId,
+  type AgentInfo,
+  type AgentSession,
+  type CanonicalAgentEvent,
+  type CreateSessionInput,
+  type PairedDevice,
+  type PairingQrPayload,
+} from '@nienie/protocol';
+export {
   BridgeServer,
   type BridgeServerAddress,
   type BridgeServerOptions,

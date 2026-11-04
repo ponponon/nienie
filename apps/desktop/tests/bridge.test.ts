@@ -1,7 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { SessionRouter } from '@nienie/bridge-core';
-import { createBridgeRegistry } from '../src/bridge.js';
+import { DEFAULT_RELAY_URL, SessionRouter } from '@nienie/bridge-core';
+import {
+  createBridgeRegistry,
+  createDesktopWindowOptions,
+  DesktopBridgeController,
+  NIENIE_IPC_CHANNELS,
+  registerDesktopIpcHandlers,
+  renderDesktopAppHtml,
+} from '../src/bridge.js';
 
 describe('desktop bridge composition', () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -120,5 +127,92 @@ describe('desktop bridge composition', () => {
       { type: 'text_delta', payload: { delta: 'Loop verified' } },
       { type: 'status', payload: { status: 'idle', detail: 'Session is idle' } },
     ]);
+  });
+
+  it('manages Bridge lifecycle, agent detection, QR pairing, default/custom Relay config, and logs via IPC', async () => {
+    const controller = new DesktopBridgeController({
+      machineId: 'mac_studio',
+      opencode: { baseUrl: 'http://127.0.0.1:1' },
+    });
+    cleanups.push(() => controller.dispose());
+
+    // Initial state before starting Bridge
+    const initial = controller.getState();
+    expect(initial.bridge.status).toBe('stopped');
+    expect(initial.relay.mode).toBe('default');
+    expect(initial.relay.defaultRelayUrl).toBe(DEFAULT_RELAY_URL);
+    expect(initial.relay.activeRelayUrl).toBe(DEFAULT_RELAY_URL);
+
+    // Wire up IPC handlers
+    const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    registerDesktopIpcHandlers(
+      {
+        handle(channel, listener) {
+          handlers.set(channel, (_event, ...args) => Promise.resolve(listener(_event, ...args)));
+        },
+      },
+      controller,
+    );
+
+    // Start Bridge via IPC
+    const startedState = (await handlers.get(NIENIE_IPC_CHANNELS.START_BRIDGE)?.({})) as ReturnType<
+      DesktopBridgeController['getState']
+    >;
+    expect(startedState.bridge.status).toBe('running');
+    expect(startedState.bridge.wsUrl).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
+    expect(startedState.agents.map((a) => a.id)).toEqual(['opencode', 'codex']);
+    expect(startedState.pairing).not.toBeNull();
+    expect(startedState.pairing?.pairingCode).toMatch(/^\d{6}$/);
+    expect(startedState.pairing?.qrUri).toContain('nienie://pair?data=');
+    expect(startedState.pairing?.qrSvg).toContain('<svg');
+
+    // Switch to custom Relay via IPC
+    const customRelayState = (await handlers.get(NIENIE_IPC_CHANNELS.SET_RELAY)?.({}, {
+      mode: 'custom',
+      customRelayUrl: 'wss://relay.my-company.com',
+    })) as ReturnType<DesktopBridgeController['getState']>;
+    expect(customRelayState.relay.mode).toBe('custom');
+    expect(customRelayState.relay.activeRelayUrl).toBe('wss://relay.my-company.com');
+    expect(customRelayState.pairing?.qrPayload.relayUrl).toBe('wss://relay.my-company.com');
+
+    // Switch back to default Relay
+    const defaultRelayState = (await handlers.get(NIENIE_IPC_CHANNELS.SET_RELAY)?.({}, {
+      mode: 'default',
+    })) as ReturnType<DesktopBridgeController['getState']>;
+    expect(defaultRelayState.relay.mode).toBe('default');
+    expect(defaultRelayState.relay.activeRelayUrl).toBe(DEFAULT_RELAY_URL);
+
+    // Logs should record lifecycle and configuration actions
+    expect(defaultRelayState.logs.length).toBeGreaterThanOrEqual(3);
+    expect(defaultRelayState.logs.some((log) => log.message.includes('Bridge started'))).toBe(true);
+    expect(defaultRelayState.logs.some((log) => log.message.includes('wss://relay.my-company.com'))).toBe(true);
+
+    // Stop Bridge via IPC
+    const stoppedState = (await handlers.get(NIENIE_IPC_CHANNELS.STOP_BRIDGE)?.({})) as ReturnType<
+      DesktopBridgeController['getState']
+    >;
+    expect(stoppedState.bridge.status).toBe('stopped');
+  });
+
+  it('renders a compliant Electron desktop UI with native traffic light spacing, design tokens, inline SVGs, and no emojis', async () => {
+    const winOpts = createDesktopWindowOptions();
+    expect(winOpts.titleBarStyle).toBe('hidden');
+    expect(winOpts.trafficLightPosition).toEqual({ x: 12, y: 12 });
+
+    const controller = new DesktopBridgeController({
+      machineId: 'mac_studio',
+      opencode: { baseUrl: 'http://127.0.0.1:1' },
+    });
+    cleanups.push(() => controller.dispose());
+    await controller.startBridge();
+
+    const html = renderDesktopAppHtml(controller.getState());
+    expect(html).toContain('Content-Security-Policy');
+    expect(html).toContain('--color-bg-primary: #111111');
+    expect(html).toContain('padding-left: 78px');
+    expect(html).toContain(DEFAULT_RELAY_URL);
+    expect(html).toContain('<svg');
+    // Must not use emoji characters as icons
+    expect(html).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
   });
 });
