@@ -157,6 +157,9 @@ class MobileBridgeClient extends ChangeNotifier {
       connectionState = BridgeConnectionState.connected;
       await refreshAgents();
       await refreshSessions();
+      if (activeSession == null && sessions.isNotEmpty) {
+        activeSession = sessions.first;
+      }
       notifyListeners();
     } catch (e) {
       connectionState = BridgeConnectionState.error;

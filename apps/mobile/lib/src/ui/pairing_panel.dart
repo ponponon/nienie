@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/protocol_models.dart';
 import '../state/mobile_bridge_client.dart';
 import 'qr_scanner_sheet.dart';
 
@@ -25,6 +26,11 @@ class PairingPanel extends StatelessWidget {
         client: client,
         onDetected: (rawUri) {
           qrUriController.text = rawUri;
+          try {
+            final decoded = PairingQrPayload.decode(rawUri);
+            wsUrlController.text = decoded.wsUrl;
+            pairingCodeController.text = decoded.pairingCode;
+          } catch (_) {}
           client.pairWithQrUri(rawUri);
         },
       ),

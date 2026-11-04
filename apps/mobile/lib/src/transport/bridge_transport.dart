@@ -22,7 +22,9 @@ class IoBridgeTransport implements BridgeTransport {
   @override
   Future<void> connect(String wsUrl) async {
     await close();
-    final socket = await WebSocket.connect(wsUrl);
+    final socket = await WebSocket.connect(wsUrl).timeout(
+      const Duration(seconds: 2),
+    );
     _socket = socket;
     socket.listen(
       (dynamic raw) {

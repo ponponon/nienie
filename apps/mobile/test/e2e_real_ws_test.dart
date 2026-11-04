@@ -124,6 +124,16 @@ void main() {
                 }),
               );
               break;
+            default:
+              ws.add(
+                jsonEncode({
+                  'type': 'response',
+                  'requestId': reqId,
+                  'ok': true,
+                  'data': <String, dynamic>{},
+                }),
+              );
+              break;
           }
         });
       });
