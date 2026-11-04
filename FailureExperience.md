@@ -87,3 +87,33 @@ Flutter CLI 默认开启了本机 iOS 签名身份自动探测与 `flutter_lints
 ### 预防措施
 
 聚合多个独立 Agent 适配器的查询接口（如 `detectAll`、`listSessions`）必须具备单适配器级容错隔离，绝不允许单个 Agent 离线拖垮全局列表查询。
+
+## 2026-11-04 Flutter 移动端代码过度集中在 `lib/main.dart` 单文件（God File）
+
+### 问题
+
+在快速迭代 Flutter 移动端功能的过程中，将多语言字典、协议数据模型、时间线卡片模型、本地凭据存储、WebSocket/Relay 传输层、业务状态控制器与 UI 视图组件全部持续追加在 `apps/mobile/lib/main.dart` 单个文件中，导致该文件膨胀至 1300+ 行，违反了单一职责原则（SRP）与模块化工程实践。
+
+### 根因
+
+迭代新增移动端特性时贪图单文件修改便利，未在模块职责分化时及时按层拆分目录结构。
+
+### 影响
+
+单文件过大导致代码可读性下降、职责边界模糊、后续多人或跨 AI 协作维护困难。
+
+### 修复
+
+将 `apps/mobile/lib/` 按职责拆分为清晰的分层模块：
+- `lib/main.dart`：仅保留 26 行薄启动入口与 barrel 导出
+- `lib/src/i18n/app_strings.dart`：中/英/日/韩多语言字典
+- `lib/src/models/protocol_models.dart`：统一协议 DTO
+- `lib/src/models/timeline_items.dart`：会话时间线结构化卡片模型
+- `lib/src/storage/credential_store.dart`：设备凭据存储（内存与文件持久化）
+- `lib/src/transport/bridge_transport.dart`：直连 WebSocket、公网 Relay 与自动故障转移传输层
+- `lib/src/state/mobile_bridge_client.dart`：状态管理与事件序号归并控制器
+- `lib/src/ui/nienie_mobile_app.dart`：Flutter Material 3 视图组件
+
+### 预防措施
+
+任何入口文件（如 `main.dart`、`index.ts`）应只承担组合与导出职责；当单个源码文件承载超过 1 个领域职责或超过 400 行时，必须立即按 `i18n`、`models`、`storage`、`transport`、`state`、`ui` 分层拆分。

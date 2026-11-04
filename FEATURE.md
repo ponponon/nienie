@@ -171,6 +171,7 @@
 - 手机端与桌面端四国语言（中文 `zh`、英文 `en`、日文 `ja`、韩文 `ko`）国际化支持（`AppLanguage` / `NienieStrings` in `apps/mobile` & `DESKTOP_I18N` in `apps/desktop`）：
   - 手机端默认使用中文界面，并在顶栏提供 `中文 / English / 日本語 / 한국어` 实时语言切换菜单
   - 桌面端控制台支持 `zh`、`en`、`ja`、`ko` 四语渲染与顶栏语言下拉切换器
+- 移动端代码模块化分层重构（`apps/mobile/lib/src/*`）：将 `lib/main.dart` 拆分为 `i18n`、`models`、`storage`、`transport`、`state`、`ui` 六大职责子模块，`main.dart` 仅保留 26 行启动入口
 
 ## MVP 规划
 
