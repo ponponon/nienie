@@ -238,7 +238,7 @@ describe('desktop bridge composition', () => {
 
     const html = renderDesktopAppHtml(controller.getState());
     expect(html).toContain('Content-Security-Policy');
-    expect(html).toContain('--color-bg-primary: #111111');
+    expect(html).toContain('--color-bg-primary: #F2F2F7');
     expect(html).toContain('padding-left: 78px');
     expect(html).toContain(DEFAULT_RELAY_URL);
     expect(html).toContain('<svg');

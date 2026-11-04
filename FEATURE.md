@@ -176,6 +176,10 @@
 - 用户语言偏好与桌面配置跨重启持久化（`saveLanguage` / `loadLanguage` in `apps/mobile` & `preferencesFilePath` / `setLocale` in `apps/desktop`）：手机端与桌面端切换中/英/日/韩语言后自动写入本地持久化文件，冷启动自动恢复上次选择的语言
 - `pnpm start` 幂等重启保护（`scripts/start-mac.mjs`）：启动前自动清理残留的旧 `nienie-desktop.mjs` 进程，避免 `EADDRINUSE: 0.0.0.0:4100` 端口冲突
 - Electron 原生桌面 GUI 窗口启动（`apps/desktop/src/electron-main.ts` & `pnpm start`）：运行 `pnpm start` 直接弹出带 macOS 原生红黄绿按钮（`titleBarStyle: 'hidden'`, `trafficLightPosition`）的 Electron 桌面控制台窗口（支持 `--headless` 切换纯命令行模式）
+- 苹果 iOS/macOS + 微信清爽风格与紧凑首屏重构（`apps/desktop/src/renderer.ts` & `apps/mobile/lib/src/ui/*`）：
+  - 桌面端与手机端统一采用苹果/微信浅色卡片风格（`#F2F2F7`/`#EDEDED` 底色、`#FFFFFF` 纯白圆角卡片、`#07C160` 微信绿主按钮、`#95EC69` 右侧用户对话气泡）
+  - 桌面端将最重要的「手机扫码配对」置于首屏左上角第一焦点，「本机 Agents」按可用状态置顶并改为 2 列紧凑网格，次要「运行日志」置于底部，实现首屏零下滑总览
+  - 手机端将「已保存的电脑」置顶一键重连，配对地址与 6 位配对码同行紧凑并排，大幅压缩工作区顶栏高度，最大化对话可视面积
 
 ## MVP 规划
 

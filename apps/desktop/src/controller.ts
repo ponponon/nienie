@@ -425,11 +425,11 @@ export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPr
 
 export function createDesktopWindowOptions(preloadPath?: string) {
   return {
-    width: 1080,
-    height: 760,
-    minWidth: 880,
-    minHeight: 620,
-    backgroundColor: '#111111',
+    width: 1020,
+    height: 640,
+    minWidth: 820,
+    minHeight: 540,
+    backgroundColor: '#F2F2F7',
     titleBarStyle: 'hidden' as const,
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: {

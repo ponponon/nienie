@@ -18,235 +18,322 @@ class SessionTimelineList extends StatelessWidget {
   Widget build(BuildContext context) {
     final items = client.timelineFor(session.id);
     return ListView.separated(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
       itemBuilder: (context, index) {
         final item = items[index];
         return switch (item) {
-          UserPromptItem() => Card(
-              color: const Color(0xFF1E293B),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.person_outline, size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(item.message)),
-                  ],
+          // WeChat right-aligned green bubble for user prompts
+          UserPromptItem() => Align(
+              alignment: Alignment.centerRight,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF95EC69),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-              ),
-            ),
-          StreamingTextItem() => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      item.isThinking ? Icons.psychology_outlined : Icons.smart_toy_outlined,
-                      size: 16,
-                      color: const Color(0xFF3B82F6),
+                    Flexible(
+                      child: Text(
+                        item.message,
+                        style: const TextStyle(
+                          color: Color(0xFF181818),
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(item.text)),
                   ],
                 ),
               ),
             ),
-          ToolCallCardItem() => Card(
-              shape: RoundedRectangleBorder(
-                side: BorderSide(
+          // WeChat left-aligned clean white bubble for agent responses
+          StreamingTextItem() => Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFFFF),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    item.isThinking ? Icons.psychology_outlined : Icons.smart_toy_outlined,
+                    size: 15,
+                    color: const Color(0xFF07C160),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      item.text,
+                      style: const TextStyle(
+                        color: Color(0xFF181818),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ToolCallCardItem() => Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFFFF),
+                border: Border.all(
                   color: item.isError
-                      ? const Color(0xFFEF4444)
-                      : const Color(0xFF2B2B2B),
+                      ? const Color(0xFFFA5151)
+                      : const Color(0xFFE5E5EA),
                 ),
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.terminal, size: 16, color: Color(0xFF10B981)),
-                        const SizedBox(width: 6),
-                        Text(
-                          item.name,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      jsonEncode(item.input),
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                    ),
-                    if (item.resultContent != null) ...[
-                      const SizedBox(height: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.terminal, size: 14, color: Color(0xFF07C160)),
+                      const SizedBox(width: 6),
                       Text(
-                        item.resultContent!,
-                        style: TextStyle(
+                        item.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
                           fontSize: 12,
-                          color: item.isError
-                              ? const Color(0xFFEF4444)
-                              : const Color(0xFFF3F4F6),
+                          color: Color(0xFF181818),
                         ),
                       ),
                     ],
-                  ],
-                ),
-              ),
-            ),
-          ErrorCardItem() => Card(
-              color: const Color(0xFFEF4444).withValues(alpha: 0.14),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.error_outline, size: 16, color: Color(0xFFEF4444)),
-                        const SizedBox(width: 6),
-                        Text(
-                          item.code,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFFEF4444),
-                          ),
-                        ),
-                      ],
-                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    jsonEncode(item.input),
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF8E8E93)),
+                  ),
+                  if (item.resultContent != null) ...[
                     const SizedBox(height: 4),
-                    Text(item.message),
+                    Text(
+                      item.resultContent!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: item.isError
+                            ? const Color(0xFFFA5151)
+                            : const Color(0xFF181818),
+                      ),
+                    ),
                   ],
-                ),
+                ],
               ),
             ),
-          PermissionRequestCardItem() => Card(
-              color: const Color(0xFFF59E0B).withValues(alpha: 0.14),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.shield_outlined, size: 16, color: Color(0xFFF59E0B)),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            item.detail,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (item.patterns.isNotEmpty) ...[
-                      const SizedBox(height: 4),
+          ErrorCardItem() => Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF2F2),
+                border: Border.all(color: const Color(0xFFFA5151).withValues(alpha: 0.3)),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.error_outline, size: 15, color: Color(0xFFFA5151)),
+                      const SizedBox(width: 6),
                       Text(
-                        item.patterns.join(', '),
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                        item.code,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                          color: Color(0xFFFA5151),
+                        ),
                       ),
                     ],
-                    const SizedBox(height: 8),
-                    if (item.resolvedDecision != null)
-                      Text('Decision: ${item.resolvedDecision}')
-                    else
-                      Row(
-                        children: [
-                          FilledButton(
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    item.message,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF181818)),
+                  ),
+                ],
+              ),
+            ),
+          PermissionRequestCardItem() => Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF9EC),
+                border: Border.all(color: const Color(0xFFFF9500).withValues(alpha: 0.35)),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.shield_outlined, size: 15, color: Color(0xFFFF9500)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          item.detail,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                            color: Color(0xFF181818),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (item.patterns.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      item.patterns.join(', '),
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF8E8E93)),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  if (item.resolvedDecision != null)
+                    Text(
+                      'Decision: ${item.resolvedDecision}',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF181818)),
+                    )
+                  else
+                    Row(
+                      children: [
+                        SizedBox(
+                          height: 30,
+                          child: FilledButton(
                             key: Key('btn-perm-allow-once-${item.permissionId}'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF07C160),
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                            ),
                             onPressed: () => client.replyPermission(
                               sessionId: session.id,
                               permissionId: item.permissionId,
                               decision: 'allow_once',
                             ),
-                            child: Text(client.strings.allowOnceBtn),
+                            child: Text(
+                              client.strings.allowOnceBtn,
+                              style: const TextStyle(fontSize: 11),
+                            ),
                           ),
-                          const SizedBox(width: 8),
-                          FilledButton.tonal(
+                        ),
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          height: 30,
+                          child: FilledButton.tonal(
                             key: Key('btn-perm-allow-always-${item.permissionId}'),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                            ),
                             onPressed: () => client.replyPermission(
                               sessionId: session.id,
                               permissionId: item.permissionId,
                               decision: 'allow_always',
                             ),
-                            child: Text(client.strings.allowAlwaysBtn),
+                            child: Text(
+                              client.strings.allowAlwaysBtn,
+                              style: const TextStyle(fontSize: 11),
+                            ),
                           ),
-                          const SizedBox(width: 8),
-                          OutlinedButton(
+                        ),
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          height: 30,
+                          child: OutlinedButton(
                             key: Key('btn-perm-reject-${item.permissionId}'),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                            ),
                             onPressed: () => client.replyPermission(
                               sessionId: session.id,
                               permissionId: item.permissionId,
                               decision: 'reject',
                             ),
-                            child: Text(client.strings.rejectBtn),
+                            child: Text(
+                              client.strings.rejectBtn,
+                              style: const TextStyle(fontSize: 11),
+                            ),
                           ),
-                        ],
-                      ),
-                  ],
-                ),
+                        ),
+                      ],
+                    ),
+                ],
               ),
             ),
-          FileDiffCardItem() => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.difference_outlined, size: 16, color: Color(0xFF3B82F6)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        item.file,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+          FileDiffCardItem() => Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFFFF),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.difference_outlined, size: 15, color: Color(0xFF007AFF)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      item.file,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                        color: Color(0xFF181818),
                       ),
                     ),
-                    Text(
-                      '+${item.additions} / -${item.deletions}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF10B981)),
+                  ),
+                  Text(
+                    '+${item.additions} / -${item.deletions}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF07C160),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-          ScreenCaptureCardItem() => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.desktop_windows_outlined, size: 16, color: Color(0xFF3B82F6)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Screen Capture (${item.displayId})',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+          ScreenCaptureCardItem() => Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFFFF),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.desktop_windows_outlined, size: 15, color: Color(0xFF007AFF)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Screen Capture (${item.displayId})',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                        color: Color(0xFF181818),
                       ),
                     ),
-                    Text(
-                      '${item.width}x${item.height}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                    ),
-                  ],
-                ),
+                  ),
+                  Text(
+                    '${item.width}x${item.height}',
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF8E8E93)),
+                  ),
+                ],
               ),
             ),
-          UsageSummaryItem() => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.analytics_outlined, size: 16, color: Color(0xFF10B981)),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${item.inputTokens} in · ${item.outputTokens} out · \$${item.costUsd.toStringAsFixed(4)}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                    ),
-                  ],
-                ),
+          UsageSummaryItem() => Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFFFF),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.analytics_outlined, size: 14, color: Color(0xFF07C160)),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${item.inputTokens} in · ${item.outputTokens} out · \$${item.costUsd.toStringAsFixed(4)}',
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF8E8E93)),
+                  ),
+                ],
               ),
             ),
         };
