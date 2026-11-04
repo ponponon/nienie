@@ -550,6 +550,66 @@ class RelayBridgeTransport implements BridgeTransport {
   }
 }
 
+enum BridgeRouteMode { direct, relay }
+
+class AutoFallbackBridgeTransport implements BridgeTransport {
+  final BridgeTransport directTransport;
+  final BridgeTransport relayTransport;
+  final String relayUrl;
+
+  BridgeRouteMode activeMode = BridgeRouteMode.direct;
+  final StreamController<Map<String, dynamic>> _incomingController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  StreamSubscription<Map<String, dynamic>>? _directSub;
+  StreamSubscription<Map<String, dynamic>>? _relaySub;
+
+  AutoFallbackBridgeTransport({
+    required this.directTransport,
+    required this.relayTransport,
+    this.relayUrl = DEFAULT_RELAY_URL,
+  }) {
+    _directSub = directTransport.incomingMessages.listen((msg) {
+      if (activeMode == BridgeRouteMode.direct) {
+        _incomingController.add(msg);
+      }
+    });
+    _relaySub = relayTransport.incomingMessages.listen((msg) {
+      if (activeMode == BridgeRouteMode.relay) {
+        _incomingController.add(msg);
+      }
+    });
+  }
+
+  @override
+  Stream<Map<String, dynamic>> get incomingMessages => _incomingController.stream;
+
+  @override
+  Future<void> connect(String wsUrl) async {
+    try {
+      await directTransport.connect(wsUrl);
+      activeMode = BridgeRouteMode.direct;
+    } catch (_) {
+      final targetRelay = relayUrl.trim().isNotEmpty ? relayUrl.trim() : DEFAULT_RELAY_URL;
+      await relayTransport.connect(targetRelay);
+      activeMode = BridgeRouteMode.relay;
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendRequest(Map<String, dynamic> request) {
+    final active = activeMode == BridgeRouteMode.relay ? relayTransport : directTransport;
+    return active.sendRequest(request);
+  }
+
+  @override
+  Future<void> close() async {
+    await _directSub?.cancel();
+    await _relaySub?.cancel();
+    await directTransport.close();
+    await relayTransport.close();
+  }
+}
+
 class FakeBridgeTransport implements BridgeTransport {
   final StreamController<Map<String, dynamic>> _incomingController =
       StreamController<Map<String, dynamic>>.broadcast();

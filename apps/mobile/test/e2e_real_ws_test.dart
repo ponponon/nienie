@@ -232,4 +232,66 @@ void main() {
       expect(relayReceived.first['type'], 'relay.register');
     },
   );
+
+  test(
+    'AutoFallbackBridgeTransport automatically falls back to Relay when LAN wsUrl is unreachable',
+    () async {
+      final relayServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() async => relayServer.close(force: true));
+
+      relayServer.transform(WebSocketTransformer()).listen((WebSocket ws) {
+        ws.listen((dynamic raw) {
+          final msg = jsonDecode(raw as String) as Map<String, dynamic>;
+          if (msg['type'] == 'relay.register') {
+            ws.add(
+              jsonEncode({
+                'type': 'relay.registered',
+                'role': 'mobile',
+                'machineId': msg['machineId'],
+                'clientId': msg['clientId'],
+                'bridgeOnline': true,
+              }),
+            );
+          } else if (msg['type'] == 'relay.forward') {
+            final inner = jsonDecode(msg['payload'] as String) as Map<String, dynamic>;
+            ws.add(
+              jsonEncode({
+                'type': 'relay.forward',
+                'machineId': msg['machineId'],
+                'fromClientId': 'bridge_1',
+                'toClientId': msg['fromClientId'],
+                'payload': jsonEncode({
+                  'type': 'response',
+                  'requestId': inner['requestId'],
+                  'ok': true,
+                  'data': {'pong': true},
+                }),
+              }),
+            );
+          }
+        });
+      });
+
+      final relayUrl = 'ws://127.0.0.1:${relayServer.port}';
+      final transport = AutoFallbackBridgeTransport(
+        directTransport: IoBridgeTransport(),
+        relayTransport: RelayBridgeTransport(
+          machineId: 'machine_fallback',
+          clientId: 'mob_fb_1',
+        ),
+        relayUrl: relayUrl,
+      );
+      addTearDown(transport.close);
+
+      // Unreachable LAN port 1 triggers automatic Relay fallback
+      await transport.connect('ws://127.0.0.1:1');
+      expect(transport.activeMode, BridgeRouteMode.relay);
+
+      final pingRes = await transport.sendRequest({
+        'type': 'ping',
+        'requestId': 'req_fb_ping',
+      });
+      expect(pingRes['ok'], isTrue);
+    },
+  );
 }
