@@ -88,11 +88,20 @@
   - Bridge 重启后对已消失的旧会话严格报错，拒绝伪造旧会话状态
   - 未授权设备发送 Prompt 请求被 `UNAUTHORIZED` 拦截
 
+### 2026-11-04 实现 Codex 适配器 (`@nienie/adapter-codex`)
+
+- 实现 `CodexAdapter` 真实 CLI 探测与 JSONL 结构化运行接口：
+  - `detect()`：执行 `codex --version` 解析版本号（支持 `NIENIE_CODEX_BIN` 命名空间环境变量）
+  - `createSession()` / `loadSession()` / `listSessions()`：创建新线程并在收到 `thread.started` 后自动绑定 `thread_id`，后续消息自动切换为 `codex exec resume --json <thread_id>`
+  - `sendMessage()` / `cancel()`：启动 `codex exec --json` 子进程并流式消费 stdout JSONL，取消时发送信号终止运行进程
+- 实现 `CodexEventNormalizer`：
+  - 将 Codex 的 `turn.started`、`reasoning`、`agent_message`、`command_execution`、`file_change`、`mcp_tool_call`、`turn.completed`、`turn.failed` 统一转换为 Nienie `CanonicalAgentEvent`
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查
 - [x] OpenCode 适配器
-- [ ] Codex 适配器
+- [x] Codex 适配器
 - [x] 手机与电脑二维码配对
 - [x] 手机会话列表
 - [x] 手机会话详情
