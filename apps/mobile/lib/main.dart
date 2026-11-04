@@ -90,6 +90,29 @@ class AgentInfo {
   }
 }
 
+class ModelInfo {
+  final String id;
+  final String name;
+  final String providerId;
+  final bool isDefault;
+
+  const ModelInfo({
+    required this.id,
+    required this.name,
+    required this.providerId,
+    required this.isDefault,
+  });
+
+  factory ModelInfo.fromJson(Map<String, dynamic> json) {
+    return ModelInfo(
+      id: json['id'] as String,
+      name: json['name'] as String? ?? json['id'] as String,
+      providerId: json['providerId'] as String? ?? '',
+      isDefault: json['isDefault'] as bool? ?? false,
+    );
+  }
+}
+
 class AgentSession {
   final String id;
   final String agentId;
@@ -614,6 +637,7 @@ class FakeBridgeTransport implements BridgeTransport {
   final StreamController<Map<String, dynamic>> _incomingController =
       StreamController<Map<String, dynamic>>.broadcast();
   final List<String> sentPrompts = [];
+  final List<String?> sentModelIds = [];
   final List<Map<String, String>> permissionReplies = [];
 
   @override
@@ -660,6 +684,23 @@ class FakeBridgeTransport implements BridgeTransport {
             'agents': [
               {'id': 'opencode', 'name': 'OpenCode', 'available': true, 'version': '0.15.2'},
               {'id': 'codex', 'name': 'Codex', 'available': false},
+            ],
+          },
+        };
+      case 'models.list':
+        return {
+          'type': 'response',
+          'requestId': requestId,
+          'ok': true,
+          'data': {
+            'agentId': request['agentId'],
+            'models': [
+              {
+                'id': 'anthropic/claude-sonnet-4',
+                'name': 'Claude Sonnet 4',
+                'providerId': 'anthropic',
+                'isDefault': true,
+              },
             ],
           },
         };
@@ -712,6 +753,7 @@ class FakeBridgeTransport implements BridgeTransport {
         };
       case 'session.send':
         sentPrompts.add(request['message'] as String);
+        sentModelIds.add(request['modelId'] as String?);
         return {
           'type': 'response',
           'requestId': requestId,
@@ -783,6 +825,8 @@ class MobileBridgeClient extends ChangeNotifier {
   BridgeConnectionState connectionState = BridgeConnectionState.disconnected;
   String? errorMessage;
   List<AgentInfo> agents = const [];
+  List<ModelInfo> models = const [];
+  String? selectedModelId;
   List<AgentSession> sessions = const [];
   AgentSession? activeSession;
 
@@ -972,6 +1016,27 @@ class MobileBridgeClient extends ChangeNotifier {
     }
   }
 
+  Future<void> loadModels(String agentId) async {
+    final res = await transport.sendRequest({
+      'type': 'models.list',
+      'requestId': _nextRequestId(),
+      'agentId': agentId,
+    });
+    if (res['ok'] == true) {
+      final list = (res['data'] as Map<String, dynamic>)['models'] as List<dynamic>? ?? const [];
+      models = list
+          .map((item) => ModelInfo.fromJson(Map<String, dynamic>.from(item as Map)))
+          .toList();
+      selectedModelId ??= models.where((m) => m.isDefault).firstOrNull?.id ?? models.firstOrNull?.id;
+      notifyListeners();
+    }
+  }
+
+  void selectModel(String modelId) {
+    selectedModelId = modelId;
+    notifyListeners();
+  }
+
   Future<void> refreshSessions() async {
     final res = await transport.sendRequest({
       'type': 'sessions.list',
@@ -1043,6 +1108,7 @@ class MobileBridgeClient extends ChangeNotifier {
       'sessionId': current.id,
       'agentId': current.agentId,
       'message': trimmed,
+      if (selectedModelId != null) 'modelId': selectedModelId,
     });
 
     if (res['ok'] != true) {

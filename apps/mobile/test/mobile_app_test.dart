@@ -231,6 +231,14 @@ void main() {
 
       expect(find.text('src/index.ts'), findsOneWidget);
       expect(find.text('+3 / -1'), findsOneWidget);
+
+      // 10. Load models and send message with selected modelId
+      await client.loadModels('opencode');
+      expect(client.models.single.id, 'anthropic/claude-sonnet-4');
+      expect(client.selectedModelId, 'anthropic/claude-sonnet-4');
+
+      await client.sendMessage('use selected model');
+      expect(transport.sentModelIds.last, 'anthropic/claude-sonnet-4');
     },
   );
 }

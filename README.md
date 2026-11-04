@@ -104,7 +104,12 @@ scripts/                  开发和验证脚本
 
 ## 当前状态
 
-项目处于 MVP 骨架阶段。统一协议、Bridge Registry、Session Router、OpenCode/Codex 适配器边界和 Electron 组合入口已经建立；真实 OpenCode/Codex 传输和 Flutter UI 尚未实现。
+项目已完成 MVP 全部闭环及第二/三阶段适配器扩展：
+
+- 统一协议（`@nienie/protocol`）与事件归一化辅助层（`@nienie/agent-events`）
+- Node.js Bridge 核心服务（`@nienie/bridge-core`）：RFC 6455 WebSocket 服务、一次性配对码与二维码鉴权、设备撤销、断线事件序号补发（`events.replay`）、`AES-256-GCM` 端到端加密公网 Relay 路由（`RelayServer` & `BridgeRelayClient`）、iOS/Android 推送通知路由（`PushNotificationRouter`）与 Linux 无 GUI 后台守护模式（`HeadlessBridgeDaemon`）
+- Agent 适配器矩阵（`packages/agent-adapters/*`）：OpenCode（HTTP/SSE）、Codex（JSONL）、Claude Code（stream-json）、Pi（JSON RPC）、通用 ACP（JSON-RPC 2.0）、OpenClaw（HTTP）与 PTY/TUI 兜底适配器
+- Electron 桌面端控制台（`apps/desktop`）与 Flutter 移动端应用（`apps/mobile`），支持运行 `pnpm verify` 一键完成跨端构建、静态分析与端到端闭环验证。
 
 ## 相关文档
 
