@@ -178,3 +178,8 @@ export {
   type BridgeRelayClientOptions,
   type RelayServerOptions,
 } from './relay.js';
+export {
+  HeadlessBridgeDaemon,
+  type HeadlessBridgeDaemonOptions,
+  type HeadlessDaemonStatus,
+} from './daemon.js';

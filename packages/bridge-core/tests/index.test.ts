@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentAdapter } from '@nienie/agent-events';
 import type { AgentSession, BridgeResponse, CanonicalAgentEvent } from '@nienie/protocol';
-import { AgentRegistry, BridgeServer, PairingManager, SessionRouter } from '../src/index.js';
+import {
+  AgentRegistry,
+  BridgeServer,
+  HeadlessBridgeDaemon,
+  PairingManager,
+  RelayServer,
+  SessionRouter,
+} from '../src/index.js';
 
 function adapter(id: 'opencode' | 'codex'): AgentAdapter & { emit(event: CanonicalAgentEvent): void } {
   const listeners = new Set<(event: CanonicalAgentEvent) => void>();
@@ -642,6 +649,45 @@ describe('bridge core', () => {
     expect(approvalDecisions).toEqual([
       { sessionId: 'ses_seed_1', permissionId: 'perm_1', decision: 'allow_once' },
     ]);
+  });
+
+  it('runs in headless Linux/server daemon mode without Electron UI and connects outbound to Relay', async () => {
+    const relayServer = new RelayServer({ port: 0 });
+    const { url: relayUrl } = await relayServer.start();
+    cleanups.push(() => relayServer.stop());
+
+    const daemon = new HeadlessBridgeDaemon({
+      machineId: 'linux_headless_box',
+      adapters: [adapter('opencode')],
+      enableRelay: true,
+      relayUrl,
+    });
+    cleanups.push(() => daemon.stop());
+
+    const status = await daemon.start();
+    expect(status.machineId).toBe('linux_headless_box');
+    expect(status.wsUrl).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
+    expect(status.relayUrl).toBe(relayUrl);
+    expect(status.pairingCode).toMatch(/^\d{6}$/);
+    expect(status.qrUri).toContain('nienie://pair?data=');
+    expect(status.agents).toEqual([
+      expect.objectContaining({ id: 'opencode', available: true }),
+    ]);
+
+    const client = await connectWsClient(status.wsUrl);
+    cleanups.push(async () => client.close());
+
+    const pairRes = await client.request({
+      type: 'pair.confirm',
+      requestId: 'req_headless_pair',
+      pairingCode: status.pairingCode,
+      deviceName: 'Headless CLI Client',
+    });
+    expect(pairRes).toMatchObject({
+      type: 'response',
+      requestId: 'req_headless_pair',
+      ok: true,
+    });
   });
 });
 

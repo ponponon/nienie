@@ -146,6 +146,7 @@
 - 实现 `@nienie/adapter-acp`（`AcpAdapter` & `AcpEventNormalizer`）：对接 ACP JSON-RPC 2.0 `initialize`、`session/new`、`session/load`、`session/prompt`、`session/cancel` 与 `session/update` 通知归一化
 - 实现 `@nienie/adapter-openclaw`（`OpenClawAdapter`）：对接 OpenClaw Gateway HTTP 会话与事件接口
 - 实现 `@nienie/adapter-pty`（`PtyFallbackAdapter` & `stripAnsiSequences`）：清洗终端 ANSI 转义序列并转为 `text_delta` 事件，诚实声明受限 capability
+- 实现独立后台守护进程与 Linux 无 GUI 模式（`HeadlessBridgeDaemon` in `@nienie/bridge-core`）：支持脱离 Electron UI 独立启动 Bridge、探测 Agent、生成一次性配对码并自动建立公网 Relay 出站连接
 
 ## MVP 规划
 
@@ -175,8 +176,8 @@
 - [x] PTY/TUI 兜底模式
 - [ ] 完整远程桌面兜底
 - [ ] iOS 和 Android 推送通知
-- [ ] Bridge 独立后台进程
-- [ ] Linux 无 GUI 模式
+- [x] Bridge 独立后台进程
+- [x] Linux 无 GUI 模式
 - [ ] Rust Bridge 评估和迁移
 
 ## 后续 Agent 适配路线
