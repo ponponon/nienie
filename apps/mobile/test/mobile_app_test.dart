@@ -239,6 +239,22 @@ void main() {
 
       await client.sendMessage('use selected model');
       expect(transport.sentModelIds.last, 'anthropic/claude-sonnet-4');
+
+      // 11. Register push token and request remote desktop fallback screen capture
+      await client.registerPushToken(
+        platform: 'ios',
+        provider: 'apns',
+        pushToken: 'apns_mobile_tok_1',
+      );
+      expect(transport.registeredPushes.single['pushToken'], 'apns_mobile_tok_1');
+
+      await client.captureScreen('main');
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(ListView).last, const Offset(0, -300));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Screen Capture (main)'), findsOneWidget);
+      expect(find.text('1440x900'), findsOneWidget);
     },
   );
 }

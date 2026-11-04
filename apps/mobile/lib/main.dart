@@ -242,6 +242,22 @@ class FileDiffCardItem extends SessionTimelineItem {
   });
 }
 
+class ScreenCaptureCardItem extends SessionTimelineItem {
+  final String frameId;
+  final String displayId;
+  final int width;
+  final int height;
+  final String capturedAt;
+
+  const ScreenCaptureCardItem({
+    required this.frameId,
+    required this.displayId,
+    required this.width,
+    required this.height,
+    required this.capturedAt,
+  });
+}
+
 class SavedDeviceCredential {
   final String machineId;
   final String wsUrl;
@@ -639,6 +655,7 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<String> sentPrompts = [];
   final List<String?> sentModelIds = [];
   final List<Map<String, String>> permissionReplies = [];
+  final List<Map<String, String>> registeredPushes = [];
 
   @override
   Stream<Map<String, dynamic>> get incomingMessages => _incomingController.stream;
@@ -793,6 +810,38 @@ class FakeBridgeTransport implements BridgeTransport {
                 'deletions': 1,
               },
             ],
+          },
+        };
+      case 'push.register':
+        registeredPushes.add({
+          'platform': request['platform'] as String,
+          'provider': request['provider'] as String,
+          'pushToken': request['pushToken'] as String,
+        });
+        return {
+          'type': 'response',
+          'requestId': requestId,
+          'ok': true,
+          'data': {
+            'registered': true,
+            'provider': request['provider'],
+          },
+        };
+      case 'screen.capture':
+        return {
+          'type': 'response',
+          'requestId': requestId,
+          'ok': true,
+          'data': {
+            'frame': {
+              'frameId': 'frm_mobile_1',
+              'displayId': request['displayId'] ?? 'main',
+              'mimeType': 'image/png',
+              'width': 1440,
+              'height': 900,
+              'base64Data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
+              'capturedAt': '2026-11-04T10:00:00Z',
+            },
           },
         };
       default:
@@ -998,6 +1047,45 @@ class MobileBridgeClient extends ChangeNotifier {
           ),
         );
       }
+      notifyListeners();
+    }
+  }
+
+  Future<void> registerPushToken({
+    required String platform,
+    required String provider,
+    required String pushToken,
+  }) async {
+    await transport.sendRequest({
+      'type': 'push.register',
+      'requestId': _nextRequestId(),
+      'platform': platform,
+      'provider': provider,
+      'pushToken': pushToken,
+    });
+  }
+
+  Future<void> captureScreen([String displayId = 'main']) async {
+    final current = activeSession;
+    if (current == null) return;
+    final res = await transport.sendRequest({
+      'type': 'screen.capture',
+      'requestId': _nextRequestId(),
+      'displayId': displayId,
+    });
+    if (res['ok'] == true) {
+      final data = res['data'] as Map<String, dynamic>;
+      final frame = Map<String, dynamic>.from(data['frame'] as Map);
+      final items = _timelineBySession.putIfAbsent(current.id, () => []);
+      items.add(
+        ScreenCaptureCardItem(
+          frameId: frame['frameId'] as String? ?? 'frm',
+          displayId: frame['displayId'] as String? ?? displayId,
+          width: frame['width'] as int? ?? 0,
+          height: frame['height'] as int? ?? 0,
+          capturedAt: frame['capturedAt'] as String? ?? '',
+        ),
+      );
       notifyListeners();
     }
   }
@@ -1701,6 +1789,27 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     Text(
                       '+${item.additions} / -${item.deletions}',
                       style: const TextStyle(fontSize: 12, color: Color(0xFF10B981)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ScreenCaptureCardItem() => Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.desktop_windows_outlined, size: 16, color: Color(0xFF3B82F6)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Screen Capture (${item.displayId})',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Text(
+                      '${item.width}x${item.height}',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                     ),
                   ],
                 ),
