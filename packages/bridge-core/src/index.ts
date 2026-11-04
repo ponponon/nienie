@@ -98,3 +98,9 @@ export class SessionRouter {
     return this.registry.onEvent(listener);
   }
 }
+
+export {
+  BridgeServer,
+  type BridgeServerAddress,
+  type BridgeServerOptions,
+} from './ws-server.js';

@@ -11,6 +11,8 @@ Flutter Mobile App <-- WebSocket --> Electron Main Process Bridge
 ## 客户端命令
 
 ```text
+hello
+ping
 pair.confirm
 machine.get
 agents.list
@@ -20,6 +22,33 @@ session.load
 session.send
 session.cancel
 events.replay
+```
+
+### 请求与响应信封
+
+客户端发送带 `requestId` 的命令：
+
+```json
+{
+  "type": "session.send",
+  "requestId": "req_123",
+  "sessionId": "ses_alpha",
+  "message": "运行测试"
+}
+```
+
+Bridge 返回对应的 `response` 或异步推送 `session.event`：
+
+```json
+{
+  "type": "response",
+  "requestId": "req_123",
+  "ok": true,
+  "data": {
+    "accepted": true,
+    "sessionId": "ses_alpha"
+  }
+}
 ```
 
 ## 服务端事件

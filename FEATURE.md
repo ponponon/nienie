@@ -36,9 +36,19 @@
   - 支持敏感凭据字段自动脱敏（`[REDACTED]`）与超长工具输出截断
 - 在 `@nienie/bridge-core` 的 `AgentRegistry` 与 `SessionRouter` 中打通 `OpenCode → Bridge → 统一事件` 闭环，支持会话创建、恢复和跨适配器统一事件订阅
 
+### 2026-11-04 实现本地 Bridge WebSocket 服务
+
+- 在 `@nienie/protocol` 中实现 `parseBridgeRequest()` 消息校验（校验 JSON 格式、消息字节上限 `DEFAULT_MAX_MESSAGE_BYTES`、`protocolVersion` 与请求结构）
+- 在 `@nienie/bridge-core` 中实现基于 RFC 6455 的零依赖本地 `BridgeServer`：
+  - 默认监听 `127.0.0.1` 并暴露 `GET /health` 健康检查接口
+  - 支持 `hello`、`ping`、`agents.list`、`sessions.list`、`session.create`、`session.load`、`session.send`、`session.cancel` 命令路由
+  - 自动订阅 `AgentRegistry` 事件并向已连接客户端实时广播 `session.event`（`CanonicalAgentEvent`）
+  - 内置 WebSocket Ping/Pong 心跳巡检、超大帧拦截（1009）与客户端断线自动清理
+- 在 `@nienie/desktop` 中提供 `createDesktopBridgeServer()` 组合入口
+
 ## MVP 规划
 
-- [ ] Electron Bridge 启动和健康检查
+- [x] Electron Bridge 启动和健康检查
 - [x] OpenCode 适配器
 - [ ] Codex 适配器
 - [ ] 手机与电脑二维码配对
