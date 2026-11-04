@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,37 +8,69 @@ const esbuildBin = resolve(
   rootDir,
   'node_modules/.pnpm/@esbuild+darwin-arm64@0.28.2/node_modules/@esbuild/darwin-arm64/bin/esbuild',
 );
-const entryFile = resolve(rootDir, 'apps/desktop/src/cli.ts');
-const outFile = resolve(rootDir, 'apps/desktop/dist/nienie-desktop.mjs');
+
+const isSmokeOrHeadless =
+  process.argv.includes('--smoke') || process.argv.includes('--headless');
 
 if (!process.argv.includes('--smoke')) {
-  try {
-    execFileSync('pkill', ['-f', 'apps/desktop/dist/nienie-desktop.mjs'], {
-      stdio: 'ignore',
-    });
-  } catch {
-    // No existing Nienie desktop process running
+  for (const pattern of [
+    'apps/desktop/dist/nienie-desktop.mjs',
+    'apps/desktop/dist/electron-main.cjs',
+  ]) {
+    try {
+      execFileSync('pkill', ['-f', pattern], { stdio: 'ignore' });
+    } catch {
+      // No stale process
+    }
   }
 }
 
-execFileSync(
-  esbuildBin,
-  [
-    entryFile,
-    '--bundle',
-    '--platform=node',
-    '--format=esm',
-    '--target=node22',
-    `--outfile=${outFile}`,
-  ],
-  { cwd: rootDir, stdio: 'inherit' },
-);
+if (isSmokeOrHeadless) {
+  const entryFile = resolve(rootDir, 'apps/desktop/src/cli.ts');
+  const outFile = resolve(rootDir, 'apps/desktop/dist/nienie-desktop.mjs');
 
-const child = spawn(process.execPath, [outFile, ...process.argv.slice(2)], {
-  cwd: rootDir,
-  stdio: 'inherit',
-});
+  execFileSync(
+    esbuildBin,
+    [
+      entryFile,
+      '--bundle',
+      '--platform=node',
+      '--format=esm',
+      '--target=node22',
+      `--outfile=${outFile}`,
+    ],
+    { cwd: rootDir, stdio: 'inherit' },
+  );
 
-child.on('exit', (code) => {
-  process.exit(code ?? 0);
-});
+  const child = spawn(process.execPath, [outFile, ...process.argv.slice(2)], {
+    cwd: rootDir,
+    stdio: 'inherit',
+  });
+  child.on('exit', (code) => process.exit(code ?? 0));
+} else {
+  const entryFile = resolve(rootDir, 'apps/desktop/src/electron-main.ts');
+  const outFile = resolve(rootDir, 'apps/desktop/dist/electron-main.cjs');
+
+  execFileSync(
+    esbuildBin,
+    [
+      entryFile,
+      '--bundle',
+      '--platform=node',
+      '--format=cjs',
+      '--target=node22',
+      '--external:electron',
+      `--outfile=${outFile}`,
+    ],
+    { cwd: rootDir, stdio: 'inherit' },
+  );
+
+  const requireFromDesktop = createRequire(resolve(rootDir, 'apps/desktop/package.json'));
+  const electronBinary = requireFromDesktop('electron');
+
+  const child = spawn(String(electronBinary), [outFile, ...process.argv.slice(2)], {
+    cwd: rootDir,
+    stdio: 'inherit',
+  });
+  child.on('exit', (code) => process.exit(code ?? 0));
+}

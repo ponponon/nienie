@@ -140,3 +140,26 @@ Agent 在后台通过 `nohup` 预启动了 `nienie-desktop.mjs`（占用 `4100` 
 ### 预防措施
 
 本地开发启动脚本（如 `pnpm start`）必须具备幂等性：启动固定端口服务前应自动停止同项目的旧守护进程，或提供清晰的端口占用接管逻辑。
+
+## 2026-11-04 `pnpm start` 仅启动命令行 HTTP 服务而未直接弹出 Electron 桌面 GUI 窗口
+
+### 问题
+
+用户执行 `pnpm start` 期望直接弹出 Electron 桌面应用 GUI 窗口，但初始启动脚本只用 `node` 启动了本地 HTTP/WebSocket 服务并打印浏览器 URL，没有直接拉起 `Electron.app` 原生 `BrowserWindow`。
+
+### 根因
+
+`apps/desktop` 初期仅实现了 HTML/IPC 逻辑而未引入 `electron` 运行时包与 `BrowserWindow` 主进程入口。
+
+### 影响
+
+用户运行桌面端启动命令时看不到原生桌面窗口，不符合 Electron 桌面应用的产品定位。
+
+### 修复
+
+1. 在 `@nienie/desktop` 中安装 `electron` 运行时并实现 `apps/desktop/src/electron-main.ts`（通过 `app.whenReady()` 与 `new BrowserWindow(createDesktopWindowOptions())` 启动原生桌面窗口）。
+2. 将 `scripts/start-mac.mjs` 默认行为改为打包并拉起 Electron 原生 GUI 窗口（同时保留 `--headless` / `--smoke` 供无头服务与 CI 测试使用）。
+
+### 预防措施
+
+定位为 Electron 桌面端的应用，其默认启动命令（`pnpm start`）必须直接拉起真实的 Electron `BrowserWindow` 桌面界面，不得仅以命令行 Web URL 替代原生窗口。
