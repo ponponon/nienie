@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentAdapter } from '@nienie/agent-events';
 import type { AgentSession, BridgeResponse, CanonicalAgentEvent } from '@nienie/protocol';
@@ -930,6 +933,42 @@ describe('bridge core', () => {
         },
       },
     ]);
+  });
+
+  it('persists paired devices and revocation state across Bridge restarts when persistenceFilePath is configured', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'nienie-pairing-test-'));
+    cleanups.push(async () => rmSync(tempDir, { recursive: true, force: true }));
+    const filePath = join(tempDir, 'paired-devices.json');
+
+    const manager1 = new PairingManager({
+      machineId: 'machine_persist',
+      persistenceFilePath: filePath,
+    });
+    const challenge = manager1.createPairingCode({ wsUrl: 'ws://127.0.0.1:4100' });
+    const confirmed = manager1.confirmPairing({
+      pairingCode: challenge.pairingCode,
+      deviceName: 'Persisted iPhone',
+      platform: 'ios',
+    });
+    expect(confirmed).toBeDefined();
+
+    // Simulate Bridge process restart with a fresh PairingManager reading the same file
+    const manager2 = new PairingManager({
+      machineId: 'machine_persist',
+      persistenceFilePath: filePath,
+    });
+    const verified = manager2.verifyToken(confirmed!.deviceToken);
+    expect(verified?.deviceId).toBe(confirmed!.deviceId);
+    expect(verified?.deviceName).toBe('Persisted iPhone');
+
+    // Revoke in manager2 and verify manager3 still enforces revocation after restart
+    expect(manager2.revokeDevice(confirmed!.deviceId)).toBe(true);
+    const manager3 = new PairingManager({
+      machineId: 'machine_persist',
+      persistenceFilePath: filePath,
+    });
+    expect(manager3.verifyToken(confirmed!.deviceToken)).toBeUndefined();
+    expect(manager3.listDevices()[0]?.revokedAt).toBeTruthy();
   });
 });
 

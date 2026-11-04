@@ -1,4 +1,6 @@
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import {
   DEFAULT_RELAY_URL,
   encodePairingQrPayload,
@@ -15,6 +17,7 @@ export type PairingManagerOptions = {
   machineId?: string | undefined;
   relayUrl?: string | undefined;
   ttlMs?: number | undefined;
+  persistenceFilePath?: string | undefined;
   now?: (() => Date) | undefined;
 };
 
@@ -52,6 +55,7 @@ export class PairingManager {
   readonly machineId: string;
   private readonly relayUrl: string;
   private readonly ttlMs: number;
+  private readonly persistenceFilePath: string | undefined;
   private readonly now: () => Date;
 
   private readonly pendingCodes = new Map<string, PendingPairingCode>();
@@ -63,7 +67,9 @@ export class PairingManager {
     this.machineId = options.machineId ?? 'machine_local';
     this.relayUrl = resolveRelayUrl(options.relayUrl ?? DEFAULT_RELAY_URL);
     this.ttlMs = options.ttlMs ?? DEFAULT_PAIRING_TTL_MS;
+    this.persistenceFilePath = options.persistenceFilePath;
     this.now = options.now ?? (() => new Date());
+    this.loadPersistedDevices();
   }
 
   createPairingCode(input: { wsUrl: string; relayUrl?: string | undefined }): PairingChallenge {
@@ -127,6 +133,7 @@ export class PairingManager {
 
     this.devices.set(deviceId, record);
     this.tokenHashToDeviceId.set(tokenHash, deviceId);
+    this.savePersistedDevices();
 
     return {
       deviceId,
@@ -151,6 +158,7 @@ export class PairingManager {
     }
 
     record.lastSeenAt = this.now().toISOString();
+    this.savePersistedDevices();
     return toPublicDevice(record);
   }
 
@@ -167,6 +175,7 @@ export class PairingManager {
 
     record.revokedAt = this.now().toISOString();
     this.tokenHashToDeviceId.delete(record.tokenHash);
+    this.savePersistedDevices();
     for (const listener of this.revokeListeners) {
       listener(deviceId);
     }
@@ -189,6 +198,37 @@ export class PairingManager {
         this.pendingCodes.delete(code);
       }
     }
+  }
+
+  private loadPersistedDevices(): void {
+    if (!this.persistenceFilePath || !existsSync(this.persistenceFilePath)) {
+      return;
+    }
+    try {
+      const raw = JSON.parse(readFileSync(this.persistenceFilePath, 'utf8')) as {
+        devices?: StoredDeviceRecord[];
+      };
+      for (const record of raw.devices ?? []) {
+        if (record && typeof record.deviceId === 'string' && typeof record.tokenHash === 'string') {
+          this.devices.set(record.deviceId, record);
+          if (record.revokedAt === undefined) {
+            this.tokenHashToDeviceId.set(record.tokenHash, record.deviceId);
+          }
+        }
+      }
+    } catch {
+      // Ignore corrupted persistence file
+    }
+  }
+
+  private savePersistedDevices(): void {
+    if (!this.persistenceFilePath) return;
+    mkdirSync(dirname(this.persistenceFilePath), { recursive: true });
+    writeFileSync(
+      this.persistenceFilePath,
+      JSON.stringify({ devices: [...this.devices.values()] }, null, 2),
+      'utf8',
+    );
   }
 }
 
