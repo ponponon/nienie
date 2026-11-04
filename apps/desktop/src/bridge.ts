@@ -38,4 +38,13 @@ export {
   type IpcMainLike,
   type SetRelayInput,
 } from './controller.js';
+export {
+  decodePairingQrPayload,
+  DEFAULT_RELAY_URL,
+  encodePairingQrPayload,
+  resolveRelayUrl,
+  type BridgeRequest,
+  type BridgeResponse,
+  type CanonicalAgentEvent,
+} from '@nienie/bridge-core';
 export { renderDesktopAppHtml } from './renderer.js';

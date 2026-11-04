@@ -100,11 +100,15 @@ export class SessionRouter {
 }
 
 export {
+  decodePairingQrPayload,
   DEFAULT_RELAY_URL,
+  encodePairingQrPayload,
   resolveRelayUrl,
   type AgentId,
   type AgentInfo,
   type AgentSession,
+  type BridgeRequest,
+  type BridgeResponse,
   type CanonicalAgentEvent,
   type CreateSessionInput,
   type PairedDevice,

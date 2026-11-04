@@ -76,6 +76,18 @@
   - 统一事件流归并：按每个会话的 `sequence` 排序与去重，将 `text_delta`、`thinking_delta`、`tool_use` + `tool_result`（按 `toolCallId` 成对关联）、`error` 实时映射为结构化时间线卡片
   - `NienieMobileApp`：深色 Material 3 移动端界面，包含配对连接面板、Agent 状态栏、Session 切换栏、独立视觉形态的流式文本/工具调用/错误卡片与底部 Prompt 输入栏（通过 `flutter test` 与 `flutter analyze` 验证）
 
+### 2026-11-04 打通第一个端到端闭环（Mobile → Desktop Bridge → OpenCode → 手机实时渲染）
+
+- 新增桌面端全链路闭环测试 `apps/desktop/tests/e2e-loop.test.ts` 与移动端真机 WebSocket 集成测试 `apps/mobile/test/e2e_real_ws_test.dart`
+- 完整覆盖并通过 `AGENTS.md` 核心验证项：
+  - Bridge 启动并发现 OpenCode/Codex
+  - 手机通过一次性配对码/二维码 URI 完成绑定
+  - WebSocket 建立连接及断线后凭 `deviceToken` 恢复认证连接
+  - 流式文本分片接收与 `idle` 状态收尾
+  - `tool_use` 与 `tool_result` 按 `toolCallId` 成对关联
+  - Bridge 重启后对已消失的旧会话严格报错，拒绝伪造旧会话状态
+  - 未授权设备发送 Prompt 请求被 `UNAUTHORIZED` 拦截
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查
@@ -88,7 +100,7 @@
 - [x] 工具调用和工具结果事件
 - [x] 基础状态和错误事件
 - [x] 手机发送 Prompt
-- [ ] WebSocket 断线重连
+- [x] WebSocket 断线重连
 - [ ] 公网 Relay 连接和设备路由
 - [x] 自定义 Relay 地址配置
 - [ ] Relay 端到端加密消息转发
