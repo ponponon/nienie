@@ -67,18 +67,27 @@
 - 实现 `renderDesktopAppHtml()` 与 `createDesktopWindowOptions()`：
   - 采用深色 Design System CSS Tokens、原生 macOS 窗口 `trafficLightPosition` 留白（`padding-left: 78px`）、CSP 安全策略与纯内联 SVG 图标（零 Emoji）
 
+### 2026-11-04 实现 Flutter 手机端最小 UI 与统一协议客户端
+
+- 在 `apps/mobile` 中实现 Flutter 手机端核心模块（`lib/main.dart`）：
+  - `PairingQrPayload.decode`：解析 `nienie://pair?data=...` 配对二维码 URI
+  - `DeviceCredentialStore` & `InMemoryCredentialStore`：保存手机侧获得的 `deviceId` 与 `deviceToken`（不保存电脑端 Agent 凭据）
+  - `MobileBridgeClient` & `IoBridgeTransport`：基于 WebSocket 实现一次性配对码绑定（`pair.confirm`）、令牌重连（`hello`）、拉取 Agent 列表（`agents.list`）、拉取/创建/恢复会话（`sessions.list`、`session.create`、`session.load`）、发送消息（`session.send`）
+  - 统一事件流归并：按每个会话的 `sequence` 排序与去重，将 `text_delta`、`thinking_delta`、`tool_use` + `tool_result`（按 `toolCallId` 成对关联）、`error` 实时映射为结构化时间线卡片
+  - `NienieMobileApp`：深色 Material 3 移动端界面，包含配对连接面板、Agent 状态栏、Session 切换栏、独立视觉形态的流式文本/工具调用/错误卡片与底部 Prompt 输入栏（通过 `flutter test` 与 `flutter analyze` 验证）
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查
 - [x] OpenCode 适配器
 - [ ] Codex 适配器
 - [x] 手机与电脑二维码配对
-- [ ] 手机会话列表
-- [ ] 手机会话详情
+- [x] 手机会话列表
+- [x] 手机会话详情
 - [x] 流式文本事件
 - [x] 工具调用和工具结果事件
 - [x] 基础状态和错误事件
-- [ ] 手机发送 Prompt
+- [x] 手机发送 Prompt
 - [ ] WebSocket 断线重连
 - [ ] 公网 Relay 连接和设备路由
 - [x] 自定义 Relay 地址配置
