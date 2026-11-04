@@ -77,10 +77,12 @@ export class DesktopPreviewServer {
     const url = new URL(req.url ?? '/', `http://${this.host}`);
 
     if (req.method === 'GET' && url.pathname === '/') {
-      const rawLang = url.searchParams.get('lang') ?? 'zh';
-      const locale: DesktopLocale =
-        rawLang === 'en' || rawLang === 'ja' || rawLang === 'ko' ? rawLang : 'zh';
-      const baseHtml = renderDesktopAppHtml(this.controller.getState(), { locale });
+      const rawLang = url.searchParams.get('lang');
+      if (rawLang === 'zh' || rawLang === 'en' || rawLang === 'ja' || rawLang === 'ko') {
+        this.controller.setLocale(rawLang);
+      }
+      const state = this.controller.getState();
+      const baseHtml = renderDesktopAppHtml(state, { locale: state.locale });
       const httpShimScript = `<script>
     if (!window.nienieDesktop) {
       const invoke = async (channel, ...args) => {

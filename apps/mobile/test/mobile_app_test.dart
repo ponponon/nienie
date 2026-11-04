@@ -76,6 +76,23 @@ void main() {
     final loaded = await readerStore.load();
     expect(loaded?.machineId, 'mac_studio');
     expect(loaded?.deviceToken, 'ntk_persisted_secret');
+
+    // Persists language preference across app restarts
+    final client1 = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: writerStore,
+      language: AppLanguage.zh,
+    );
+    await client1.setLanguage(AppLanguage.ja);
+    expect(await readerStore.loadLanguage(), AppLanguage.ja);
+
+    final client2 = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: readerStore,
+      language: AppLanguage.zh,
+    );
+    await client2.loadSavedPreferences();
+    expect(client2.language, AppLanguage.ja);
   });
 
   testWidgets(

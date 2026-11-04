@@ -38,8 +38,18 @@ class MobileBridgeClient extends ChangeNotifier {
 
   NienieStrings get strings => NienieStrings(language);
 
-  void setLanguage(AppLanguage nextLanguage) {
+  Future<void> setLanguage(AppLanguage nextLanguage) async {
     language = nextLanguage;
+    notifyListeners();
+    await credentialStore.saveLanguage(nextLanguage);
+  }
+
+  Future<void> loadSavedPreferences() async {
+    final savedLang = await credentialStore.loadLanguage();
+    if (savedLang != null) {
+      language = savedLang;
+    }
+    savedMachines = await credentialStore.listMachines();
     notifyListeners();
   }
 

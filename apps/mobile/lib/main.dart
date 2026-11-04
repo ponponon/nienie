@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'src/i18n/app_strings.dart';
 import 'src/state/mobile_bridge_client.dart';
@@ -17,13 +18,13 @@ export 'src/ui/pairing_panel.dart';
 export 'src/ui/timeline_card_list.dart';
 
 void main() {
-  runApp(
-    NienieMobileApp(
-      client: MobileBridgeClient(
-        transport: IoBridgeTransport(),
-        credentialStore: InMemoryCredentialStore(),
-        language: AppLanguage.zh,
-      ),
+  final client = MobileBridgeClient(
+    transport: IoBridgeTransport(),
+    credentialStore: FileCredentialStore(
+      File('${Directory.systemTemp.path}/nienie_mobile_state.json'),
     ),
+    language: AppLanguage.zh,
   );
+  client.loadSavedPreferences();
+  runApp(NienieMobileApp(client: client));
 }

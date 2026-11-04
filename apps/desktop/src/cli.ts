@@ -1,4 +1,5 @@
 import { networkInterfaces } from 'node:os';
+import { resolve } from 'node:path';
 import { DesktopBridgeController, DesktopPreviewServer } from './bridge.js';
 
 function detectLanIp(): string | undefined {
@@ -23,6 +24,7 @@ const controller = new DesktopBridgeController({
   host,
   port: bridgePort,
   includeExtendedAgents: true,
+  ...(isSmoke ? {} : { preferencesFilePath: resolve(process.cwd(), '.nienie/desktop-preferences.json') }),
 });
 
 const state = await controller.startBridge();

@@ -1,4 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_RELAY_URL, SessionRouter } from '@nienie/bridge-core';
 import {
@@ -270,6 +273,32 @@ describe('desktop bridge composition', () => {
     expect(renderDesktopAppHtml(controller.getState(), { locale: 'en' })).toContain('Local Bridge');
     expect(renderDesktopAppHtml(controller.getState(), { locale: 'ja' })).toContain('ローカル Bridge');
     expect(renderDesktopAppHtml(controller.getState(), { locale: 'ko' })).toContain('로컬 Bridge');
+
+    // Persists user language preference across DesktopBridgeController restarts
+    const tempDir = mkdtempSync(join(tmpdir(), 'nienie-desktop-pref-'));
+    cleanups.push(async () => rmSync(tempDir, { recursive: true, force: true }));
+    const prefFile = join(tempDir, 'preferences.json');
+
+    const ctrl1 = new DesktopBridgeController({
+      machineId: 'mac_pref',
+      preferencesFilePath: prefFile,
+      opencode: { baseUrl: 'http://127.0.0.1:1' },
+      codex: { detectVersion: async () => 'codex-cli 0.166.0' },
+    });
+    cleanups.push(() => ctrl1.dispose());
+    expect(ctrl1.getState().locale).toBe('zh');
+
+    ctrl1.setLocale('ko');
+    expect(ctrl1.getState().locale).toBe('ko');
+
+    const ctrl2 = new DesktopBridgeController({
+      machineId: 'mac_pref',
+      preferencesFilePath: prefFile,
+      opencode: { baseUrl: 'http://127.0.0.1:1' },
+      codex: { detectVersion: async () => 'codex-cli 0.166.0' },
+    });
+    cleanups.push(() => ctrl2.dispose());
+    expect(ctrl2.getState().locale).toBe('ko');
   });
 
   it('serves an interactive desktop console over localhost via DesktopPreviewServer', async () => {

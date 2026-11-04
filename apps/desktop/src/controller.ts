@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { CodexAdapterOptions } from '@nienie/adapter-codex';
 import type { OpenCodeAdapterOptions } from '@nienie/adapter-opencode';
 import {
@@ -13,6 +15,7 @@ import {
   type PairingQrPayload,
 } from '@nienie/bridge-core';
 import { createBridgeRegistry } from './bridge.js';
+import type { DesktopLocale } from './renderer.js';
 
 export const NIENIE_IPC_CHANNELS = {
   GET_STATE: 'desktop:get-state',
@@ -21,6 +24,7 @@ export const NIENIE_IPC_CHANNELS = {
   REFRESH_AGENTS: 'desktop:refresh-agents',
   REFRESH_PAIRING: 'desktop:refresh-pairing',
   SET_RELAY: 'desktop:set-relay',
+  SET_LOCALE: 'desktop:set-locale',
   REVOKE_DEVICE: 'desktop:revoke-device',
 } as const;
 
@@ -47,6 +51,7 @@ export type DesktopRelayConfig = {
 };
 
 export type DesktopDashboardState = {
+  locale: DesktopLocale;
   bridge: {
     status: 'stopped' | 'running' | 'error';
     wsUrl?: string | undefined;
@@ -66,6 +71,8 @@ export type DesktopBridgeControllerOptions = {
   machineId?: string | undefined;
   host?: string | undefined;
   port?: number | undefined;
+  locale?: DesktopLocale | undefined;
+  preferencesFilePath?: string | undefined;
   customRelayUrl?: string | undefined;
   maxLogs?: number | undefined;
   includeExtendedAgents?: boolean | undefined;
@@ -83,10 +90,12 @@ export class DesktopBridgeController {
   private readonly host: string;
   private readonly requestedPort: number;
   private readonly maxLogs: number;
+  private readonly preferencesFilePath: string | undefined;
   private readonly registry: AgentRegistry;
   private readonly pairingManager: PairingManager;
   private unsubscribeEvents: (() => void) | undefined;
 
+  private locale: DesktopLocale = 'zh';
   private bridgeServer: BridgeServer | undefined;
   private bridgeStatus: 'stopped' | 'running' | 'error' = 'stopped';
   private wsUrl: string | undefined;
@@ -103,10 +112,15 @@ export class DesktopBridgeController {
     this.host = options.host ?? '127.0.0.1';
     this.requestedPort = options.port ?? 0;
     this.maxLogs = options.maxLogs ?? 200;
+    this.preferencesFilePath = options.preferencesFilePath;
+    if (options.locale) {
+      this.locale = options.locale;
+    }
     if (options.customRelayUrl?.trim()) {
       this.customRelayUrl = options.customRelayUrl.trim();
       this.relayMode = 'custom';
     }
+    this.loadPreferences();
 
     this.registry = createBridgeRegistry({
       opencode: options.opencode,
@@ -134,6 +148,7 @@ export class DesktopBridgeController {
 
   getState(): DesktopDashboardState {
     return {
+      locale: this.locale,
       bridge: {
         status: this.bridgeStatus,
         ...(this.wsUrl ? { wsUrl: this.wsUrl } : {}),
@@ -247,6 +262,16 @@ export class DesktopBridgeController {
     if (this.pairingView) {
       this.refreshPairingCode();
     }
+    this.savePreferences();
+    return this.getState();
+  }
+
+  setLocale(locale: DesktopLocale): DesktopDashboardState {
+    if (locale === 'zh' || locale === 'en' || locale === 'ja' || locale === 'ko') {
+      this.locale = locale;
+      this.savePreferences();
+      this.appendLog('info', `Switched UI language to ${locale}`);
+    }
     return this.getState();
   }
 
@@ -286,6 +311,53 @@ export class DesktopBridgeController {
       this.logs.splice(0, this.logs.length - this.maxLogs);
     }
   }
+
+  private loadPreferences(): void {
+    if (!this.preferencesFilePath || !existsSync(this.preferencesFilePath)) {
+      return;
+    }
+    try {
+      const raw = JSON.parse(readFileSync(this.preferencesFilePath, 'utf8')) as {
+        locale?: DesktopLocale;
+        relayMode?: 'default' | 'custom';
+        customRelayUrl?: string;
+      };
+      if (
+        raw.locale === 'zh' ||
+        raw.locale === 'en' ||
+        raw.locale === 'ja' ||
+        raw.locale === 'ko'
+      ) {
+        this.locale = raw.locale;
+      }
+      if (raw.relayMode === 'default' || raw.relayMode === 'custom') {
+        this.relayMode = raw.relayMode;
+      }
+      if (typeof raw.customRelayUrl === 'string') {
+        this.customRelayUrl = raw.customRelayUrl;
+      }
+    } catch {
+      // Ignore corrupted preferences file
+    }
+  }
+
+  private savePreferences(): void {
+    if (!this.preferencesFilePath) return;
+    mkdirSync(dirname(this.preferencesFilePath), { recursive: true });
+    writeFileSync(
+      this.preferencesFilePath,
+      JSON.stringify(
+        {
+          locale: this.locale,
+          relayMode: this.relayMode,
+          customRelayUrl: this.customRelayUrl,
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+  }
 }
 
 export type IpcMainLike = {
@@ -306,6 +378,9 @@ export function registerDesktopIpcHandlers(
   ipcMain.handle(NIENIE_IPC_CHANNELS.REFRESH_PAIRING, () => controller.refreshPairingCode());
   ipcMain.handle(NIENIE_IPC_CHANNELS.SET_RELAY, (_event, input) =>
     controller.setRelayConfig(input as SetRelayInput),
+  );
+  ipcMain.handle(NIENIE_IPC_CHANNELS.SET_LOCALE, (_event, locale) =>
+    controller.setLocale(locale as DesktopLocale),
   );
   ipcMain.handle(NIENIE_IPC_CHANNELS.REVOKE_DEVICE, (_event, deviceId) =>
     controller.revokeDevice(String(deviceId)),

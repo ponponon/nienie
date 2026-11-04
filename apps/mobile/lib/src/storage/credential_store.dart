@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import '../i18n/app_strings.dart';
 
 class SavedDeviceCredential {
   final String machineId;
@@ -36,12 +37,15 @@ abstract class DeviceCredentialStore {
   Future<SavedDeviceCredential?> load([String? machineId]);
   Future<List<SavedDeviceCredential>> listMachines();
   Future<void> removeMachine(String machineId);
+  Future<void> saveLanguage(AppLanguage language);
+  Future<AppLanguage?> loadLanguage();
   Future<void> clear();
 }
 
 class InMemoryCredentialStore implements DeviceCredentialStore {
   final Map<String, SavedDeviceCredential> _machines = {};
   String? _activeMachineId;
+  AppLanguage? _savedLanguage;
 
   @override
   Future<void> save(SavedDeviceCredential credential) async {
@@ -70,9 +74,18 @@ class InMemoryCredentialStore implements DeviceCredentialStore {
   }
 
   @override
+  Future<void> saveLanguage(AppLanguage language) async {
+    _savedLanguage = language;
+  }
+
+  @override
+  Future<AppLanguage?> loadLanguage() async => _savedLanguage;
+
+  @override
   Future<void> clear() async {
     _machines.clear();
     _activeMachineId = null;
+    _savedLanguage = null;
   }
 }
 
@@ -145,6 +158,24 @@ class FileCredentialStore implements DeviceCredentialStore {
       state['activeMachineId'] = machines.keys.firstOrNull;
     }
     await _writeState(state);
+  }
+
+  @override
+  Future<void> saveLanguage(AppLanguage language) async {
+    final state = await _readState();
+    state['language'] = language.name;
+    await _writeState(state);
+  }
+
+  @override
+  Future<AppLanguage?> loadLanguage() async {
+    final state = await _readState();
+    final raw = state['language'] as String?;
+    if (raw == null) return null;
+    for (final lang in AppLanguage.values) {
+      if (lang.name == raw) return lang;
+    }
+    return null;
   }
 
   @override
