@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { CodexAdapterOptions } from '@nienie/adapter-codex';
 import type { OpenCodeAdapterOptions } from '@nienie/adapter-opencode';
 import {
   BridgeServer,
@@ -68,6 +69,7 @@ export type DesktopBridgeControllerOptions = {
   customRelayUrl?: string | undefined;
   maxLogs?: number | undefined;
   opencode?: OpenCodeAdapterOptions | undefined;
+  codex?: CodexAdapterOptions | undefined;
 };
 
 export type SetRelayInput = {
@@ -105,7 +107,10 @@ export class DesktopBridgeController {
       this.relayMode = 'custom';
     }
 
-    this.registry = createBridgeRegistry({ opencode: options.opencode });
+    this.registry = createBridgeRegistry({
+      opencode: options.opencode,
+      codex: options.codex,
+    });
     this.pairingManager = new PairingManager({
       machineId: this.machineId,
       relayUrl: this.getActiveRelayUrl(),

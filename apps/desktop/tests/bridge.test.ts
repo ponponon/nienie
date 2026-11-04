@@ -22,7 +22,10 @@ describe('desktop bridge composition', () => {
   });
 
   it('registers the MVP agents', async () => {
-    const registry = createBridgeRegistry({ opencode: { baseUrl: 'http://127.0.0.1:1' } });
+    const registry = createBridgeRegistry({
+      opencode: { baseUrl: 'http://127.0.0.1:1' },
+      codex: { detectVersion: async () => 'codex-cli 0.166.0' },
+    });
     cleanups.push(() => registry.dispose());
     const agents = await registry.detectAll();
     expect(agents.map((agent) => agent.id)).toEqual(['opencode', 'codex']);
@@ -134,6 +137,7 @@ describe('desktop bridge composition', () => {
     const controller = new DesktopBridgeController({
       machineId: 'mac_studio',
       opencode: { baseUrl: 'http://127.0.0.1:1' },
+      codex: { detectVersion: async () => 'codex-cli 0.166.0' },
     });
     cleanups.push(() => controller.dispose());
 
@@ -203,6 +207,7 @@ describe('desktop bridge composition', () => {
     const controller = new DesktopBridgeController({
       machineId: 'mac_studio',
       opencode: { baseUrl: 'http://127.0.0.1:1' },
+      codex: { detectVersion: async () => 'codex-cli 0.166.0' },
     });
     cleanups.push(() => controller.dispose());
     await controller.startBridge();

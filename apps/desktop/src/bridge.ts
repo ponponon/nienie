@@ -1,9 +1,10 @@
-import { CodexAdapter } from '@nienie/adapter-codex';
+import { CodexAdapter, type CodexAdapterOptions } from '@nienie/adapter-codex';
 import { OpenCodeAdapter, type OpenCodeAdapterOptions } from '@nienie/adapter-opencode';
 import { AgentRegistry, BridgeServer, type BridgeServerOptions } from '@nienie/bridge-core';
 
 export type BridgeRegistryOptions = {
   opencode?: OpenCodeAdapterOptions | undefined;
+  codex?: CodexAdapterOptions | undefined;
 };
 
 export type DesktopBridgeOptions = BridgeRegistryOptions &
@@ -12,12 +13,15 @@ export type DesktopBridgeOptions = BridgeRegistryOptions &
 export function createBridgeRegistry(options: BridgeRegistryOptions = {}): AgentRegistry {
   const registry = new AgentRegistry();
   registry.register(new OpenCodeAdapter(options.opencode));
-  registry.register(new CodexAdapter());
+  registry.register(new CodexAdapter(options.codex));
   return registry;
 }
 
 export function createDesktopBridgeServer(options: DesktopBridgeOptions = {}): BridgeServer {
-  const registry = createBridgeRegistry({ opencode: options.opencode });
+  const registry = createBridgeRegistry({
+    opencode: options.opencode,
+    codex: options.codex,
+  });
   return new BridgeServer({
     ...options,
     registry,

@@ -205,6 +205,7 @@ describe('E2E loop: Mobile -> Desktop Bridge -> OpenCode -> Canonical Events -> 
     const desktop = new DesktopBridgeController({
       machineId: 'macbook_e2e',
       opencode: { baseUrl: opencodeBaseUrl, machineId: 'macbook_e2e' },
+      codex: { detectVersion: async () => 'codex-cli 0.166.0' },
     });
     cleanups.push(() => desktop.dispose());
 
