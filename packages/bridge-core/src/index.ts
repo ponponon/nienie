@@ -101,8 +101,10 @@ export class SessionRouter {
 
 export {
   decodePairingQrPayload,
+  decryptRelayPayload,
   DEFAULT_RELAY_URL,
   encodePairingQrPayload,
+  encryptRelayPayload,
   resolveRelayUrl,
   type AgentId,
   type AgentInfo,
@@ -111,8 +113,10 @@ export {
   type BridgeResponse,
   type CanonicalAgentEvent,
   type CreateSessionInput,
+  type EncryptedRelayPayload,
   type PairedDevice,
   type PairingQrPayload,
+  type RelayWireMessage,
 } from '@nienie/protocol';
 export {
   BridgeServer,
@@ -126,3 +130,9 @@ export {
   type PairingChallenge,
   type PairingManagerOptions,
 } from './pairing.js';
+export {
+  BridgeRelayClient,
+  RelayServer,
+  type BridgeRelayClientOptions,
+  type RelayServerOptions,
+} from './relay.js';

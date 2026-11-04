@@ -73,7 +73,7 @@ Relay 只看路由元数据和密文
 Bridge 解密并执行
 ```
 
-MVP 可以先实现受认证 WebSocket 转发，但必须保留消息加密和自定义 Relay 的协议边界，不能把 Relay 设计成不可替换的中心服务。
+Nienie 使用 `AES-256-GCM` 对 `relay.forward` 的 `encrypted` 载荷进行端到端加密，并保留自定义 Relay 的协议边界，不把默认 Relay 设计成不可替换的中心服务。
 
 ## 仓库隐私边界
 

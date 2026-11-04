@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   decodePairingQrPayload,
+  decryptRelayPayload,
   DEFAULT_RELAY_URL,
   encodePairingQrPayload,
+  encryptRelayPayload,
   parseBridgeRequest,
   PROTOCOL_VERSION,
   resolveRelayUrl,
@@ -87,5 +89,21 @@ describe('protocol', () => {
     const uri = encodePairingQrPayload(payload);
     expect(uri.startsWith('nienie://pair?data=')).toBe(true);
     expect(decodePairingQrPayload(uri)).toEqual(payload);
+  });
+
+  it('encrypts and decrypts end-to-end Relay payloads with AES-256-GCM and rejects tampering', () => {
+    const secret = 'ntk_shared_device_secret_key';
+    const plaintext = JSON.stringify({
+      type: 'session.send',
+      requestId: 'req_e2ee_1',
+      sessionId: 'ses_1',
+      message: 'top secret prompt',
+    });
+
+    const box = encryptRelayPayload(plaintext, secret);
+    expect(box.ciphertext).not.toContain('top secret prompt');
+    expect(decryptRelayPayload(box, secret)).toBe(plaintext);
+
+    expect(() => decryptRelayPayload(box, 'wrong_secret')).toThrow();
   });
 });

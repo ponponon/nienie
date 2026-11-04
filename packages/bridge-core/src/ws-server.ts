@@ -80,6 +80,53 @@ export class BridgeServer {
     return this.clients.size;
   }
 
+  getRegistry(): AgentRegistry {
+    return this.registry;
+  }
+
+  async processExternalRequest(rawText: string): Promise<BridgeResponse> {
+    const parsed = parseBridgeRequest(rawText, this.maxPayloadBytes);
+    if (!parsed.ok) {
+      return {
+        type: 'response',
+        requestId: parsed.requestId,
+        ok: false,
+        error: parsed.error,
+      };
+    }
+
+    const virtualClient: ClientConnection = {
+      id: 'relay_virtual_client',
+      socket: null as unknown as Duplex,
+      buffer: Buffer.alloc(0),
+      fragments: [],
+      fragmentedOpcode: undefined,
+      lastSeenAt: Date.now(),
+      authenticatedDeviceId: undefined,
+      closed: false,
+    };
+
+    try {
+      const data = await this.executeRequest(virtualClient, parsed.request, true);
+      return {
+        type: 'response',
+        requestId: parsed.request.requestId,
+        ok: true,
+        data,
+      };
+    } catch (error) {
+      const code =
+        error instanceof BridgeCommandError ? error.code : 'COMMAND_EXECUTION_FAILED';
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        type: 'response',
+        requestId: parsed.request.requestId,
+        ok: false,
+        error: { code, message },
+      };
+    }
+  }
+
   async start(): Promise<BridgeServerAddress> {
     if (this.httpServer) {
       return this.getAddress();
@@ -372,7 +419,11 @@ export class BridgeServer {
     }
   }
 
-  private async executeRequest(client: ClientConnection, request: BridgeRequest): Promise<unknown> {
+  private async executeRequest(
+    client: ClientConnection,
+    request: BridgeRequest,
+    bypassAuth = false,
+  ): Promise<unknown> {
     switch (request.type) {
       case 'hello': {
         if (request.deviceToken && this.pairingManager) {
@@ -425,13 +476,13 @@ export class BridgeServer {
       }
 
       case 'agents.list': {
-        this.requireAuthenticated(client);
+        if (!bypassAuth) this.requireAuthenticated(client);
         const agents = await this.registry.detectAll();
         return { agents };
       }
 
       case 'sessions.list': {
-        this.requireAuthenticated(client);
+        if (!bypassAuth) this.requireAuthenticated(client);
         const sessions = await this.registry.listSessions();
         for (const session of sessions) {
           this.sessionIndex.set(session.id, session);
@@ -440,28 +491,28 @@ export class BridgeServer {
       }
 
       case 'session.create': {
-        this.requireAuthenticated(client);
+        if (!bypassAuth) this.requireAuthenticated(client);
         const session = await this.router.createSession(request.agentId, request.input);
         this.sessionIndex.set(session.id, session);
         return { session };
       }
 
       case 'session.load': {
-        this.requireAuthenticated(client);
+        if (!bypassAuth) this.requireAuthenticated(client);
         const session = await this.router.loadSession(request.agentId, request.sessionId);
         this.sessionIndex.set(session.id, session);
         return { session };
       }
 
       case 'session.send': {
-        this.requireAuthenticated(client);
+        if (!bypassAuth) this.requireAuthenticated(client);
         const session = await this.resolveSession(request.sessionId, request.agentId);
         await this.router.sendMessage(session, request.message);
         return { accepted: true, sessionId: session.id };
       }
 
       case 'session.cancel': {
-        this.requireAuthenticated(client);
+        if (!bypassAuth) this.requireAuthenticated(client);
         const session = await this.resolveSession(request.sessionId);
         await this.router.cancel(session);
         return { cancelled: true, sessionId: session.id };

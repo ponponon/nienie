@@ -97,6 +97,16 @@
 - 实现 `CodexEventNormalizer`：
   - 将 Codex 的 `turn.started`、`reasoning`、`agent_message`、`command_execution`、`file_change`、`mcp_tool_call`、`turn.completed`、`turn.failed` 统一转换为 Nienie `CanonicalAgentEvent`
 
+### 2026-11-04 实现公网 Relay 服务与出站加密路由 (`@nienie/protocol` & `@nienie/bridge-core`)
+
+- 在 `@nienie/protocol` 中实现 `encryptRelayPayload()` / `decryptRelayPayload()`（基于 `AES-256-GCM` 的端到端消息加密与防篡改校验）及 `RelayWireMessage` 路由信封
+- 在 `@nienie/bridge-core` 中实现 `RelayServer` 与 `BridgeRelayClient`：
+  - 支持 Bridge 出站连接与手机出站连接（`relay.register`）
+  - 按 `machineId` 与 `clientId` 进行双向消息路由（Relay 仅读取路由元数据，不解析密文载荷）
+  - 实时推送 `relay.presence` 在线/离线状态变更
+  - 默认使用 `wss://nienie-replay.quniv.cn`，支持用户替换为自定义 Relay 地址
+  - 支持 Bridge 断线自动重连并恢复在线状态
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查
@@ -110,9 +120,9 @@
 - [x] 基础状态和错误事件
 - [x] 手机发送 Prompt
 - [x] WebSocket 断线重连
-- [ ] 公网 Relay 连接和设备路由
+- [x] 公网 Relay 连接和设备路由
 - [x] 自定义 Relay 地址配置
-- [ ] Relay 端到端加密消息转发
+- [x] Relay 端到端加密消息转发
 - [ ] 基础权限请求展示
 
 ## 后续规划
