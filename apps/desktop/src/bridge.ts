@@ -55,3 +55,7 @@ export {
   type CanonicalAgentEvent,
 } from '@nienie/bridge-core';
 export { renderDesktopAppHtml } from './renderer.js';
+export {
+  DesktopPreviewServer,
+  type DesktopPreviewServerOptions,
+} from './preview-server.js';

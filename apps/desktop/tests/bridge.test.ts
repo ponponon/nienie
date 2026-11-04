@@ -6,6 +6,7 @@ import {
   createDesktopPreloadApi,
   createDesktopWindowOptions,
   DesktopBridgeController,
+  DesktopPreviewServer,
   NIENIE_IPC_CHANNELS,
   registerDesktopIpcHandlers,
   renderDesktopAppHtml,
@@ -243,5 +244,39 @@ describe('desktop bridge composition', () => {
       },
       { channel: NIENIE_IPC_CHANNELS.REVOKE_DEVICE, args: ['dev_123'] },
     ]);
+  });
+
+  it('serves an interactive desktop console over localhost via DesktopPreviewServer', async () => {
+    const controller = new DesktopBridgeController({
+      machineId: 'mac_preview',
+      opencode: { baseUrl: 'http://127.0.0.1:1' },
+      codex: { detectVersion: async () => 'codex-cli 0.166.0' },
+    });
+    cleanups.push(() => controller.dispose());
+
+    const preview = new DesktopPreviewServer({ controller, port: 0 });
+    const { url } = await preview.start();
+    cleanups.push(() => preview.stop());
+
+    // 1. GET / returns the rendered HTML with HTTP IPC shim
+    const htmlRes = await fetch(url);
+    expect(htmlRes.status).toBe(200);
+    const htmlText = await htmlRes.text();
+    expect(htmlText).toContain('Nienie Bridge Console');
+    expect(htmlText).toContain('/api/ipc');
+
+    // 2. POST /api/ipc triggers START_BRIDGE and returns updated state
+    const startRes = await fetch(`${url}/api/ipc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        channel: NIENIE_IPC_CHANNELS.START_BRIDGE,
+        args: [],
+      }),
+    });
+    expect(startRes.status).toBe(200);
+    const startedState = (await startRes.json()) as ReturnType<DesktopBridgeController['getState']>;
+    expect(startedState.bridge.status).toBe('running');
+    expect(startedState.pairing?.pairingCode).toMatch(/^\d{6}$/);
   });
 });
