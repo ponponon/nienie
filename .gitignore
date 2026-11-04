@@ -1,0 +1,29 @@
+# Flutter
+.dart_tool/
+.packages
+.pub-cache/
+build/
+*.iml
+.idea/
+
+# Electron / Node.js
+node_modules/
+dist/
+.webpack/
+.vite/
+*.log
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+# Runtime data
+.nienie/
+.tmp/
+coverage/
+test-results/
+playwright-report/
+
+# OS files
+.DS_Store
+Thumbs.db

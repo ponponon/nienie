@@ -1,0 +1,16 @@
+{
+  "name": "nienie",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Mobile-first control console for local coding agents.",
+  "packageManager": "pnpm@10.33.2",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "typecheck": "pnpm --recursive typecheck",
+    "test": "pnpm --recursive test"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
