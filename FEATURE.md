@@ -149,6 +149,7 @@
 - 实现独立后台守护进程与 Linux 无 GUI 模式（`HeadlessBridgeDaemon` in `@nienie/bridge-core`）：支持脱离 Electron UI 独立启动 Bridge、探测 Agent、生成一次性配对码并自动建立公网 Relay 出站连接
 - 实现 iOS 和 Android 离线推送通知路由（`PushNotificationRouter` & `push.register`）：当无活跃手机连接且会话进入 `waiting`（等待审批）或 `error` 状态时，自动向已注册的 APNs/FCM/Webhook 设备派发经 `redactLogText` 脱敏的推送通知
 - 移动端模型加载与切换（`loadModels` & `selectModel` in `apps/mobile`）：拉取 `models.list` 并在发送 Prompt 时附带当前选中的 `modelId`
+- 远程桌面快照兜底（`ScreenCaptureProvider` & `screen.capture`）：支持已认证手机在极端 GUI 弹窗场景下请求受控的桌面窗口/屏幕快照帧（未授权请求严格返回 `UNAUTHORIZED`）
 
 ## MVP 规划
 
@@ -176,7 +177,7 @@
 - [x] 多台电脑管理
 - [x] ACP 适配器
 - [x] PTY/TUI 兜底模式
-- [ ] 完整远程桌面兜底
+- [x] 完整远程桌面兜底
 - [x] iOS 和 Android 推送通知
 - [x] Bridge 独立后台进程
 - [x] Linux 无 GUI 模式

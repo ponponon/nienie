@@ -221,5 +221,21 @@ describe('protocol', () => {
         pushToken: 'apns_device_token_123',
       },
     });
+
+    const screenReq = parseBridgeRequest(
+      JSON.stringify({
+        type: 'screen.capture',
+        requestId: 'req_scr_1',
+        displayId: 'main',
+      }),
+    );
+    expect(screenReq).toEqual({
+      ok: true,
+      request: {
+        type: 'screen.capture',
+        requestId: 'req_scr_1',
+        displayId: 'main',
+      },
+    });
   });
 });

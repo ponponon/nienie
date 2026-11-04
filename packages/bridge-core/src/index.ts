@@ -159,11 +159,13 @@ export {
   type PairingQrPayload,
   type PermissionDecision,
   type RelayWireMessage,
+  type ScreenCaptureFrame,
 } from '@nienie/protocol';
 export {
   BridgeServer,
   type BridgeServerAddress,
   type BridgeServerOptions,
+  type ScreenCaptureProvider,
 } from './ws-server.js';
 export {
   PairingManager,

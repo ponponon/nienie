@@ -9,6 +9,7 @@ import {
   type BridgeRequest,
   type BridgeResponse,
   type CanonicalAgentEvent,
+  type ScreenCaptureFrame,
 } from '@nienie/protocol';
 import { type AgentRegistry, SessionRouter } from './index.js';
 import type { PairingManager } from './pairing.js';
@@ -20,10 +21,15 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_CLIENT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 500;
 
+export type ScreenCaptureProvider = (
+  displayId?: string,
+) => Promise<ScreenCaptureFrame>;
+
 export type BridgeServerOptions = {
   registry: AgentRegistry;
   pairingManager?: PairingManager | undefined;
   pushRouter?: PushNotificationRouter | undefined;
+  screenCaptureProvider?: ScreenCaptureProvider | undefined;
   host?: string | undefined;
   port?: number | undefined;
   machineId?: string | undefined;
@@ -55,6 +61,7 @@ export class BridgeServer {
   private readonly router: SessionRouter;
   private readonly pairingManager: PairingManager | undefined;
   private readonly pushRouter: PushNotificationRouter | undefined;
+  private readonly screenCaptureProvider: ScreenCaptureProvider | undefined;
   private readonly host: string;
   private readonly requestedPort: number;
   private readonly machineId: string;
@@ -76,6 +83,7 @@ export class BridgeServer {
     this.router = new SessionRouter(options.registry);
     this.pairingManager = options.pairingManager;
     this.pushRouter = options.pushRouter;
+    this.screenCaptureProvider = options.screenCaptureProvider;
     this.host = options.host ?? DEFAULT_HOST;
     this.requestedPort = options.port ?? 0;
     this.machineId = options.machineId ?? options.pairingManager?.machineId ?? 'machine_local';
@@ -609,9 +617,21 @@ export class BridgeServer {
         return {
           sessionId: request.sessionId,
           afterSequence: request.afterSequence,
-          latestSequence,
+          latestSequence: latestSequence,
           events,
         };
+      }
+
+      case 'screen.capture': {
+        if (!bypassAuth) this.requireAuthenticated(client);
+        if (!this.screenCaptureProvider) {
+          throw new BridgeCommandError(
+            'SCREEN_CAPTURE_UNAVAILABLE',
+            'Remote desktop fallback capture is not configured on this machine',
+          );
+        }
+        const frame = await this.screenCaptureProvider(request.displayId);
+        return { frame };
       }
     }
   }

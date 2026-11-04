@@ -135,6 +135,16 @@ export type SessionFileDiff = {
   deletions: number;
 };
 
+export type ScreenCaptureFrame = {
+  frameId: string;
+  displayId: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  base64Data: string;
+  capturedAt: string;
+};
+
 export type AgentSession = {
   id: string;
   agentId: AgentId;
@@ -278,6 +288,11 @@ export type BridgeRequest =
       requestId: string;
       sessionId: string;
       afterSequence: number;
+    }
+  | {
+      type: 'screen.capture';
+      requestId: string;
+      displayId?: string | undefined;
     };
 
 export type BridgeResponse =
@@ -634,6 +649,21 @@ export function parseBridgeRequest(
           requestId,
           sessionId: obj.sessionId,
           afterSequence: obj.afterSequence,
+        },
+      };
+    }
+
+    case 'screen.capture': {
+      const displayId =
+        typeof obj.displayId === 'string' && obj.displayId.trim()
+          ? obj.displayId.trim()
+          : undefined;
+      return {
+        ok: true,
+        request: {
+          type: 'screen.capture',
+          requestId,
+          ...(displayId ? { displayId } : {}),
         },
       };
     }

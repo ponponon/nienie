@@ -786,6 +786,80 @@ describe('bridge core', () => {
     expect(dispatched[1]?.body).not.toContain('sk-secret999');
     expect(dispatched[1]?.body).toContain('[REDACTED]');
   });
+
+  it('serves remote desktop fallback screen captures only to authenticated devices', async () => {
+    const pairingManager = new PairingManager({ machineId: 'machine_screen' });
+    const registry = new AgentRegistry();
+    registry.register(adapter('opencode'));
+
+    const server = new BridgeServer({
+      registry,
+      pairingManager,
+      machineId: 'machine_screen',
+      port: 0,
+      screenCaptureProvider: async (displayId) => ({
+        frameId: 'frm_1',
+        displayId: displayId ?? 'main',
+        mimeType: 'image/png',
+        width: 1280,
+        height: 800,
+        base64Data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
+        capturedAt: '2026-11-04T10:00:00Z',
+      }),
+    });
+    const { url } = await server.start();
+    cleanups.push(() => server.stop());
+
+    const client = await connectWsClient(url);
+    cleanups.push(async () => client.close());
+
+    // 1. Unauthorized screen.capture is rejected
+    const unauthCap = await client.request({
+      type: 'screen.capture',
+      requestId: 'req_scr_unauth',
+      displayId: 'main',
+    });
+    expect(unauthCap).toEqual({
+      type: 'response',
+      requestId: 'req_scr_unauth',
+      ok: false,
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Device authentication required',
+      },
+    });
+
+    // 2. Pair and capture screen
+    const challenge = pairingManager.createPairingCode({ wsUrl: url });
+    await client.request({
+      type: 'pair.confirm',
+      requestId: 'req_pair_scr',
+      pairingCode: challenge.pairingCode,
+      deviceName: 'Screen iPhone',
+    });
+
+    const authedCap = await client.request({
+      type: 'screen.capture',
+      requestId: 'req_scr_ok',
+      displayId: 'main',
+    });
+    expect(authedCap).toEqual({
+      type: 'response',
+      requestId: 'req_scr_ok',
+      ok: true,
+      data: {
+        frame: {
+          frameId: 'frm_1',
+          displayId: 'main',
+          mimeType: 'image/png',
+          width: 1280,
+          height: 800,
+          base64Data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
+          capturedAt: '2026-11-04T10:00:00Z',
+        },
+      },
+    });
+  });
 });
 
 async function connectWsClient(url: string) {

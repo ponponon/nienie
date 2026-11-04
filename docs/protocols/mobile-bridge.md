@@ -27,6 +27,7 @@ session.send
 session.cancel
 permission.reply
 events.replay
+screen.capture
 ```
 
 ### 请求与响应信封
