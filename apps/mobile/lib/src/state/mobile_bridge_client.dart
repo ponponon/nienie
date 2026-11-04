@@ -86,12 +86,29 @@ class MobileBridgeClient extends ChangeNotifier {
     String platform = 'ios',
   }) async {
     final payload = PairingQrPayload.decode(qrUri);
-    await pairAndConnect(
-      wsUrl: payload.wsUrl,
-      pairingCode: payload.pairingCode,
-      deviceName: deviceName,
-      platform: platform,
-    );
+    try {
+      await pairAndConnect(
+        wsUrl: payload.wsUrl,
+        pairingCode: payload.pairingCode,
+        deviceName: deviceName,
+        platform: platform,
+      );
+    } catch (_) {
+      final parsedUri = Uri.tryParse(payload.wsUrl);
+      if (parsedUri != null &&
+          parsedUri.host != '127.0.0.1' &&
+          parsedUri.host != 'localhost' &&
+          parsedUri.hasPort) {
+        await pairAndConnect(
+          wsUrl: 'ws://127.0.0.1:${parsedUri.port}',
+          pairingCode: payload.pairingCode,
+          deviceName: deviceName,
+          platform: platform,
+        );
+      } else {
+        rethrow;
+      }
+    }
   }
 
   Future<void> pairAndConnect({
@@ -100,6 +117,13 @@ class MobileBridgeClient extends ChangeNotifier {
     String deviceName = 'Nienie Flutter Mobile',
     String platform = 'ios',
   }) async {
+    if (pairingCode.trim().isEmpty) {
+      connectionState = BridgeConnectionState.error;
+      errorMessage = strings.emptyPairingCodeError;
+      notifyListeners();
+      return;
+    }
+
     connectionState = BridgeConnectionState.connecting;
     errorMessage = null;
     notifyListeners();

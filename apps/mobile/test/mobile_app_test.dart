@@ -399,7 +399,9 @@ void main() {
 
     // 1. Chinese (zh)
     expect(find.text('连接电脑 Bridge'), findsOneWidget);
+    expect(find.text('扫码连接电脑'), findsOneWidget);
     expect(find.text('配对并连接'), findsOneWidget);
+    expect(find.byKey(const Key('btn-open-qr-scanner')), findsOneWidget);
 
     // 2. Switch to English (en)
     client.setLanguage(AppLanguage.en);

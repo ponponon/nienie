@@ -15,6 +15,7 @@ export 'src/transport/bridge_transport.dart';
 export 'src/transport/fake_bridge_transport.dart';
 export 'src/ui/nienie_mobile_app.dart';
 export 'src/ui/pairing_panel.dart';
+export 'src/ui/qr_scanner_sheet.dart';
 export 'src/ui/timeline_card_list.dart';
 
 void main() {

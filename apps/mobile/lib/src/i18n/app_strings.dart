@@ -46,6 +46,27 @@ class NienieStrings {
         AppLanguage.ko => '컴퓨터 Bridge 연결',
       };
 
+  String get scanQrBtn => switch (lang) {
+        AppLanguage.zh => '扫码连接电脑',
+        AppLanguage.en => 'Scan QR Code to Connect',
+        AppLanguage.ja => 'QR コードをスキャンして接続',
+        AppLanguage.ko => 'QR 코드 스캔하여 연결',
+      };
+
+  String get scanQrHint => switch (lang) {
+        AppLanguage.zh => '将电脑端二维码放入框内即可自动连接',
+        AppLanguage.en => 'Align the desktop QR code within the frame',
+        AppLanguage.ja => 'PC の QR コードを枠内に合わせてください',
+        AppLanguage.ko => '컴퓨터의 QR 코드를 프레임 안에 맞춰주세요',
+      };
+
+  String get emptyPairingCodeError => switch (lang) {
+        AppLanguage.zh => '请先输入 6 位配对码，或点击上方「扫码连接电脑」',
+        AppLanguage.en => 'Please enter the 6-digit pairing code or scan the QR code',
+        AppLanguage.ja => '6桁のペアリングコードを入力するか、QRコードをスキャンしてください',
+        AppLanguage.ko => '6자리 페어링 코드를 입력하거나 QR 코드를 스캔하세요',
+      };
+
   String get wsUrlLabel => switch (lang) {
         AppLanguage.zh => 'Bridge WebSocket 地址',
         AppLanguage.en => 'Bridge WebSocket URL',

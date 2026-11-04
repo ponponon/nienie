@@ -16,7 +16,8 @@
     "@nienie/adapter-opencode": "workspace:*",
     "@nienie/adapter-pi": "workspace:*",
     "@nienie/adapter-pty": "workspace:*",
-    "@nienie/bridge-core": "workspace:*"
+    "@nienie/bridge-core": "workspace:*",
+    "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
     "electron": "^45.2.2"

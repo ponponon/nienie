@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../state/mobile_bridge_client.dart';
+import 'qr_scanner_sheet.dart';
 
 class PairingPanel extends StatelessWidget {
   final MobileBridgeClient client;
@@ -14,6 +15,21 @@ class PairingPanel extends StatelessWidget {
     required this.pairingCodeController,
     required this.qrUriController,
   });
+
+  void _openCameraScanner(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => QrScannerSheet(
+        client: client,
+        onDetected: (rawUri) {
+          qrUriController.text = rawUri;
+          client.pairWithQrUri(rawUri);
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -106,9 +122,9 @@ class PairingPanel extends StatelessWidget {
             ),
           ),
 
-        // 2. Primary Action: Compact One-Time Code + WS URL Pairing Card
+        // 2. Primary Action Card: Camera QR Scan + Manual 6-Digit Pairing
         Container(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: const Color(0xFFFFFFFF),
             borderRadius: BorderRadius.circular(12),
@@ -118,107 +134,78 @@ class PairingPanel extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.phonelink_ring, size: 16, color: Color(0xFF07C160)),
+                  const Icon(Icons.phonelink_ring, size: 17, color: Color(0xFF07C160)),
                   const SizedBox(width: 6),
                   Text(
                     s.connectTitle,
                     style: const TextStyle(
-                      fontSize: 14,
+                      fontSize: 15,
                       fontWeight: FontWeight.w600,
                       color: Color(0xFF181818),
                     ),
                   ),
                 ],
               ),
+              const SizedBox(height: 12),
+              // Hero Button: Camera QR Code Scanner
+              SizedBox(
+                height: 44,
+                child: FilledButton.icon(
+                  key: const Key('btn-open-qr-scanner'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF07C160),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  onPressed: () => _openCameraScanner(context),
+                  icon: const Icon(Icons.qr_code_scanner, size: 20),
+                  label: Text(
+                    s.scanQrBtn,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Manual WS URL Row (full width, never truncated)
+              TextField(
+                key: const Key('input-ws-url'),
+                controller: wsUrlController,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF181818)),
+                decoration: InputDecoration(
+                  labelText: s.wsUrlLabel,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
               const SizedBox(height: 10),
+              // 6-Digit Pairing Code + Pair Button Row
               Row(
                 children: [
                   Expanded(
-                    flex: 3,
-                    child: TextField(
-                      key: const Key('input-ws-url'),
-                      controller: wsUrlController,
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF181818)),
-                      decoration: InputDecoration(
-                        labelText: s.wsUrlLabel,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 10,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    flex: 2,
                     child: TextField(
                       key: const Key('input-pairing-code'),
                       controller: pairingCodeController,
                       keyboardType: TextInputType.number,
                       style: const TextStyle(
-                        fontSize: 14,
+                        fontSize: 15,
                         fontWeight: FontWeight.w700,
+                        letterSpacing: 2,
                         color: Color(0xFF07C160),
                       ),
                       decoration: InputDecoration(
                         labelText: s.pairingCodeLabel,
                         isDense: true,
                         contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
+                          horizontal: 12,
                           vertical: 10,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                height: 38,
-                child: FilledButton.icon(
-                  key: const Key('btn-connect-pair'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF07C160),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  onPressed: () {
-                    client.pairAndConnect(
-                      wsUrl: wsUrlController.text,
-                      pairingCode: pairingCodeController.text,
-                    );
-                  },
-                  icon: const Icon(Icons.link, size: 16),
-                  label: Text(
-                    s.pairAndConnectBtn,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              // Secondary Action: Single-row compact QR URI paste
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      key: const Key('input-qr-uri'),
-                      controller: qrUriController,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF181818)),
-                      decoration: InputDecoration(
-                        labelText: s.qrUriLabel,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
                         ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(8),
@@ -228,20 +215,66 @@ class PairingPanel extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   SizedBox(
-                    height: 34,
+                    height: 40,
                     child: OutlinedButton.icon(
-                      key: const Key('btn-pair-qr-uri'),
+                      key: const Key('btn-connect-pair'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF07C160),
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        side: const BorderSide(color: Color(0xFF07C160)),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),
                       onPressed: () {
+                        client.pairAndConnect(
+                          wsUrl: wsUrlController.text,
+                          pairingCode: pairingCodeController.text,
+                        );
+                      },
+                      icon: const Icon(Icons.link, size: 16),
+                      label: Text(
+                        s.pairAndConnectBtn,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              // Secondary Action: Paste QR URI
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const Key('input-qr-uri'),
+                      controller: qrUriController,
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF181818)),
+                      decoration: InputDecoration(
+                        hintText: s.qrUriLabel,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 9,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    height: 36,
+                    child: TextButton.icon(
+                      key: const Key('btn-pair-qr-uri'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF007AFF),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      onPressed: () {
                         client.pairWithQrUri(qrUriController.text);
                       },
-                      icon: const Icon(Icons.qr_code, size: 14),
+                      icon: const Icon(Icons.content_paste_go, size: 15),
                       label: Text(s.pairWithQrBtn, style: const TextStyle(fontSize: 12)),
                     ),
                   ),

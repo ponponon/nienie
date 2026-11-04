@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { dirname } from 'node:path';
+import qrcode from 'qrcode-generator';
 import type { CodexAdapterOptions } from '@nienie/adapter-codex';
 import type { OpenCodeAdapterOptions } from '@nienie/adapter-opencode';
 import {
@@ -187,7 +188,8 @@ export class DesktopBridgeController {
       const address = await server.start();
       this.bridgeServer = server;
       this.bridgeStatus = 'running';
-      this.wsUrl = address.url;
+      const lanIp = this.host === '0.0.0.0' ? detectLanIpv4() : undefined;
+      this.wsUrl = lanIp ? `ws://${lanIp}:${address.port}` : address.url;
       this.boundPort = address.port;
 
       this.appendLog('info', `Bridge started on ${address.url}`);
@@ -442,46 +444,38 @@ export function createDesktopWindowOptions(preloadPath?: string) {
 }
 
 export function renderPairingQrSvg(data: string): string {
-  const size = 21;
-  const digest = createHash('sha256').update(data).digest();
+  const qr = qrcode(0, 'L');
+  qr.addData(data);
+  qr.make();
+  const size = qr.getModuleCount();
+  const margin = 2;
+  const total = size + margin * 2;
   const cells: string[] = [];
 
-  const isFinderPattern = (r: number, c: number): boolean => {
-    const inTopLeft = r < 7 && c < 7;
-    const inTopRight = r < 7 && c >= size - 7;
-    const inBottomLeft = r >= size - 7 && c < 7;
-    return inTopLeft || inTopRight || inBottomLeft;
-  };
-
-  const finderCellOn = (r: number, c: number): boolean => {
-    const lr = r >= size - 7 ? r - (size - 7) : r;
-    const lc = c >= size - 7 ? c - (size - 7) : c;
-    if (lr === 0 || lr === 6 || lc === 0 || lc === 6) return true;
-    if (lr >= 2 && lr <= 4 && lc >= 2 && lc <= 4) return true;
-    return false;
-  };
-
-  let bitIndex = 0;
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
-      let active = false;
-      if (isFinderPattern(r, c)) {
-        active = finderCellOn(r, c);
-      } else {
-        const byte = digest[Math.floor(bitIndex / 8) % digest.length]!;
-        active = ((byte >> (bitIndex % 8)) & 1) === 1;
-        bitIndex++;
-      }
-      if (active) {
-        cells.push(`<rect x="${c + 2}" y="${r + 2}" width="1" height="1" rx="0.18" />`);
+      if (qr.isDark(r, c)) {
+        cells.push(`<rect x="${c + margin}" y="${r + margin}" width="1" height="1" />`);
       }
     }
   }
 
   return [
-    `<svg class="qr-svg" width="180" height="180" viewBox="0 0 ${size + 4} ${size + 4}" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Nienie Pairing QR Code">`,
-    `<rect width="${size + 4}" height="${size + 4}" rx="2" fill="#FFFFFF"/>`,
+    `<svg class="qr-svg" width="140" height="140" viewBox="0 0 ${total} ${total}" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Nienie Pairing QR Code">`,
+    `<rect width="${total}" height="${total}" rx="2" fill="#FFFFFF"/>`,
     `<g fill="#111111">${cells.join('')}</g>`,
     `</svg>`,
   ].join('');
+}
+
+function detectLanIpv4(): string | undefined {
+  const nets = networkInterfaces();
+  for (const entries of Object.values(nets)) {
+    for (const net of entries ?? []) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return undefined;
 }
