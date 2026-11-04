@@ -39,8 +39,8 @@ export function createAgentInfo(
 
 export type CreateCanonicalEventInput = {
   eventId: string;
-  machineId?: string;
-  agentId?: AgentId;
+  machineId?: string | undefined;
+  agentId?: AgentId | undefined;
   sessionId: string;
   sequence: number;
   timestamp: string;
