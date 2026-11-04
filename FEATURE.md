@@ -141,6 +141,12 @@
   - 对接 `pi --mode json --session <id> -p` 结构化 JSON 流
   - 将 `agent_start`、`message_update`、`tool_execution_start`、`tool_execution_end`、`agent_end` 统一映射为 Nienie `CanonicalAgentEvent`
 
+### 2026-11-04 实现第三阶段扩展适配器（ACP 通用适配器、OpenClaw 与 PTY/TUI 兜底适配器）
+
+- 实现 `@nienie/adapter-acp`（`AcpAdapter` & `AcpEventNormalizer`）：对接 ACP JSON-RPC 2.0 `initialize`、`session/new`、`session/load`、`session/prompt`、`session/cancel` 与 `session/update` 通知归一化
+- 实现 `@nienie/adapter-openclaw`（`OpenClawAdapter`）：对接 OpenClaw Gateway HTTP 会话与事件接口
+- 实现 `@nienie/adapter-pty`（`PtyFallbackAdapter` & `stripAnsiSequences`）：清洗终端 ANSI 转义序列并转为 `text_delta` 事件，诚实声明受限 capability
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查
@@ -165,8 +171,8 @@
 - [x] 模型选择和 Agent 能力展示
 - [x] 会话恢复
 - [x] 多台电脑管理
-- [ ] ACP 适配器
-- [ ] PTY/TUI 兜底模式
+- [x] ACP 适配器
+- [x] PTY/TUI 兜底模式
 - [ ] 完整远程桌面兜底
 - [ ] iOS 和 Android 推送通知
 - [ ] Bridge 独立后台进程
@@ -177,7 +183,7 @@
 
 - [x] Claude Code 结构化流适配
 - [x] Pi RPC 适配
-- [ ] 通用 ACP 适配器
-- [ ] OpenClaw Gateway 适配
-- [ ] 其他 JSONL / HTTP Agent 适配
-- [ ] PTY/TUI 通用兜底适配
+- [x] 通用 ACP 适配器
+- [x] OpenClaw Gateway 适配
+- [x] 其他 JSONL / HTTP Agent 适配
+- [x] PTY/TUI 通用兜底适配

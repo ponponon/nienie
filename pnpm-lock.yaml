@@ -27,6 +27,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/bridge-core
 
+  packages/agent-adapters/acp:
+    dependencies:
+      '@nienie/agent-events':
+        specifier: workspace:*
+        version: link:../../agent-events
+      '@nienie/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+
   packages/agent-adapters/claude-code:
     dependencies:
       '@nienie/agent-events':
@@ -45,6 +54,15 @@ importers:
         specifier: workspace:*
         version: link:../../protocol
 
+  packages/agent-adapters/openclaw:
+    dependencies:
+      '@nienie/agent-events':
+        specifier: workspace:*
+        version: link:../../agent-events
+      '@nienie/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+
   packages/agent-adapters/opencode:
     dependencies:
       '@nienie/agent-events':
@@ -55,6 +73,15 @@ importers:
         version: link:../../protocol
 
   packages/agent-adapters/pi:
+    dependencies:
+      '@nienie/agent-events':
+        specifier: workspace:*
+        version: link:../../agent-events
+      '@nienie/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+
+  packages/agent-adapters/pty:
     dependencies:
       '@nienie/agent-events':
         specifier: workspace:*
