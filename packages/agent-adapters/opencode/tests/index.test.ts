@@ -327,6 +327,7 @@ describe('OpenCodeAdapter', () => {
 
   it('connects to an OpenCode server for detection, session lifecycle, messaging, cancellation, and SSE streaming', async () => {
     const receivedPrompts: Array<{ sessionId: string; body: unknown; auth?: string | undefined }> = [];
+    const receivedPermissions: Array<{ sessionId: string; permissionId: string; body: unknown }> = [];
     const abortedSessions: string[] = [];
     const sseClients = new Set<ServerResponse>();
 
@@ -430,6 +431,19 @@ describe('OpenCodeAdapter', () => {
       const abortMatch = url.pathname.match(/^\/session\/([^/]+)\/abort$/);
       if (req.method === 'POST' && abortMatch) {
         abortedSessions.push(abortMatch[1]!);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(true));
+        return;
+      }
+
+      const permMatch = url.pathname.match(/^\/session\/([^/]+)\/permissions\/([^/]+)$/);
+      if (req.method === 'POST' && permMatch) {
+        const body = await readJsonBody(req);
+        receivedPermissions.push({
+          sessionId: permMatch[1]!,
+          permissionId: permMatch[2]!,
+          body,
+        });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(true));
         return;
@@ -553,7 +567,16 @@ describe('OpenCodeAdapter', () => {
       { seq: 3, type: 'status', payload: { status: 'idle', detail: 'Session is idle' } },
     ]);
 
-    // 6. cancel()
+    // 6. cancel() & replyPermission()
+    await adapter.replyPermission('ses_alpha', 'perm_99', 'allow_always');
+    expect(receivedPermissions).toEqual([
+      {
+        sessionId: 'ses_alpha',
+        permissionId: 'perm_99',
+        body: { response: 'always', remember: true },
+      },
+    ]);
+
     await adapter.cancel('ses_alpha');
     expect(abortedSessions).toEqual(['ses_alpha']);
   });

@@ -19,8 +19,10 @@ agents.list
 sessions.list
 session.create
 session.load
+session.state
 session.send
 session.cancel
+permission.reply
 events.replay
 ```
 

@@ -4,6 +4,7 @@ import {
   BridgeServer,
   DEFAULT_RELAY_URL,
   PairingManager,
+  redactLogText,
   resolveRelayUrl,
   type AgentInfo,
   type AgentRegistry,
@@ -268,7 +269,7 @@ export class DesktopBridgeController {
       id: `log_${++this.logSequence}`,
       timestamp: new Date().toISOString(),
       level,
-      message,
+      message: redactLogText(message),
     });
     if (this.logs.length > this.maxLogs) {
       this.logs.splice(0, this.logs.length - this.maxLogs);

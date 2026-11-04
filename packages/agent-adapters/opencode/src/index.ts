@@ -4,6 +4,7 @@ import type {
   AgentStatus,
   CanonicalAgentEvent,
   CreateSessionInput,
+  PermissionDecision,
 } from '@nienie/protocol';
 import { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
 import { parseSseStream } from './sse.js';
@@ -188,6 +189,37 @@ export class OpenCodeAdapter implements AgentAdapter {
       const detail = await response.text().catch(() => '');
       throw new Error(
         `Failed to cancel OpenCode session ${sessionId} (${response.status}): ${detail || response.statusText}`,
+      );
+    }
+  }
+
+  async replyPermission(
+    sessionId: string,
+    permissionId: string,
+    decision: PermissionDecision,
+  ): Promise<void> {
+    const encodedSessionId = encodeURIComponent(sessionId);
+    const encodedPermId = encodeURIComponent(permissionId);
+    const body =
+      decision === 'allow_always'
+        ? { response: 'always', remember: true }
+        : decision === 'allow_once'
+          ? { response: 'once', remember: false }
+          : { response: 'reject', remember: false };
+
+    const response = await this.fetchImpl(
+      this.buildUrl(`/session/${encodedSessionId}/permissions/${encodedPermId}`),
+      {
+        method: 'POST',
+        headers: this.buildHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify(body),
+      },
+    );
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(
+        `Failed to reply permission ${permissionId} in OpenCode session ${sessionId} (${response.status}): ${detail || response.statusText}`,
       );
     }
   }

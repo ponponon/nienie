@@ -17,6 +17,7 @@ const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_CLIENT_TIMEOUT_MS = 45_000;
+const DEFAULT_MAX_EVENTS_PER_SESSION = 500;
 
 export type BridgeServerOptions = {
   registry: AgentRegistry;
@@ -27,6 +28,7 @@ export type BridgeServerOptions = {
   maxPayloadBytes?: number | undefined;
   heartbeatIntervalMs?: number | undefined;
   clientTimeoutMs?: number | undefined;
+  maxEventsPerSession?: number | undefined;
 };
 
 export type BridgeServerAddress = {
@@ -56,6 +58,7 @@ export class BridgeServer {
   private readonly maxPayloadBytes: number;
   private readonly heartbeatIntervalMs: number;
   private readonly clientTimeoutMs: number;
+  private readonly maxEventsPerSession: number;
 
   private httpServer: Server | undefined;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -63,6 +66,7 @@ export class BridgeServer {
   private unsubscribeRevoke: (() => void) | undefined;
   private readonly clients = new Map<string, ClientConnection>();
   private readonly sessionIndex = new Map<string, AgentSession>();
+  private readonly eventHistoryBySession = new Map<string, CanonicalAgentEvent[]>();
 
   constructor(options: BridgeServerOptions) {
     this.registry = options.registry;
@@ -74,6 +78,7 @@ export class BridgeServer {
     this.maxPayloadBytes = options.maxPayloadBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.clientTimeoutMs = options.clientTimeoutMs ?? DEFAULT_CLIENT_TIMEOUT_MS;
+    this.maxEventsPerSession = options.maxEventsPerSession ?? DEFAULT_MAX_EVENTS_PER_SESSION;
   }
 
   getConnectedClientCount(): number {
@@ -481,6 +486,24 @@ export class BridgeServer {
         return { agents };
       }
 
+      case 'machine.get': {
+        if (!bypassAuth) this.requireAuthenticated(client);
+        const [agents, sessions] = await Promise.all([
+          this.registry.detectAll(),
+          this.registry.listSessions(),
+        ]);
+        for (const session of sessions) {
+          this.sessionIndex.set(session.id, session);
+        }
+        return {
+          machineId: this.machineId,
+          protocolVersion: PROTOCOL_VERSION,
+          agents,
+          sessions,
+          connectedClients: this.clients.size,
+        };
+      }
+
       case 'sessions.list': {
         if (!bypassAuth) this.requireAuthenticated(client);
         const sessions = await this.registry.listSessions();
@@ -504,6 +527,18 @@ export class BridgeServer {
         return { session };
       }
 
+      case 'session.state': {
+        if (!bypassAuth) this.requireAuthenticated(client);
+        const session = await this.resolveSession(request.sessionId, request.agentId);
+        const buffered = this.eventHistoryBySession.get(session.id) ?? [];
+        const latestSequence = buffered.length > 0 ? buffered[buffered.length - 1]!.sequence : 0;
+        return {
+          session,
+          latestSequence,
+          bufferedEventCount: buffered.length,
+        };
+      }
+
       case 'session.send': {
         if (!bypassAuth) this.requireAuthenticated(client);
         const session = await this.resolveSession(request.sessionId, request.agentId);
@@ -516,6 +551,31 @@ export class BridgeServer {
         const session = await this.resolveSession(request.sessionId);
         await this.router.cancel(session);
         return { cancelled: true, sessionId: session.id };
+      }
+
+      case 'permission.reply': {
+        if (!bypassAuth) this.requireAuthenticated(client);
+        const session = await this.resolveSession(request.sessionId, request.agentId);
+        await this.router.replyPermission(session, request.permissionId, request.decision);
+        return {
+          replied: true,
+          sessionId: session.id,
+          permissionId: request.permissionId,
+          decision: request.decision,
+        };
+      }
+
+      case 'events.replay': {
+        if (!bypassAuth) this.requireAuthenticated(client);
+        const buffered = this.eventHistoryBySession.get(request.sessionId) ?? [];
+        const events = buffered.filter((evt) => evt.sequence > request.afterSequence);
+        const latestSequence = buffered.length > 0 ? buffered[buffered.length - 1]!.sequence : 0;
+        return {
+          sessionId: request.sessionId,
+          afterSequence: request.afterSequence,
+          latestSequence,
+          events,
+        };
       }
     }
   }
@@ -564,6 +624,16 @@ export class BridgeServer {
   }
 
   private broadcastEvent(event: CanonicalAgentEvent): void {
+    let history = this.eventHistoryBySession.get(event.sessionId);
+    if (!history) {
+      history = [];
+      this.eventHistoryBySession.set(event.sessionId, history);
+    }
+    history.push(event);
+    if (history.length > this.maxEventsPerSession) {
+      history.splice(0, history.length - this.maxEventsPerSession);
+    }
+
     const response: BridgeResponse = {
       type: 'session.event',
       event,

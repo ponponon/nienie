@@ -5,6 +5,7 @@ import type {
   AgentSession,
   CanonicalAgentEvent,
   CreateSessionInput,
+  PermissionDecision,
 } from '@nienie/protocol';
 
 export class AgentRegistry {
@@ -94,11 +95,27 @@ export class SessionRouter {
     await adapter.cancel(session.id);
   }
 
+  async replyPermission(
+    session: AgentSession,
+    permissionId: string,
+    decision: PermissionDecision,
+  ): Promise<void> {
+    const adapter = this.registry.get(session.agentId);
+    if (!adapter) {
+      throw new Error(`No adapter registered for agent: ${session.agentId}`);
+    }
+    if (!adapter.replyPermission) {
+      throw new Error(`Agent adapter ${session.agentId} does not support permission replies`);
+    }
+    await adapter.replyPermission(session.id, permissionId, decision);
+  }
+
   onEvent(listener: (event: CanonicalAgentEvent) => void): () => void {
     return this.registry.onEvent(listener);
   }
 }
 
+export { redactLogText } from '@nienie/agent-events';
 export {
   decodePairingQrPayload,
   decryptRelayPayload,
@@ -116,6 +133,7 @@ export {
   type EncryptedRelayPayload,
   type PairedDevice,
   type PairingQrPayload,
+  type PermissionDecision,
   type RelayWireMessage,
 } from '@nienie/protocol';
 export {

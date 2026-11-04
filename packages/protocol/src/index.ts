@@ -205,6 +205,8 @@ export type CanonicalAgentEvent = {
   payload: Record<string, unknown>;
 };
 
+export type PermissionDecision = 'allow_once' | 'allow_always' | 'reject';
+
 export type BridgeRequest =
   | { type: 'hello'; requestId: string; protocolVersion: typeof PROTOCOL_VERSION; deviceToken?: string | undefined }
   | { type: 'ping'; requestId: string }
@@ -215,12 +217,28 @@ export type BridgeRequest =
       deviceName: string;
       platform?: DevicePlatform | undefined;
     }
+  | { type: 'machine.get'; requestId: string }
   | { type: 'agents.list'; requestId: string }
   | { type: 'sessions.list'; requestId: string }
   | { type: 'session.create'; requestId: string; agentId: AgentId; input?: CreateSessionInput | undefined }
   | { type: 'session.load'; requestId: string; agentId: AgentId; sessionId: string }
+  | { type: 'session.state'; requestId: string; sessionId: string; agentId?: AgentId | undefined }
   | { type: 'session.send'; requestId: string; sessionId: string; message: string; agentId?: AgentId | undefined }
-  | { type: 'session.cancel'; requestId: string; sessionId: string };
+  | { type: 'session.cancel'; requestId: string; sessionId: string }
+  | {
+      type: 'permission.reply';
+      requestId: string;
+      sessionId: string;
+      permissionId: string;
+      decision: PermissionDecision;
+      agentId?: AgentId | undefined;
+    }
+  | {
+      type: 'events.replay';
+      requestId: string;
+      sessionId: string;
+      afterSequence: number;
+    };
 
 export type BridgeResponse =
   | { type: 'response'; requestId: string; ok: true; data: unknown }
@@ -352,6 +370,9 @@ export function parseBridgeRequest(
     case 'agents.list':
       return { ok: true, request: { type: 'agents.list', requestId } };
 
+    case 'machine.get':
+      return { ok: true, request: { type: 'machine.get', requestId } };
+
     case 'sessions.list':
       return { ok: true, request: { type: 'sessions.list', requestId } };
 
@@ -439,6 +460,80 @@ export function parseBridgeRequest(
       };
     }
 
+    case 'session.state': {
+      if (typeof obj.sessionId !== 'string' || !obj.sessionId.trim()) {
+        return {
+          ok: false,
+          requestId,
+          error: { code: 'BAD_REQUEST', message: 'Invalid sessionId' },
+        };
+      }
+      return {
+        ok: true,
+        request: {
+          type: 'session.state',
+          requestId,
+          sessionId: obj.sessionId,
+          ...(isAgentId(obj.agentId) ? { agentId: obj.agentId } : {}),
+        },
+      };
+    }
+
+    case 'permission.reply': {
+      if (
+        typeof obj.sessionId !== 'string' ||
+        !obj.sessionId.trim() ||
+        typeof obj.permissionId !== 'string' ||
+        !obj.permissionId.trim() ||
+        !isPermissionDecision(obj.decision)
+      ) {
+        return {
+          ok: false,
+          requestId,
+          error: {
+            code: 'BAD_REQUEST',
+            message: 'Invalid sessionId, permissionId, or decision',
+          },
+        };
+      }
+      return {
+        ok: true,
+        request: {
+          type: 'permission.reply',
+          requestId,
+          sessionId: obj.sessionId,
+          permissionId: obj.permissionId,
+          decision: obj.decision,
+          ...(isAgentId(obj.agentId) ? { agentId: obj.agentId } : {}),
+        },
+      };
+    }
+
+    case 'events.replay': {
+      if (
+        typeof obj.sessionId !== 'string' ||
+        !obj.sessionId.trim() ||
+        typeof obj.afterSequence !== 'number' ||
+        !Number.isInteger(obj.afterSequence) ||
+        obj.afterSequence < 0
+      ) {
+        return {
+          ok: false,
+          requestId,
+          error: { code: 'BAD_REQUEST', message: 'Invalid sessionId or afterSequence' },
+        };
+      }
+      return {
+        ok: true,
+        request: {
+          type: 'events.replay',
+          requestId,
+          sessionId: obj.sessionId,
+          afterSequence: obj.afterSequence,
+        },
+      };
+    }
+
     default:
       return {
         ok: false,
@@ -457,4 +552,8 @@ function isAgentId(value: unknown): value is AgentId {
 
 function isDevicePlatform(value: unknown): value is DevicePlatform {
   return value === 'ios' || value === 'android' || value === 'unknown';
+}
+
+function isPermissionDecision(value: unknown): value is PermissionDecision {
+  return value === 'allow_once' || value === 'allow_always' || value === 'reject';
 }

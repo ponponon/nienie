@@ -207,24 +207,46 @@ class SavedDeviceCredential {
 
 abstract class DeviceCredentialStore {
   Future<void> save(SavedDeviceCredential credential);
-  Future<SavedDeviceCredential?> load();
+  Future<SavedDeviceCredential?> load([String? machineId]);
+  Future<List<SavedDeviceCredential>> listMachines();
+  Future<void> removeMachine(String machineId);
   Future<void> clear();
 }
 
 class InMemoryCredentialStore implements DeviceCredentialStore {
-  SavedDeviceCredential? _saved;
+  final Map<String, SavedDeviceCredential> _machines = {};
+  String? _activeMachineId;
 
   @override
   Future<void> save(SavedDeviceCredential credential) async {
-    _saved = credential;
+    _machines[credential.machineId] = credential;
+    _activeMachineId = credential.machineId;
   }
 
   @override
-  Future<SavedDeviceCredential?> load() async => _saved;
+  Future<SavedDeviceCredential?> load([String? machineId]) async {
+    final targetId = machineId ?? _activeMachineId;
+    if (targetId == null) return null;
+    return _machines[targetId];
+  }
+
+  @override
+  Future<List<SavedDeviceCredential>> listMachines() async {
+    return List.unmodifiable(_machines.values);
+  }
+
+  @override
+  Future<void> removeMachine(String machineId) async {
+    _machines.remove(machineId);
+    if (_activeMachineId == machineId) {
+      _activeMachineId = _machines.keys.firstOrNull;
+    }
+  }
 
   @override
   Future<void> clear() async {
-    _saved = null;
+    _machines.clear();
+    _activeMachineId = null;
   }
 }
 
@@ -504,8 +526,8 @@ class MobileBridgeClient extends ChangeNotifier {
     }
   }
 
-  Future<void> reconnectWithSavedCredential() async {
-    final saved = await credentialStore.load();
+  Future<void> reconnectWithSavedCredential([String? machineId]) async {
+    final saved = await credentialStore.load(machineId);
     if (saved == null) {
       throw StateError('No saved device credential found');
     }
@@ -533,7 +555,44 @@ class MobileBridgeClient extends ChangeNotifier {
     connectionState = BridgeConnectionState.connected;
     await refreshAgents();
     await refreshSessions();
+    if (activeSession != null) {
+      await replayMissedEvents(activeSession!.id);
+    }
     notifyListeners();
+  }
+
+  Future<void> replayMissedEvents(String sessionId) async {
+    final afterSeq = _lastSequenceBySession[sessionId] ?? 0;
+    final res = await transport.sendRequest({
+      'type': 'events.replay',
+      'requestId': _nextRequestId(),
+      'sessionId': sessionId,
+      'afterSequence': afterSeq,
+    });
+    if (res['ok'] == true) {
+      final data = res['data'] as Map<String, dynamic>;
+      final events = data['events'] as List<dynamic>? ?? const [];
+      for (final rawEvt in events) {
+        _handleServerMessage({
+          'type': 'session.event',
+          'event': rawEvt,
+        });
+      }
+    }
+  }
+
+  Future<void> replyPermission({
+    required String sessionId,
+    required String permissionId,
+    required String decision,
+  }) async {
+    await transport.sendRequest({
+      'type': 'permission.reply',
+      'requestId': _nextRequestId(),
+      'sessionId': sessionId,
+      'permissionId': permissionId,
+      'decision': decision,
+    });
   }
 
   Future<void> refreshAgents() async {

@@ -106,4 +106,68 @@ describe('protocol', () => {
 
     expect(() => decryptRelayPayload(box, 'wrong_secret')).toThrow();
   });
+
+  it('validates reliability and security commands: events.replay, machine.get, session.state, and permission.reply', () => {
+    const replayReq = parseBridgeRequest(
+      JSON.stringify({
+        type: 'events.replay',
+        requestId: 'req_replay_1',
+        sessionId: 'ses_1',
+        afterSequence: 3,
+      }),
+    );
+    expect(replayReq).toEqual({
+      ok: true,
+      request: {
+        type: 'events.replay',
+        requestId: 'req_replay_1',
+        sessionId: 'ses_1',
+        afterSequence: 3,
+      },
+    });
+
+    const machineReq = parseBridgeRequest(
+      JSON.stringify({ type: 'machine.get', requestId: 'req_machine_1' }),
+    );
+    expect(machineReq).toEqual({
+      ok: true,
+      request: { type: 'machine.get', requestId: 'req_machine_1' },
+    });
+
+    const stateReq = parseBridgeRequest(
+      JSON.stringify({
+        type: 'session.state',
+        requestId: 'req_state_1',
+        sessionId: 'ses_1',
+      }),
+    );
+    expect(stateReq).toEqual({
+      ok: true,
+      request: {
+        type: 'session.state',
+        requestId: 'req_state_1',
+        sessionId: 'ses_1',
+      },
+    });
+
+    const permReq = parseBridgeRequest(
+      JSON.stringify({
+        type: 'permission.reply',
+        requestId: 'req_perm_1',
+        sessionId: 'ses_1',
+        permissionId: 'perm_99',
+        decision: 'allow_once',
+      }),
+    );
+    expect(permReq).toEqual({
+      ok: true,
+      request: {
+        type: 'permission.reply',
+        requestId: 'req_perm_1',
+        sessionId: 'ses_1',
+        permissionId: 'perm_99',
+        decision: 'allow_once',
+      },
+    });
+  });
 });

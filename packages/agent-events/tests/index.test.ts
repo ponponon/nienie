@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createAgentInfo,
   createCanonicalEvent,
+  redactLogText,
   redactSensitiveData,
   truncateOutput,
 } from '../src/index.js';
@@ -92,5 +93,16 @@ describe('agent event contracts', () => {
       content: 'abcdefghij1234567890\n...[truncated 5 chars]',
       truncated: true,
     });
+  });
+
+  it('redacts tokens, API keys, and passwords from free-form log strings', () => {
+    const rawLog =
+      'Connected with token ntk_abcdef1234567890, Authorization: Bearer secret_jwt_token, key=sk-proj-123456789, password=my_super_secret';
+    const sanitized = redactLogText(rawLog);
+    expect(sanitized).not.toContain('ntk_abcdef1234567890');
+    expect(sanitized).not.toContain('secret_jwt_token');
+    expect(sanitized).not.toContain('sk-proj-123456789');
+    expect(sanitized).not.toContain('my_super_secret');
+    expect(sanitized).toContain('[REDACTED]');
   });
 });

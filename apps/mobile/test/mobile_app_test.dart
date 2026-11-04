@@ -21,6 +21,33 @@ void main() {
     expect(qrPayload.relayUrl, DEFAULT_RELAY_URL);
   });
 
+  test('manages multiple paired machines in DeviceCredentialStore', () async {
+    final store = InMemoryCredentialStore();
+    await store.save(
+      const SavedDeviceCredential(
+        machineId: 'macbook_pro',
+        wsUrl: 'ws://192.168.1.10:4100',
+        deviceId: 'dev_1',
+        deviceToken: 'ntk_1',
+      ),
+    );
+    await store.save(
+      const SavedDeviceCredential(
+        machineId: 'linux_workstation',
+        wsUrl: 'ws://192.168.1.20:4100',
+        deviceId: 'dev_2',
+        deviceToken: 'ntk_2',
+      ),
+    );
+
+    final machines = await store.listMachines();
+    expect(machines.map((m) => m.machineId).toList(), ['macbook_pro', 'linux_workstation']);
+    expect((await store.load('macbook_pro'))?.wsUrl, 'ws://192.168.1.10:4100');
+
+    await store.removeMachine('linux_workstation');
+    expect((await store.listMachines()).single.machineId, 'macbook_pro');
+  });
+
   testWidgets(
     'connects to computer, lists agents and sessions, enters session, sends prompt, and renders streaming text, tool calls, and errors',
     (WidgetTester tester) async {

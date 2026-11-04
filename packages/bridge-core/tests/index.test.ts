@@ -498,6 +498,151 @@ describe('bridge core', () => {
       },
     });
   });
+
+  it('replays missed events by sequence, provides machine/session snapshots, routes permission approvals, and blocks unauthorized approvals', async () => {
+    const pairingManager = new PairingManager({ machineId: 'machine_reliable' });
+    const registry = new AgentRegistry();
+    const opencode = adapter('opencode');
+    const approvalDecisions: Array<{ sessionId: string; permissionId: string; decision: string }> = [];
+
+    opencode.replyPermission = async (sessionId, permissionId, decision) => {
+      approvalDecisions.push({ sessionId, permissionId, decision });
+    };
+    registry.register(opencode);
+
+    const server = new BridgeServer({
+      registry,
+      pairingManager,
+      machineId: 'machine_reliable',
+      port: 0,
+    });
+    const { url } = await server.start();
+    cleanups.push(() => server.stop());
+
+    const unauthClient = await connectWsClient(url);
+    const authedClient = await connectWsClient(url);
+    cleanups.push(async () => {
+      unauthClient.close();
+      authedClient.close();
+    });
+
+    // 1. Unauthorized client cannot send permission approval
+    const unauthPerm = await unauthClient.request({
+      type: 'permission.reply',
+      requestId: 'req_unauth_perm',
+      sessionId: 'ses_seed_1',
+      permissionId: 'perm_1',
+      decision: 'allow_once',
+    });
+    expect(unauthPerm).toEqual({
+      type: 'response',
+      requestId: 'req_unauth_perm',
+      ok: false,
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Device authentication required',
+      },
+    });
+    expect(approvalDecisions).toEqual([]);
+
+    // 2. Authenticate mobile device
+    const challenge = pairingManager.createPairingCode({ wsUrl: url });
+    await authedClient.request({
+      type: 'pair.confirm',
+      requestId: 'req_pair_rel',
+      pairingCode: challenge.pairingCode,
+      deviceName: 'Reliable Phone',
+    });
+
+    // 3. Emit 3 events for ses_seed_1 and verify events.replay afterSequence=1 returns sequences 2 and 3
+    for (let seq = 1; seq <= 3; seq++) {
+      opencode.emit({
+        version: 1,
+        eventId: `evt_rel_${seq}`,
+        agentId: 'opencode',
+        sessionId: 'ses_seed_1',
+        sequence: seq,
+        timestamp: '2026-11-04T10:00:00Z',
+        type: 'text_delta',
+        payload: { delta: `chunk_${seq}` },
+      });
+    }
+
+    const replayRes = await authedClient.request({
+      type: 'events.replay',
+      requestId: 'req_replay',
+      sessionId: 'ses_seed_1',
+      afterSequence: 1,
+    });
+    expect(replayRes).toMatchObject({
+      type: 'response',
+      requestId: 'req_replay',
+      ok: true,
+      data: {
+        sessionId: 'ses_seed_1',
+        latestSequence: 3,
+        events: [
+          { sequence: 2, payload: { delta: 'chunk_2' } },
+          { sequence: 3, payload: { delta: 'chunk_3' } },
+        ],
+      },
+    });
+
+    // 4. machine.get and session.state snapshots
+    const machineSnap = await authedClient.request({
+      type: 'machine.get',
+      requestId: 'req_machine_snap',
+    });
+    expect(machineSnap).toMatchObject({
+      type: 'response',
+      requestId: 'req_machine_snap',
+      ok: true,
+      data: {
+        machineId: 'machine_reliable',
+        protocolVersion: 1,
+        agents: [{ id: 'opencode', available: true }],
+      },
+    });
+
+    const sessionState = await authedClient.request({
+      type: 'session.state',
+      requestId: 'req_ses_state',
+      sessionId: 'ses_seed_1',
+    });
+    expect(sessionState).toMatchObject({
+      type: 'response',
+      requestId: 'req_ses_state',
+      ok: true,
+      data: {
+        session: { id: 'ses_seed_1', agentId: 'opencode' },
+        latestSequence: 3,
+        bufferedEventCount: 3,
+      },
+    });
+
+    // 5. Authorized permission approval succeeds
+    const permRes = await authedClient.request({
+      type: 'permission.reply',
+      requestId: 'req_authed_perm',
+      sessionId: 'ses_seed_1',
+      permissionId: 'perm_1',
+      decision: 'allow_once',
+    });
+    expect(permRes).toEqual({
+      type: 'response',
+      requestId: 'req_authed_perm',
+      ok: true,
+      data: {
+        replied: true,
+        sessionId: 'ses_seed_1',
+        permissionId: 'perm_1',
+        decision: 'allow_once',
+      },
+    });
+    expect(approvalDecisions).toEqual([
+      { sessionId: 'ses_seed_1', permissionId: 'perm_1', decision: 'allow_once' },
+    ]);
+  });
 });
 
 async function connectWsClient(url: string) {

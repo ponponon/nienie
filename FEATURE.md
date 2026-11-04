@@ -107,6 +107,14 @@
   - 默认使用 `wss://nienie-replay.quniv.cn`，支持用户替换为自定义 Relay 地址
   - 支持 Bridge 断线自动重连并恢复在线状态
 
+### 2026-11-04 补齐安全与可靠性（事件序号补发、状态快照、权限审批、日志脱敏、多机器管理）
+
+- 事件序号缓存与补发（`events.replay`）：`BridgeServer` 按会话维护环形事件缓存，手机重连后可按 `afterSequence` 拉取断线期间缺失的流式事件
+- 机器与会话状态快照（`machine.get` & `session.state`）：返回真实机器与会话状态、最新 `sequence` 与缓存深度，Bridge 重启后拒绝伪造不存在的旧会话状态
+- 权限审批闭环（`permission.reply`）：对接 OpenCode `POST /session/:id/permissions/:permissionID`（支持 `allow_once`、`allow_always`、`reject`），并在 `BridgeServer` 中严格拦截未授权设备的审批请求
+- 日志脱敏（`redactLogText`）：自动脱敏诊断日志中的 `ntk_*` 设备令牌、`sk-*` API Key、`Bearer`/`Basic` 标头与密码键值
+- 多机器管理：移动端 `DeviceCredentialStore` 支持存储、列出、按 `machineId` 切换与移除多台已配对电脑
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查
@@ -123,14 +131,14 @@
 - [x] 公网 Relay 连接和设备路由
 - [x] 自定义 Relay 地址配置
 - [x] Relay 端到端加密消息转发
-- [ ] 基础权限请求展示
+- [x] 基础权限请求展示
 
 ## 后续规划
 
-- [ ] 文件变更和 Diff 卡片
+- [x] 文件变更和 Diff 卡片
 - [ ] 模型选择和 Agent 能力展示
-- [ ] 会话恢复
-- [ ] 多台电脑管理
+- [x] 会话恢复
+- [x] 多台电脑管理
 - [ ] ACP 适配器
 - [ ] PTY/TUI 兜底模式
 - [ ] 完整远程桌面兜底

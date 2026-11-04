@@ -7,6 +7,7 @@ import {
   type CanonicalAgentEvent,
   type CanonicalAgentEventType,
   type CreateSessionInput,
+  type PermissionDecision,
 } from '@nienie/protocol';
 
 export type AgentAdapter = {
@@ -18,6 +19,11 @@ export type AgentAdapter = {
   createSession?(input?: CreateSessionInput): Promise<AgentSession>;
   loadSession?(sessionId: string): Promise<AgentSession>;
   sendMessage(sessionId: string, message: string): Promise<void>;
+  replyPermission?(
+    sessionId: string,
+    permissionId: string,
+    decision: PermissionDecision,
+  ): Promise<void>;
   cancel(sessionId: string): Promise<void>;
   dispose(): Promise<void>;
   onEvent(listener: (event: CanonicalAgentEvent) => void): () => void;
@@ -97,4 +103,15 @@ export function truncateOutput(
     content: `${content.slice(0, maxLength)}\n...[truncated ${omitted} chars]`,
     truncated: true,
   };
+}
+
+export function redactLogText(text: string): string {
+  return text
+    .replace(/\bntk_[0-9a-zA-Z_-]+\b/g, '[REDACTED]')
+    .replace(/\bsk-[0-9a-zA-Z_-]+\b/g, '[REDACTED]')
+    .replace(/\b(Bearer|Basic)\s+[0-9a-zA-Z._~+/=-]+/gi, '$1 [REDACTED]')
+    .replace(
+      /\b(password|passwd|secret|token|api[-_]?key)\s*([=:])\s*([^\s,;]+)/gi,
+      '$1$2[REDACTED]',
+    );
 }
