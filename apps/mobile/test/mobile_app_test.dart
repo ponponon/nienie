@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nienie_mobile/main.dart';
@@ -46,6 +47,27 @@ void main() {
 
     await store.removeMachine('linux_workstation');
     expect((await store.listMachines()).single.machineId, 'macbook_pro');
+  });
+
+  test('persists device credentials across restarts with FileCredentialStore', () async {
+    final tempDir = await Directory.systemTemp.createTemp('nienie_cred_test_');
+    addTearDown(() async => tempDir.delete(recursive: true));
+    final file = File('${tempDir.path}/credentials.json');
+
+    final writerStore = FileCredentialStore(file);
+    await writerStore.save(
+      const SavedDeviceCredential(
+        machineId: 'mac_studio',
+        wsUrl: 'ws://192.168.1.50:4100',
+        deviceId: 'dev_persisted',
+        deviceToken: 'ntk_persisted_secret',
+      ),
+    );
+
+    final readerStore = FileCredentialStore(file);
+    final loaded = await readerStore.load();
+    expect(loaded?.machineId, 'mac_studio');
+    expect(loaded?.deviceToken, 'ntk_persisted_secret');
   });
 
   testWidgets(
@@ -169,6 +191,46 @@ void main() {
 
       expect(find.text('APIError'), findsOneWidget);
       expect(find.text('Upstream rate limit reached'), findsOneWidget);
+
+      // 8. Render permission request card and approve once
+      transport.emitServerEvent({
+        'version': 1,
+        'eventId': 'evt_6',
+        'sessionId': 'ses_alpha',
+        'sequence': 6,
+        'timestamp': '2026-11-04T10:00:06Z',
+        'type': 'status',
+        'payload': {
+          'status': 'waiting',
+          'detail': 'Permission requested: bash',
+          'permissionId': 'perm_rm_1',
+          'permission': 'bash',
+          'patterns': ['rm -rf build'],
+        },
+      });
+      await tester.pumpAndSettle();
+
+      expect(find.text('Permission requested: bash'), findsOneWidget);
+      final allowBtn = find.byKey(const Key('btn-perm-allow-once-perm_rm_1'));
+      await tester.ensureVisible(allowBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(allowBtn);
+      await tester.pumpAndSettle();
+
+      expect(transport.permissionReplies.single, {
+        'sessionId': 'ses_alpha',
+        'permissionId': 'perm_rm_1',
+        'decision': 'allow_once',
+      });
+
+      // 9. Load session file diffs and render Diff card
+      await client.loadSessionDiffs('ses_alpha');
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(ListView).last, const Offset(0, -300));
+      await tester.pumpAndSettle();
+
+      expect(find.text('src/index.ts'), findsOneWidget);
+      expect(find.text('+3 / -1'), findsOneWidget);
     },
   );
 }

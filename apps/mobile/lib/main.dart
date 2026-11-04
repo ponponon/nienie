@@ -191,6 +191,34 @@ class ErrorCardItem extends SessionTimelineItem {
   });
 }
 
+class PermissionRequestCardItem extends SessionTimelineItem {
+  final String permissionId;
+  final String permission;
+  final String detail;
+  final List<String> patterns;
+  String? resolvedDecision;
+
+  PermissionRequestCardItem({
+    required this.permissionId,
+    required this.permission,
+    required this.detail,
+    this.patterns = const [],
+    this.resolvedDecision,
+  });
+}
+
+class FileDiffCardItem extends SessionTimelineItem {
+  final String file;
+  final int additions;
+  final int deletions;
+
+  const FileDiffCardItem({
+    required this.file,
+    required this.additions,
+    required this.deletions,
+  });
+}
+
 class SavedDeviceCredential {
   final String machineId;
   final String wsUrl;
@@ -203,6 +231,22 @@ class SavedDeviceCredential {
     required this.deviceId,
     required this.deviceToken,
   });
+
+  Map<String, dynamic> toJson() => {
+        'machineId': machineId,
+        'wsUrl': wsUrl,
+        'deviceId': deviceId,
+        'deviceToken': deviceToken,
+      };
+
+  factory SavedDeviceCredential.fromJson(Map<String, dynamic> json) {
+    return SavedDeviceCredential(
+      machineId: json['machineId'] as String,
+      wsUrl: json['wsUrl'] as String,
+      deviceId: json['deviceId'] as String,
+      deviceToken: json['deviceToken'] as String,
+    );
+  }
 }
 
 abstract class DeviceCredentialStore {
@@ -247,6 +291,85 @@ class InMemoryCredentialStore implements DeviceCredentialStore {
   Future<void> clear() async {
     _machines.clear();
     _activeMachineId = null;
+  }
+}
+
+class FileCredentialStore implements DeviceCredentialStore {
+  final File file;
+
+  const FileCredentialStore(this.file);
+
+  Future<Map<String, dynamic>> _readState() async {
+    if (!await file.exists()) {
+      return {'activeMachineId': null, 'machines': <String, dynamic>{}};
+    }
+    final text = await file.readAsString();
+    if (text.trim().isEmpty) {
+      return {'activeMachineId': null, 'machines': <String, dynamic>{}};
+    }
+    return Map<String, dynamic>.from(jsonDecode(text) as Map);
+  }
+
+  Future<void> _writeState(Map<String, dynamic> state) async {
+    await file.parent.create(recursive: true);
+    await file.writeAsString(jsonEncode(state));
+  }
+
+  @override
+  Future<void> save(SavedDeviceCredential credential) async {
+    final state = await _readState();
+    final machines = Map<String, dynamic>.from(
+      state['machines'] as Map? ?? const {},
+    );
+    machines[credential.machineId] = credential.toJson();
+    state['machines'] = machines;
+    state['activeMachineId'] = credential.machineId;
+    await _writeState(state);
+  }
+
+  @override
+  Future<SavedDeviceCredential?> load([String? machineId]) async {
+    final state = await _readState();
+    final targetId = machineId ?? state['activeMachineId'] as String?;
+    if (targetId == null) return null;
+    final machines = Map<String, dynamic>.from(
+      state['machines'] as Map? ?? const {},
+    );
+    final raw = machines[targetId];
+    if (raw == null) return null;
+    return SavedDeviceCredential.fromJson(Map<String, dynamic>.from(raw as Map));
+  }
+
+  @override
+  Future<List<SavedDeviceCredential>> listMachines() async {
+    final state = await _readState();
+    final machines = Map<String, dynamic>.from(
+      state['machines'] as Map? ?? const {},
+    );
+    return machines.values
+        .map((raw) => SavedDeviceCredential.fromJson(Map<String, dynamic>.from(raw as Map)))
+        .toList();
+  }
+
+  @override
+  Future<void> removeMachine(String machineId) async {
+    final state = await _readState();
+    final machines = Map<String, dynamic>.from(
+      state['machines'] as Map? ?? const {},
+    );
+    machines.remove(machineId);
+    state['machines'] = machines;
+    if (state['activeMachineId'] == machineId) {
+      state['activeMachineId'] = machines.keys.firstOrNull;
+    }
+    await _writeState(state);
+  }
+
+  @override
+  Future<void> clear() async {
+    if (await file.exists()) {
+      await file.delete();
+    }
   }
 }
 
@@ -320,6 +443,7 @@ class FakeBridgeTransport implements BridgeTransport {
   final StreamController<Map<String, dynamic>> _incomingController =
       StreamController<Map<String, dynamic>>.broadcast();
   final List<String> sentPrompts = [];
+  final List<Map<String, String>> permissionReplies = [];
 
   @override
   Stream<Map<String, dynamic>> get incomingMessages => _incomingController.stream;
@@ -422,6 +546,41 @@ class FakeBridgeTransport implements BridgeTransport {
           'requestId': requestId,
           'ok': true,
           'data': {'accepted': true, 'sessionId': request['sessionId']},
+        };
+      case 'permission.reply':
+        permissionReplies.add({
+          'sessionId': request['sessionId'] as String,
+          'permissionId': request['permissionId'] as String,
+          'decision': request['decision'] as String,
+        });
+        return {
+          'type': 'response',
+          'requestId': requestId,
+          'ok': true,
+          'data': {
+            'replied': true,
+            'sessionId': request['sessionId'],
+            'permissionId': request['permissionId'],
+            'decision': request['decision'],
+          },
+        };
+      case 'session.diff':
+        return {
+          'type': 'response',
+          'requestId': requestId,
+          'ok': true,
+          'data': {
+            'sessionId': request['sessionId'],
+            'diffs': [
+              {
+                'file': 'src/index.ts',
+                'before': 'a',
+                'after': 'b',
+                'additions': 3,
+                'deletions': 1,
+              },
+            ],
+          },
         };
       default:
         return {
@@ -593,6 +752,39 @@ class MobileBridgeClient extends ChangeNotifier {
       'permissionId': permissionId,
       'decision': decision,
     });
+    final items = _timelineBySession[sessionId];
+    if (items != null) {
+      for (final item in items) {
+        if (item is PermissionRequestCardItem && item.permissionId == permissionId) {
+          item.resolvedDecision = decision;
+        }
+      }
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadSessionDiffs(String sessionId) async {
+    final res = await transport.sendRequest({
+      'type': 'session.diff',
+      'requestId': _nextRequestId(),
+      'sessionId': sessionId,
+    });
+    if (res['ok'] == true) {
+      final data = res['data'] as Map<String, dynamic>;
+      final diffs = data['diffs'] as List<dynamic>? ?? const [];
+      final items = _timelineBySession.putIfAbsent(sessionId, () => []);
+      for (final raw in diffs) {
+        final map = Map<String, dynamic>.from(raw as Map);
+        items.add(
+          FileDiffCardItem(
+            file: map['file'] as String? ?? '',
+            additions: map['additions'] as int? ?? 0,
+            deletions: map['deletions'] as int? ?? 0,
+          ),
+        );
+      }
+      notifyListeners();
+    }
   }
 
   Future<void> refreshAgents() async {
@@ -713,6 +905,20 @@ class MobileBridgeClient extends ChangeNotifier {
       case 'status':
         final status = event.payload['status'] as String? ?? 'idle';
         _sessionStatusBySession[event.sessionId] = status;
+        final permissionId = event.payload['permissionId'] as String?;
+        if (status == 'waiting' && permissionId != null) {
+          final permission = event.payload['permission'] as String? ?? 'permission';
+          final detail = event.payload['detail'] as String? ?? 'Permission requested';
+          final rawPatterns = event.payload['patterns'] as List<dynamic>? ?? const [];
+          items.add(
+            PermissionRequestCardItem(
+              permissionId: permissionId,
+              permission: permission,
+              detail: detail,
+              patterns: rawPatterns.map((e) => e.toString()).toList(),
+            ),
+          );
+        }
         break;
 
       case 'text_delta':
@@ -1181,6 +1387,84 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     ),
                     const SizedBox(height: 4),
                     Text(item.message),
+                  ],
+                ),
+              ),
+            ),
+          PermissionRequestCardItem() => Card(
+              color: const Color(0xFFF59E0B).withValues(alpha: 0.14),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.shield_outlined, size: 16, color: Color(0xFFF59E0B)),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            item.detail,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (item.patterns.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        item.patterns.join(', '),
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    if (item.resolvedDecision != null)
+                      Text('Decision: ${item.resolvedDecision}')
+                    else
+                      Row(
+                        children: [
+                          FilledButton(
+                            key: Key('btn-perm-allow-once-${item.permissionId}'),
+                            onPressed: () => client.replyPermission(
+                              sessionId: session.id,
+                              permissionId: item.permissionId,
+                              decision: 'allow_once',
+                            ),
+                            child: const Text('Allow Once'),
+                          ),
+                          const SizedBox(width: 8),
+                          OutlinedButton(
+                            key: Key('btn-perm-reject-${item.permissionId}'),
+                            onPressed: () => client.replyPermission(
+                              sessionId: session.id,
+                              permissionId: item.permissionId,
+                              decision: 'reject',
+                            ),
+                            child: const Text('Reject'),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          FileDiffCardItem() => Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.difference_outlined, size: 16, color: Color(0xFF3B82F6)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        item.file,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Text(
+                      '+${item.additions} / -${item.deletions}',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF10B981)),
+                    ),
                   ],
                 ),
               ),

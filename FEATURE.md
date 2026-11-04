@@ -117,6 +117,10 @@
 - 模型发现与切换（`models.list`）：`OpenCodeAdapter.listModels()` 对接 `GET /config/providers` 提取可用模型与默认模型，`BridgeServer` 暴露 `models.list` 命令并支持在 `session.send` 中指定 `modelId`
 - 会话文件变更与 Diff 查询（`session.diff`）：`OpenCodeAdapter.getSessionDiff()` 对接 `GET /session/:id/diff` 获取文件级增删行数与前后内容，`BridgeServer` 暴露 `session.diff` 命令
 - 全仓自动化校验脚本（`scripts/verify-all.mjs` & `pnpm verify`）：串联 TypeScript Workspace 类型检查、Vitest 全量测试、以及 Flutter 移动端 `flutter analyze` 与 `flutter test`
+- 移动端能力升级（`apps/mobile`）：
+  - 实现 `FileCredentialStore` 持久化存储多台电脑凭据与当前激活机器
+  - 实现 `PermissionRequestCardItem` 独立权限审批卡片（支持在手机端直接点击 `Allow Once` / `Reject` 回传 `permission.reply`）
+  - 实现 `FileDiffCardItem` 与 `loadSessionDiffs()` 在会话时间线中渲染文件变更 Diff 统计
 
 ## MVP 规划
 
