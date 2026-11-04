@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nienie_mobile/main.dart';
 
 void main() {
-  test('decodes nienie://pair QR URI and pairs tool_use with tool_result by sequence', () {
+  test('decodes nienie://pair QR URI and pairs tool_use with tool_result by sequence', () async {
     final rawPayload = {
       'version': 1,
       'machineId': 'machine_mac',
@@ -20,6 +20,14 @@ void main() {
     expect(qrPayload.machineId, 'machine_mac');
     expect(qrPayload.pairingCode, '654321');
     expect(qrPayload.relayUrl, DEFAULT_RELAY_URL);
+
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.pairWithQrUri('nienie://pair?data=$encoded');
+    expect(client.connectionState, BridgeConnectionState.connected);
   });
 
   test('manages multiple paired machines in DeviceCredentialStore', () async {
@@ -256,7 +264,30 @@ void main() {
       expect(find.text('Screen Capture (main)'), findsOneWidget);
       expect(find.text('1440x900'), findsOneWidget);
 
-      // 12. Tap New Session button to create and switch to a new session
+      // 12. Emit usage event and verify usage summary card, then cancel session and create a new session
+      transport.emitServerEvent({
+        'version': 1,
+        'eventId': 'evt_usage_1',
+        'sessionId': 'ses_alpha',
+        'sequence': 7,
+        'timestamp': '2026-11-04T10:00:07Z',
+        'type': 'usage',
+        'payload': {
+          'inputTokens': 1500,
+          'outputTokens': 420,
+          'costUsd': 0.0142,
+        },
+      });
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(ListView).last, const Offset(0, -300));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('1500 in · 420 out'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('btn-cancel-session')));
+      await tester.pumpAndSettle();
+      expect(transport.cancelledSessionIds.single, 'ses_alpha');
+
       await tester.tap(find.byKey(const Key('btn-new-session')));
       await tester.pumpAndSettle();
 

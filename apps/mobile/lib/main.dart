@@ -258,6 +258,18 @@ class ScreenCaptureCardItem extends SessionTimelineItem {
   });
 }
 
+class UsageSummaryItem extends SessionTimelineItem {
+  final int inputTokens;
+  final int outputTokens;
+  final double costUsd;
+
+  const UsageSummaryItem({
+    required this.inputTokens,
+    required this.outputTokens,
+    required this.costUsd,
+  });
+}
+
 class SavedDeviceCredential {
   final String machineId;
   final String wsUrl;
@@ -654,6 +666,7 @@ class FakeBridgeTransport implements BridgeTransport {
       StreamController<Map<String, dynamic>>.broadcast();
   final List<String> sentPrompts = [];
   final List<String?> sentModelIds = [];
+  final List<String> cancelledSessionIds = [];
   final List<Map<String, String>> permissionReplies = [];
   final List<Map<String, String>> registeredPushes = [];
 
@@ -776,6 +789,14 @@ class FakeBridgeTransport implements BridgeTransport {
           'requestId': requestId,
           'ok': true,
           'data': {'accepted': true, 'sessionId': request['sessionId']},
+        };
+      case 'session.cancel':
+        cancelledSessionIds.add(request['sessionId'] as String);
+        return {
+          'type': 'response',
+          'requestId': requestId,
+          'ok': true,
+          'data': {'cancelled': true, 'sessionId': request['sessionId']},
         };
       case 'permission.reply':
         permissionReplies.add({
@@ -900,6 +921,20 @@ class MobileBridgeClient extends ChangeNotifier {
     return _sessionStatusBySession[sessionId] ??
         activeSession?.status ??
         'idle';
+  }
+
+  Future<void> pairWithQrUri(
+    String qrUri, {
+    String deviceName = 'Nienie Flutter Mobile',
+    String platform = 'ios',
+  }) async {
+    final payload = PairingQrPayload.decode(qrUri);
+    await pairAndConnect(
+      wsUrl: payload.wsUrl,
+      pairingCode: payload.pairingCode,
+      deviceName: deviceName,
+      platform: platform,
+    );
   }
 
   Future<void> pairAndConnect({
@@ -1181,6 +1216,18 @@ class MobileBridgeClient extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> cancelActiveSession() async {
+    final current = activeSession;
+    if (current == null) return;
+    await transport.sendRequest({
+      'type': 'session.cancel',
+      'requestId': _nextRequestId(),
+      'sessionId': current.id,
+    });
+    _sessionStatusBySession[current.id] = 'cancelled';
+    notifyListeners();
+  }
+
   Future<void> sendMessage(String text) async {
     final current = activeSession;
     if (current == null || text.trim().isEmpty) return;
@@ -1318,6 +1365,19 @@ class MobileBridgeClient extends ChangeNotifier {
             code: event.payload['code'] as String? ?? 'ERROR',
             message: event.payload['message'] as String? ?? 'Agent error',
             retryable: event.payload['retryable'] as bool? ?? false,
+          ),
+        );
+        break;
+
+      case 'usage':
+        final inputTokens = (event.payload['inputTokens'] as num?)?.toInt() ?? 0;
+        final outputTokens = (event.payload['outputTokens'] as num?)?.toInt() ?? 0;
+        final costUsd = (event.payload['costUsd'] as num?)?.toDouble() ?? 0.0;
+        items.add(
+          UsageSummaryItem(
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            costUsd: costUsd,
           ),
         );
         break;
@@ -1615,6 +1675,12 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   onPressed: () => client.captureScreen('main'),
                   icon: const Icon(Icons.desktop_windows_outlined),
                 ),
+                IconButton(
+                  key: const Key('btn-cancel-session'),
+                  tooltip: 'Cancel Session',
+                  onPressed: client.cancelActiveSession,
+                  icon: const Icon(Icons.stop_circle_outlined, color: Color(0xFFEF4444)),
+                ),
                 const SizedBox(width: 4),
                 Expanded(
                   child: TextField(
@@ -1847,6 +1913,21 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     ),
                     Text(
                       '${item.width}x${item.height}',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          UsageSummaryItem() => Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.analytics_outlined, size: 16, color: Color(0xFF10B981)),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${item.inputTokens} in · ${item.outputTokens} out · \$${item.costUsd.toStringAsFixed(4)}',
                       style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                     ),
                   ],
