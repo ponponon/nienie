@@ -11,6 +11,6 @@
       "import": "./src/index.ts"
     }
   },
-  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "scripts": { "build": "tsc", "typecheck": "tsc --noEmit", "test": "vitest run" },
   "dependencies": { "@nienie/protocol": "workspace:*" }
 }

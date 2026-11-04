@@ -128,6 +128,7 @@
 - 移动端公网 Relay 传输层（`RelayBridgeTransport` in `apps/mobile`）：
   - 支持连接默认 `wss://nienie-replay.quniv.cn` 或用户自定义 Relay 地址并自动注册 `mobile` 角色
   - 实时感知 `relay.presence` 的 `bridgeOnline` 在线状态，并通过 `relay.forward` 双向收发命令与 `session.event`
+- 全仓 TypeScript 构建流水线（`pnpm build`）：为所有 6 个 workspace 包配置 `outDir: "dist"` 与 `tsc` 构建输出，并纳入 `pnpm verify` 自动化校验
 
 ## MVP 规划
 

@@ -22,6 +22,7 @@ function hasCommand(command) {
   }
 }
 
+runStep('TypeScript workspace build', 'pnpm', ['build']);
 runStep('TypeScript workspace typecheck', 'pnpm', ['typecheck']);
 runStep('TypeScript & Bridge E2E test suites', 'pnpm', ['test']);
 
