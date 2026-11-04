@@ -215,10 +215,11 @@ export class BridgeServer {
     if (!address || typeof address === 'string') {
       throw new Error('BridgeServer is not listening on a TCP port');
     }
+    const connectHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
     return {
-      host: this.host,
+      host: connectHost,
       port: address.port,
-      url: `ws://${this.host}:${address.port}`,
+      url: `ws://${connectHost}:${address.port}`,
     };
   }
 

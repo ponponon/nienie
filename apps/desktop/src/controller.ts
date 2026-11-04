@@ -68,6 +68,7 @@ export type DesktopBridgeControllerOptions = {
   port?: number | undefined;
   customRelayUrl?: string | undefined;
   maxLogs?: number | undefined;
+  includeExtendedAgents?: boolean | undefined;
   opencode?: OpenCodeAdapterOptions | undefined;
   codex?: CodexAdapterOptions | undefined;
 };
@@ -110,6 +111,7 @@ export class DesktopBridgeController {
     this.registry = createBridgeRegistry({
       opencode: options.opencode,
       codex: options.codex,
+      includeExtendedAgents: options.includeExtendedAgents,
     });
     this.pairingManager = new PairingManager({
       machineId: this.machineId,
@@ -124,6 +126,10 @@ export class DesktopBridgeController {
     });
 
     this.appendLog('info', `Desktop controller initialized for machine ${this.machineId}`);
+  }
+
+  getRegistry(): AgentRegistry {
+    return this.registry;
   }
 
   getState(): DesktopDashboardState {

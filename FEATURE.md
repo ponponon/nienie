@@ -163,7 +163,11 @@
 - 移动端配对面板 QR URI 快捷输入框与按钮（`input-qr-uri` & `btn-pair-qr-uri` in `apps/mobile`）：支持直接粘贴 `nienie://pair?data=...` URI 一键完成配对连接
 - 移动端已保存电脑列表与一键重连（`refreshSavedMachines` & `btn-reconnect-machine-*` in `apps/mobile`）：在配对面板展示已绑定电脑并支持一键凭 `deviceToken` 免扫码重连
 - 移动端模型切换芯片栏、断开连接与移除保存电脑交互（`chip-model-*`、`btn-disconnect`、`btn-remove-machine-*` in `apps/mobile`）：完善多机器切换、退出连接与可视模型切换闭环
-- 移动端点击 Agent 自动拉取模型列表与权限卡片 `Allow Always` 审批（`chip-agent-*` & `btn-perm-allow-always-*` in `apps/mobile`）：完善 Agent-模型联动与完整 3 态权限决策（`allow_once` / `allow_always` / `reject`）
+- 移动端点击 Agent 自动拉取模型列表与权限卡片 `Allow Always` 审批（`chip-agent-*` & `btn-perm-allow-always-*` in `apps/mobile`）：完善 Agent-模型联动与完整 3 态权限审批（`allow_once` / `allow_always` / `reject`）
+- Mac 一键启动入口与 Android 真机网络权限配置（`pnpm start` / `scripts/start-mac.mjs` / `AndroidManifest.xml`）：
+  - `pnpm start` 自动使用 `esbuild` 打包并启动本地 Bridge（`4100` 端口）与桌面浏览器控制台（`http://127.0.0.1:4101`），自动创建初始工作区会话并输出配对码
+  - 修复 `AgentRegistry.listSessions()` 单适配器离线容错隔离
+  - 在 `AndroidManifest.xml` 中配置 `INTERNET` 权限与 `usesCleartextTraffic="true"` 并完成 Android APK 构建
 
 ## MVP 规划
 

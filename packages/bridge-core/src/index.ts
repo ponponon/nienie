@@ -37,7 +37,11 @@ export class AgentRegistry {
   }
 
   async listSessions(): Promise<AgentSession[]> {
-    const sessions = await Promise.all([...this.adapters.values()].map((adapter) => adapter.listSessions()));
+    const sessions = await Promise.all(
+      [...this.adapters.values()].map((adapter) =>
+        adapter.listSessions().catch(() => [] as AgentSession[]),
+      ),
+    );
     return sessions.flat();
   }
 

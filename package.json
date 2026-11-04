@@ -6,6 +6,7 @@
   "packageManager": "pnpm@10.33.2",
   "engines": { "node": ">=22" },
   "scripts": {
+    "start": "node scripts/start-mac.mjs",
     "build": "pnpm --recursive build",
     "typecheck": "pnpm --recursive typecheck",
     "test": "pnpm --recursive test",
