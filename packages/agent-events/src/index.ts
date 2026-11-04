@@ -9,6 +9,7 @@ import {
   type CreateSessionInput,
   type ModelInfo,
   type PermissionDecision,
+  type SessionFileDiff,
 } from '@nienie/protocol';
 
 export type AgentAdapter = {
@@ -20,6 +21,7 @@ export type AgentAdapter = {
   listSessions(): Promise<AgentSession[]>;
   createSession?(input?: CreateSessionInput): Promise<AgentSession>;
   loadSession?(sessionId: string): Promise<AgentSession>;
+  getSessionDiff?(sessionId: string): Promise<SessionFileDiff[]>;
   sendMessage(sessionId: string, message: string): Promise<void>;
   replyPermission?(
     sessionId: string,

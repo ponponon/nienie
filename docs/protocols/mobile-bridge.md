@@ -21,6 +21,7 @@ sessions.list
 session.create
 session.load
 session.state
+session.diff
 session.send
 session.cancel
 permission.reply

@@ -6,6 +6,7 @@ import type {
   CreateSessionInput,
   ModelInfo,
   PermissionDecision,
+  SessionFileDiff,
 } from '@nienie/protocol';
 import { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
 import { parseSseStream } from './sse.js';
@@ -183,6 +184,13 @@ export class OpenCodeAdapter implements AgentAdapter {
     ]);
 
     return this.mapSession(raw, statusMap[sessionId]);
+  }
+
+  async getSessionDiff(sessionId: string): Promise<SessionFileDiff[]> {
+    const encodedId = encodeURIComponent(sessionId);
+    return this.requestJson<SessionFileDiff[]>(`/session/${encodedId}/diff`, {
+      method: 'GET',
+    });
   }
 
   async sendMessage(sessionId: string, message: string): Promise<void> {

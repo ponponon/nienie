@@ -115,6 +115,7 @@
 - 日志脱敏（`redactLogText`）：自动脱敏诊断日志中的 `ntk_*` 设备令牌、`sk-*` API Key、`Bearer`/`Basic` 标头与密码键值
 - 多机器管理：移动端 `DeviceCredentialStore` 支持存储、列出、按 `machineId` 切换与移除多台已配对电脑
 - 模型发现与切换（`models.list`）：`OpenCodeAdapter.listModels()` 对接 `GET /config/providers` 提取可用模型与默认模型，`BridgeServer` 暴露 `models.list` 命令并支持在 `session.send` 中指定 `modelId`
+- 会话文件变更与 Diff 查询（`session.diff`）：`OpenCodeAdapter.getSessionDiff()` 对接 `GET /session/:id/diff` 获取文件级增删行数与前后内容，`BridgeServer` 暴露 `session.diff` 命令
 
 ## MVP 规划
 

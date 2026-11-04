@@ -185,5 +185,21 @@ describe('protocol', () => {
         agentId: 'opencode',
       },
     });
+
+    const diffReq = parseBridgeRequest(
+      JSON.stringify({
+        type: 'session.diff',
+        requestId: 'req_diff_1',
+        sessionId: 'ses_alpha',
+      }),
+    );
+    expect(diffReq).toEqual({
+      ok: true,
+      request: {
+        type: 'session.diff',
+        requestId: 'req_diff_1',
+        sessionId: 'ses_alpha',
+      },
+    });
   });
 });

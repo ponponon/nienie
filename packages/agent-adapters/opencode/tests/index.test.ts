@@ -390,8 +390,9 @@ describe('OpenCodeAdapter', () => {
         return;
       }
 
-      if (req.method === 'GET' && url.pathname.startsWith('/session/')) {
-        const sessionId = url.pathname.slice('/session/'.length);
+      const sessionGetMatch = url.pathname.match(/^\/session\/([^/]+)$/);
+      if (req.method === 'GET' && sessionGetMatch && sessionGetMatch[1] !== 'status') {
+        const sessionId = sessionGetMatch[1]!;
         const found = OPENCODE_SESSIONS_FIXTURE.find((s) => s.id === sessionId);
         if (!found) {
           res.writeHead(404, { 'content-type': 'application/json' });
@@ -452,6 +453,23 @@ describe('OpenCodeAdapter', () => {
         abortedSessions.push(abortMatch[1]!);
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(true));
+        return;
+      }
+
+      const diffMatch = url.pathname.match(/^\/session\/([^/]+)\/diff$/);
+      if (req.method === 'GET' && diffMatch) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify([
+            {
+              file: 'src/index.ts',
+              before: 'const a = 1;',
+              after: 'const a = 2;',
+              additions: 1,
+              deletions: 1,
+            },
+          ]),
+        );
         return;
       }
 
@@ -597,7 +615,18 @@ describe('OpenCodeAdapter', () => {
       { seq: 3, type: 'status', payload: { status: 'idle', detail: 'Session is idle' } },
     ]);
 
-    // 6. cancel() & replyPermission()
+    // 6. cancel(), replyPermission(), & getSessionDiff()
+    const diffs = await adapter.getSessionDiff('ses_alpha');
+    expect(diffs).toEqual([
+      {
+        file: 'src/index.ts',
+        before: 'const a = 1;',
+        after: 'const a = 2;',
+        additions: 1,
+        deletions: 1,
+      },
+    ]);
+
     await adapter.replyPermission('ses_alpha', 'perm_99', 'allow_always');
     expect(receivedPermissions).toEqual([
       {

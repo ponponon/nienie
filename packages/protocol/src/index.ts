@@ -120,6 +120,14 @@ export type ModelInfo = {
   isDefault: boolean;
 };
 
+export type SessionFileDiff = {
+  file: string;
+  before: string;
+  after: string;
+  additions: number;
+  deletions: number;
+};
+
 export type AgentSession = {
   id: string;
   agentId: AgentId;
@@ -232,6 +240,7 @@ export type BridgeRequest =
   | { type: 'session.create'; requestId: string; agentId: AgentId; input?: CreateSessionInput | undefined }
   | { type: 'session.load'; requestId: string; agentId: AgentId; sessionId: string }
   | { type: 'session.state'; requestId: string; sessionId: string; agentId?: AgentId | undefined }
+  | { type: 'session.diff'; requestId: string; sessionId: string; agentId?: AgentId | undefined }
   | {
       type: 'session.send';
       requestId: string;
@@ -505,6 +514,25 @@ export function parseBridgeRequest(
         ok: true,
         request: {
           type: 'session.state',
+          requestId,
+          sessionId: obj.sessionId,
+          ...(isAgentId(obj.agentId) ? { agentId: obj.agentId } : {}),
+        },
+      };
+    }
+
+    case 'session.diff': {
+      if (typeof obj.sessionId !== 'string' || !obj.sessionId.trim()) {
+        return {
+          ok: false,
+          requestId,
+          error: { code: 'BAD_REQUEST', message: 'Invalid sessionId' },
+        };
+      }
+      return {
+        ok: true,
+        request: {
+          type: 'session.diff',
           requestId,
           sessionId: obj.sessionId,
           ...(isAgentId(obj.agentId) ? { agentId: obj.agentId } : {}),

@@ -7,6 +7,7 @@ import type {
   CreateSessionInput,
   ModelInfo,
   PermissionDecision,
+  SessionFileDiff,
 } from '@nienie/protocol';
 
 export class AgentRegistry {
@@ -89,6 +90,17 @@ export class SessionRouter {
       throw new Error(`Agent adapter ${agentId} does not support loading sessions`);
     }
     return adapter.loadSession(sessionId);
+  }
+
+  async getSessionDiff(session: AgentSession): Promise<SessionFileDiff[]> {
+    const adapter = this.registry.get(session.agentId);
+    if (!adapter) {
+      throw new Error(`No adapter registered for agent: ${session.agentId}`);
+    }
+    if (!adapter.getSessionDiff) {
+      return [];
+    }
+    return adapter.getSessionDiff(session.id);
   }
 
   async sendMessage(session: AgentSession, message: string): Promise<void> {

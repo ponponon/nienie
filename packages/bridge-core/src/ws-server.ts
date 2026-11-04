@@ -545,6 +545,16 @@ export class BridgeServer {
         };
       }
 
+      case 'session.diff': {
+        if (!bypassAuth) this.requireAuthenticated(client);
+        const session = await this.resolveSession(request.sessionId, request.agentId);
+        const diffs = await this.router.getSessionDiff(session);
+        return {
+          sessionId: session.id,
+          diffs,
+        };
+      }
+
       case 'session.send': {
         if (!bypassAuth) this.requireAuthenticated(client);
         const session = await this.resolveSession(request.sessionId, request.agentId);
