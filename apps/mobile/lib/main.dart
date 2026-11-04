@@ -1661,7 +1661,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   separatorBuilder: (_, __) => const SizedBox(width: 8),
                   itemBuilder: (context, index) {
                     final agent = client.agents[index];
-                    return Chip(
+                    return ActionChip(
+                      key: Key('chip-agent-${agent.id}'),
                       avatar: Icon(
                         agent.available
                             ? Icons.check_circle_outline
@@ -1672,6 +1673,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                             : const Color(0xFF9CA3AF),
                       ),
                       label: Text(agent.name),
+                      onPressed: () => client.loadModels(agent.id),
                     );
                   },
                 ),
@@ -1976,6 +1978,16 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                               decision: 'allow_once',
                             ),
                             child: const Text('Allow Once'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton.tonal(
+                            key: Key('btn-perm-allow-always-${item.permissionId}'),
+                            onPressed: () => client.replyPermission(
+                              sessionId: session.id,
+                              permissionId: item.permissionId,
+                              decision: 'allow_always',
+                            ),
+                            child: const Text('Allow Always'),
                           ),
                           const SizedBox(width: 8),
                           OutlinedButton(

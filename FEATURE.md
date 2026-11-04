@@ -163,6 +163,7 @@
 - 移动端配对面板 QR URI 快捷输入框与按钮（`input-qr-uri` & `btn-pair-qr-uri` in `apps/mobile`）：支持直接粘贴 `nienie://pair?data=...` URI 一键完成配对连接
 - 移动端已保存电脑列表与一键重连（`refreshSavedMachines` & `btn-reconnect-machine-*` in `apps/mobile`）：在配对面板展示已绑定电脑并支持一键凭 `deviceToken` 免扫码重连
 - 移动端模型切换芯片栏、断开连接与移除保存电脑交互（`chip-model-*`、`btn-disconnect`、`btn-remove-machine-*` in `apps/mobile`）：完善多机器切换、退出连接与可视模型切换闭环
+- 移动端点击 Agent 自动拉取模型列表与权限卡片 `Allow Always` 审批（`chip-agent-*` & `btn-perm-allow-always-*` in `apps/mobile`）：完善 Agent-模型联动与完整 3 态权限决策（`allow_once` / `allow_always` / `reject`）
 
 ## MVP 规划
 

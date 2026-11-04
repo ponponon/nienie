@@ -219,6 +219,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Permission requested: bash'), findsOneWidget);
+      expect(find.byKey(const Key('btn-perm-allow-always-perm_rm_1')), findsOneWidget);
       final allowBtn = find.byKey(const Key('btn-perm-allow-once-perm_rm_1'));
       await tester.ensureVisible(allowBtn);
       await tester.pumpAndSettle();
@@ -355,7 +356,7 @@ void main() {
 
     expect(client.connectionState, BridgeConnectionState.connected);
 
-    await client.loadModels('opencode');
+    await tester.tap(find.byKey(const Key('chip-agent-opencode')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('chip-model-anthropic/claude-sonnet-4')), findsOneWidget);
 
