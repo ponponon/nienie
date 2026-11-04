@@ -39,6 +39,27 @@ export function renderDesktopAppHtml(state: DesktopDashboardState): string {
     `
     : `<div class="empty-state">Start the local Bridge to generate a one-time pairing QR code.</div>`;
 
+  const devicesHtml = state.devices
+    .map((device) => {
+      const revoked = Boolean(device.revokedAt);
+      return `
+        <div class="agent-row" data-device-id="${escapeHtml(device.deviceId)}">
+          <div class="agent-meta">
+            <div>
+              <div class="agent-name">${escapeHtml(device.deviceName)} <span class="field-hint">(${escapeHtml(device.platform)})</span></div>
+              <div class="field-hint">Last seen: ${escapeHtml(device.lastSeenAt)}</div>
+            </div>
+          </div>
+          ${
+            revoked
+              ? `<span class="badge badge-danger">Revoked</span>`
+              : `<button class="btn btn-secondary" data-revoke-device-id="${escapeHtml(device.deviceId)}">Revoke</button>`
+          }
+        </div>
+      `;
+    })
+    .join('');
+
   const logsHtml = state.logs
     .map(
       (entry) => `
@@ -323,6 +344,7 @@ export function renderDesktopAppHtml(state: DesktopDashboardState): string {
         <button class="btn btn-secondary" id="btn-refresh-pairing">${iconRefreshSvg()} New Code</button>
       </div>
       ${pairingHtml}
+      ${devicesHtml}
     </section>
 
     <section class="card">
@@ -348,6 +370,34 @@ export function renderDesktopAppHtml(state: DesktopDashboardState): string {
       </div>
     </section>
   </main>
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      const api = window.nienieDesktop;
+      if (!api) return;
+      document.getElementById('btn-toggle-bridge')?.addEventListener('click', () => {
+        ${isRunning ? 'api.stopBridge()' : 'api.startBridge()'};
+      });
+      document.getElementById('btn-refresh-agents')?.addEventListener('click', () => {
+        api.refreshAgents();
+      });
+      document.getElementById('btn-refresh-pairing')?.addEventListener('click', () => {
+        api.refreshPairing();
+      });
+      document.getElementById('btn-save-custom-relay')?.addEventListener('click', () => {
+        const input = document.getElementById('input-custom-relay');
+        api.setRelay({ mode: 'custom', customRelayUrl: input ? input.value : '' });
+      });
+      document.getElementById('btn-use-default-relay')?.addEventListener('click', () => {
+        api.setRelay({ mode: 'default' });
+      });
+      document.querySelectorAll('[data-revoke-device-id]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-revoke-device-id');
+          if (id) api.revokeDevice(id);
+        });
+      });
+    });
+  </script>
 </body>
 </html>`;
 }

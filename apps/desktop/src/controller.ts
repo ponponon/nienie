@@ -301,6 +301,42 @@ export function registerDesktopIpcHandlers(
   );
 }
 
+export type IpcRendererLike = {
+  invoke(channel: string, ...args: unknown[]): Promise<unknown>;
+};
+
+export type DesktopPreloadApi = {
+  getState(): Promise<DesktopDashboardState>;
+  startBridge(): Promise<DesktopDashboardState>;
+  stopBridge(): Promise<DesktopDashboardState>;
+  refreshAgents(): Promise<DesktopDashboardState>;
+  refreshPairing(): Promise<DesktopDashboardState>;
+  setRelay(input: SetRelayInput): Promise<DesktopDashboardState>;
+  revokeDevice(deviceId: string): Promise<DesktopDashboardState>;
+};
+
+export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPreloadApi {
+  return {
+    getState: () =>
+      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.GET_STATE) as Promise<DesktopDashboardState>,
+    startBridge: () =>
+      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.START_BRIDGE) as Promise<DesktopDashboardState>,
+    stopBridge: () =>
+      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.STOP_BRIDGE) as Promise<DesktopDashboardState>,
+    refreshAgents: () =>
+      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.REFRESH_AGENTS) as Promise<DesktopDashboardState>,
+    refreshPairing: () =>
+      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.REFRESH_PAIRING) as Promise<DesktopDashboardState>,
+    setRelay: (input: SetRelayInput) =>
+      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.SET_RELAY, input) as Promise<DesktopDashboardState>,
+    revokeDevice: (deviceId: string) =>
+      ipcRenderer.invoke(
+        NIENIE_IPC_CHANNELS.REVOKE_DEVICE,
+        deviceId,
+      ) as Promise<DesktopDashboardState>,
+  };
+}
+
 export function createDesktopWindowOptions(preloadPath?: string) {
   return {
     width: 1080,

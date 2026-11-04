@@ -25,6 +25,7 @@ export function createDesktopBridgeServer(options: DesktopBridgeOptions = {}): B
 }
 
 export {
+  createDesktopPreloadApi,
   createDesktopWindowOptions,
   DesktopBridgeController,
   NIENIE_IPC_CHANNELS,
@@ -34,8 +35,10 @@ export {
   type DesktopDashboardState,
   type DesktopLogEntry,
   type DesktopPairingView,
+  type DesktopPreloadApi,
   type DesktopRelayConfig,
   type IpcMainLike,
+  type IpcRendererLike,
   type SetRelayInput,
 } from './controller.js';
 export {

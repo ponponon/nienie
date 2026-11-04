@@ -121,6 +121,9 @@
   - 实现 `FileCredentialStore` 持久化存储多台电脑凭据与当前激活机器
   - 实现 `PermissionRequestCardItem` 独立权限审批卡片（支持在手机端直接点击 `Allow Once` / `Reject` 回传 `permission.reply`）
   - 实现 `FileDiffCardItem` 与 `loadSessionDiffs()` 在会话时间线中渲染文件变更 Diff 统计
+- 桌面端 Preload 与交互升级（`apps/desktop`）：
+  - 实现 `createDesktopPreloadApi(ipcRenderer)` 桥接 Renderer 与主进程 IPC
+  - 在 `renderDesktopAppHtml()` 中展示已配对设备列表（含平台、最后在线时间与一键撤销按钮）及 `window.nienieDesktop` 交互脚本
 
 ## MVP 规划
 

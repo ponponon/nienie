@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_RELAY_URL, SessionRouter } from '@nienie/bridge-core';
 import {
   createBridgeRegistry,
+  createDesktopPreloadApi,
   createDesktopWindowOptions,
   DesktopBridgeController,
   NIENIE_IPC_CHANNELS,
@@ -212,7 +213,30 @@ describe('desktop bridge composition', () => {
     expect(html).toContain('padding-left: 78px');
     expect(html).toContain(DEFAULT_RELAY_URL);
     expect(html).toContain('<svg');
+    expect(html).toContain('window.nienieDesktop');
     // Must not use emoji characters as icons
     expect(html).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
+
+    // Preload API maps all Renderer actions to main-process IPC channels
+    const invoked: Array<{ channel: string; args: unknown[] }> = [];
+    const preloadApi = createDesktopPreloadApi({
+      invoke(channel: string, ...args: unknown[]) {
+        invoked.push({ channel, args });
+        return Promise.resolve(controller.getState());
+      },
+    });
+
+    await preloadApi.startBridge();
+    await preloadApi.setRelay({ mode: 'custom', customRelayUrl: 'wss://relay.example.com' });
+    await preloadApi.revokeDevice('dev_123');
+
+    expect(invoked).toEqual([
+      { channel: NIENIE_IPC_CHANNELS.START_BRIDGE, args: [] },
+      {
+        channel: NIENIE_IPC_CHANNELS.SET_RELAY,
+        args: [{ mode: 'custom', customRelayUrl: 'wss://relay.example.com' }],
+      },
+      { channel: NIENIE_IPC_CHANNELS.REVOKE_DEVICE, args: ['dev_123'] },
+    ]);
   });
 });
