@@ -6,12 +6,153 @@ import 'package:flutter/material.dart';
 const int PROTOCOL_VERSION = 1;
 const String DEFAULT_RELAY_URL = 'wss://nienie-replay.quniv.cn';
 
+enum AppLanguage { zh, en, ja, ko }
+
+class NienieStrings {
+  final AppLanguage lang;
+  const NienieStrings(this.lang);
+
+  String get appTitle => switch (lang) {
+        AppLanguage.zh => 'Nienie 控制台',
+        AppLanguage.en => 'Nienie Console',
+        AppLanguage.ja => 'Nienie コンソール',
+        AppLanguage.ko => 'Nienie 콘솔',
+      };
+
+  String get statusConnected => switch (lang) {
+        AppLanguage.zh => '已连接',
+        AppLanguage.en => 'Connected',
+        AppLanguage.ja => '接続済み',
+        AppLanguage.ko => '연결됨',
+      };
+
+  String get statusConnecting => switch (lang) {
+        AppLanguage.zh => '连接中',
+        AppLanguage.en => 'Connecting',
+        AppLanguage.ja => '接続中',
+        AppLanguage.ko => '연결 중',
+      };
+
+  String get statusError => switch (lang) {
+        AppLanguage.zh => '错误',
+        AppLanguage.en => 'Error',
+        AppLanguage.ja => 'エラー',
+        AppLanguage.ko => '오류',
+      };
+
+  String get statusDisconnected => switch (lang) {
+        AppLanguage.zh => '未连接',
+        AppLanguage.en => 'Disconnected',
+        AppLanguage.ja => '未接続',
+        AppLanguage.ko => '연결 안 됨',
+      };
+
+  String get connectTitle => switch (lang) {
+        AppLanguage.zh => '连接电脑 Bridge',
+        AppLanguage.en => 'Connect to Computer Bridge',
+        AppLanguage.ja => 'PC Bridge に接続',
+        AppLanguage.ko => '컴퓨터 Bridge 연결',
+      };
+
+  String get wsUrlLabel => switch (lang) {
+        AppLanguage.zh => 'Bridge WebSocket 地址',
+        AppLanguage.en => 'Bridge WebSocket URL',
+        AppLanguage.ja => 'Bridge WebSocket URL',
+        AppLanguage.ko => 'Bridge WebSocket 주소',
+      };
+
+  String get pairingCodeLabel => switch (lang) {
+        AppLanguage.zh => '一次性配对码 (6位)',
+        AppLanguage.en => 'One-Time Pairing Code',
+        AppLanguage.ja => 'ワンタイムペアリングコード',
+        AppLanguage.ko => '일회용 페어링 코드',
+      };
+
+  String get pairAndConnectBtn => switch (lang) {
+        AppLanguage.zh => '配对并连接',
+        AppLanguage.en => 'Pair & Connect',
+        AppLanguage.ja => 'ペアリングして接続',
+        AppLanguage.ko => '페어링 및 연결',
+      };
+
+  String get qrUriLabel => switch (lang) {
+        AppLanguage.zh => '或粘贴配对二维码 URI (nienie://pair?data=...)',
+        AppLanguage.en => 'Or Paste Pairing QR URI (nienie://pair?data=...)',
+        AppLanguage.ja => 'または QR URI を貼り付け (nienie://pair?data=...)',
+        AppLanguage.ko => '또는 페어링 QR URI 붙여넣기 (nienie://pair?data=...)',
+      };
+
+  String get pairWithQrBtn => switch (lang) {
+        AppLanguage.zh => '使用二维码 URI 配对',
+        AppLanguage.en => 'Pair with QR URI',
+        AppLanguage.ja => 'QR URI でペアリング',
+        AppLanguage.ko => 'QR URI로 페어링',
+      };
+
+  String get savedComputersTitle => switch (lang) {
+        AppLanguage.zh => '已保存的电脑',
+        AppLanguage.en => 'Saved Computers',
+        AppLanguage.ja => '保存済みの PC',
+        AppLanguage.ko => '저장된 컴퓨터',
+      };
+
+  String get reconnectBtn => switch (lang) {
+        AppLanguage.zh => '重连',
+        AppLanguage.en => 'Reconnect',
+        AppLanguage.ja => '再接続',
+        AppLanguage.ko => '재연결',
+      };
+
+  String get selectSessionHint => switch (lang) {
+        AppLanguage.zh => '请选择一个会话以查看实时事件',
+        AppLanguage.en => 'Select a session to inspect events',
+        AppLanguage.ja => 'セッションを選択してイベントを表示',
+        AppLanguage.ko => '이벤트를 확인할 세션을 선택하세요',
+      };
+
+  String get promptHint => switch (lang) {
+        AppLanguage.zh => '向本地 Agent 发送指令...',
+        AppLanguage.en => 'Send prompt to local agent...',
+        AppLanguage.ja => 'ローカル Agent にプロンプトを送信...',
+        AppLanguage.ko => '로컬 Agent에 프롬프트 전송...',
+      };
+
+  String get allowOnceBtn => switch (lang) {
+        AppLanguage.zh => '允许一次',
+        AppLanguage.en => 'Allow Once',
+        AppLanguage.ja => '今回のみ許可',
+        AppLanguage.ko => '한 번 허용',
+      };
+
+  String get allowAlwaysBtn => switch (lang) {
+        AppLanguage.zh => '始终允许',
+        AppLanguage.en => 'Allow Always',
+        AppLanguage.ja => '常に許可',
+        AppLanguage.ko => '항상 허용',
+      };
+
+  String get rejectBtn => switch (lang) {
+        AppLanguage.zh => '拒绝',
+        AppLanguage.en => 'Reject',
+        AppLanguage.ja => '拒否',
+        AppLanguage.ko => '거부',
+      };
+
+  String get langShortLabel => switch (lang) {
+        AppLanguage.zh => '中文',
+        AppLanguage.en => 'EN',
+        AppLanguage.ja => '日本語',
+        AppLanguage.ko => '한국어',
+      };
+}
+
 void main() {
   runApp(
     NienieMobileApp(
       client: MobileBridgeClient(
         transport: IoBridgeTransport(),
         credentialStore: InMemoryCredentialStore(),
+        language: AppLanguage.zh,
       ),
     ),
   );
@@ -891,6 +1032,7 @@ enum BridgeConnectionState { disconnected, connecting, connected, error }
 class MobileBridgeClient extends ChangeNotifier {
   final BridgeTransport transport;
   final DeviceCredentialStore credentialStore;
+  AppLanguage language;
 
   BridgeConnectionState connectionState = BridgeConnectionState.disconnected;
   String? errorMessage;
@@ -910,8 +1052,16 @@ class MobileBridgeClient extends ChangeNotifier {
   MobileBridgeClient({
     required this.transport,
     required this.credentialStore,
+    this.language = AppLanguage.en,
   }) {
     _subscription = transport.incomingMessages.listen(_handleServerMessage);
+  }
+
+  NienieStrings get strings => NienieStrings(language);
+
+  void setLanguage(AppLanguage nextLanguage) {
+    language = nextLanguage;
+    notifyListeners();
   }
 
   List<SessionTimelineItem> timelineFor(String sessionId) {
@@ -1460,9 +1610,38 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                 children: [
                   const Icon(Icons.hub_outlined, size: 20, color: Color(0xFF3B82F6)),
                   const SizedBox(width: 8),
-                  const Text('Nienie Console'),
-                  const Spacer(),
-                  _buildConnectionBadge(client.connectionState),
+                  Expanded(
+                    child: Text(
+                      client.strings.appTitle,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  PopupMenuButton<AppLanguage>(
+                    key: const Key('btn-switch-language'),
+                    initialValue: client.language,
+                    onSelected: client.setLanguage,
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(value: AppLanguage.zh, child: Text('中文')),
+                      PopupMenuItem(value: AppLanguage.en, child: Text('English')),
+                      PopupMenuItem(value: AppLanguage.ja, child: Text('日本語')),
+                      PopupMenuItem(value: AppLanguage.ko, child: Text('한국어')),
+                    ],
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.language, size: 16),
+                          const SizedBox(width: 4),
+                          Text(
+                            client.strings.langShortLabel,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  _buildConnectionBadge(client),
                   if (client.connectionState == BridgeConnectionState.connected) ...[
                     const SizedBox(width: 8),
                     IconButton(
@@ -1486,12 +1665,14 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     );
   }
 
-  Widget _buildConnectionBadge(BridgeConnectionState state) {
+  Widget _buildConnectionBadge(MobileBridgeClient client) {
+    final state = client.connectionState;
+    final s = client.strings;
     final label = switch (state) {
-      BridgeConnectionState.connected => 'Connected',
-      BridgeConnectionState.connecting => 'Connecting',
-      BridgeConnectionState.error => 'Error',
-      BridgeConnectionState.disconnected => 'Disconnected',
+      BridgeConnectionState.connected => s.statusConnected,
+      BridgeConnectionState.connecting => s.statusConnecting,
+      BridgeConnectionState.error => s.statusError,
+      BridgeConnectionState.disconnected => s.statusDisconnected,
     };
     final color = switch (state) {
       BridgeConnectionState.connected => const Color(0xFF10B981),
@@ -1513,6 +1694,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   }
 
   Widget _buildPairingPanel(MobileBridgeClient client) {
+    final s = client.strings;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -1522,13 +1704,13 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Row(
+                Row(
                   children: [
-                    Icon(Icons.qr_code_scanner, size: 18, color: Color(0xFF3B82F6)),
-                    SizedBox(width: 8),
+                    const Icon(Icons.qr_code_scanner, size: 18, color: Color(0xFF3B82F6)),
+                    const SizedBox(width: 8),
                     Text(
-                      'Connect to Computer Bridge',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      s.connectTitle,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
                   ],
                 ),
@@ -1536,18 +1718,18 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                 TextField(
                   key: const Key('input-ws-url'),
                   controller: _wsUrlController,
-                  decoration: const InputDecoration(
-                    labelText: 'Bridge WebSocket URL',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: s.wsUrlLabel,
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   key: const Key('input-pairing-code'),
                   controller: _pairingCodeController,
-                  decoration: const InputDecoration(
-                    labelText: 'One-Time Pairing Code',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: s.pairingCodeLabel,
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -1560,15 +1742,15 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     );
                   },
                   icon: const Icon(Icons.link),
-                  label: const Text('Pair & Connect'),
+                  label: Text(s.pairAndConnectBtn),
                 ),
                 const SizedBox(height: 16),
                 TextField(
                   key: const Key('input-qr-uri'),
                   controller: _qrUriController,
-                  decoration: const InputDecoration(
-                    labelText: 'Or Paste Pairing QR URI (nienie://pair?data=...)',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: s.qrUriLabel,
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -1578,13 +1760,13 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     client.pairWithQrUri(_qrUriController.text);
                   },
                   icon: const Icon(Icons.qr_code),
-                  label: const Text('Pair with QR URI'),
+                  label: Text(s.pairWithQrBtn),
                 ),
                 if (client.savedMachines.isNotEmpty) ...[
                   const SizedBox(height: 16),
-                  const Text(
-                    'Saved Computers',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  Text(
+                    s.savedComputersTitle,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 8),
                   for (final machine in client.savedMachines)
@@ -1616,7 +1798,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                             key: Key('btn-reconnect-machine-${machine.machineId}'),
                             onPressed: () =>
                                 client.reconnectWithSavedCredential(machine.machineId),
-                            child: const Text('Reconnect'),
+                            child: Text(s.reconnectBtn),
                           ),
                           const SizedBox(width: 4),
                           IconButton(
@@ -1772,7 +1954,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         // Active session detail timeline
         Expanded(
           child: active == null
-              ? const Center(child: Text('Select a session to inspect events'))
+              ? Center(child: Text(client.strings.selectSessionHint))
               : _buildSessionTimeline(client, active),
         ),
         // Prompt composer bar
@@ -1804,9 +1986,9 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   child: TextField(
                     key: const Key('input-session-prompt'),
                     controller: _promptController,
-                    decoration: const InputDecoration(
-                      hintText: 'Send prompt to local agent...',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      hintText: client.strings.promptHint,
+                      border: const OutlineInputBorder(),
                       isDense: true,
                     ),
                   ),
@@ -1977,7 +2159,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                               permissionId: item.permissionId,
                               decision: 'allow_once',
                             ),
-                            child: const Text('Allow Once'),
+                            child: Text(client.strings.allowOnceBtn),
                           ),
                           const SizedBox(width: 8),
                           FilledButton.tonal(
@@ -1987,7 +2169,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                               permissionId: item.permissionId,
                               decision: 'allow_always',
                             ),
-                            child: const Text('Allow Always'),
+                            child: Text(client.strings.allowAlwaysBtn),
                           ),
                           const SizedBox(width: 8),
                           OutlinedButton(
@@ -1997,7 +2179,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                               permissionId: item.permissionId,
                               decision: 'reject',
                             ),
-                            child: const Text('Reject'),
+                            child: Text(client.strings.rejectBtn),
                           ),
                         ],
                       ),

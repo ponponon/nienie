@@ -264,6 +264,12 @@ describe('desktop bridge composition', () => {
       },
       { channel: NIENIE_IPC_CHANNELS.REVOKE_DEVICE, args: ['dev_123'] },
     ]);
+
+    // Supports zh, en, ja, ko localization in desktop console HTML
+    expect(renderDesktopAppHtml(controller.getState(), { locale: 'zh' })).toContain('本地 Bridge');
+    expect(renderDesktopAppHtml(controller.getState(), { locale: 'en' })).toContain('Local Bridge');
+    expect(renderDesktopAppHtml(controller.getState(), { locale: 'ja' })).toContain('ローカル Bridge');
+    expect(renderDesktopAppHtml(controller.getState(), { locale: 'ko' })).toContain('로컬 Bridge');
   });
 
   it('serves an interactive desktop console over localhost via DesktopPreviewServer', async () => {
@@ -282,7 +288,7 @@ describe('desktop bridge composition', () => {
     const htmlRes = await fetch(url);
     expect(htmlRes.status).toBe(200);
     const htmlText = await htmlRes.text();
-    expect(htmlText).toContain('Nienie Bridge Console');
+    expect(htmlText).toContain('Nienie Bridge');
     expect(htmlText).toContain('/api/ipc');
 
     // 2. POST /api/ipc triggers START_BRIDGE and returns updated state

@@ -168,6 +168,9 @@
   - `pnpm start` 自动使用 `esbuild` 打包并启动本地 Bridge（`4100` 端口）与桌面浏览器控制台（`http://127.0.0.1:4101`），自动创建初始工作区会话并输出配对码
   - 修复 `AgentRegistry.listSessions()` 单适配器离线容错隔离
   - 在 `AndroidManifest.xml` 中配置 `INTERNET` 权限与 `usesCleartextTraffic="true"` 并完成 Android APK 构建
+- 手机端与桌面端四国语言（中文 `zh`、英文 `en`、日文 `ja`、韩文 `ko`）国际化支持（`AppLanguage` / `NienieStrings` in `apps/mobile` & `DESKTOP_I18N` in `apps/desktop`）：
+  - 手机端默认使用中文界面，并在顶栏提供 `中文 / English / 日本語 / 한국어` 实时语言切换菜单
+  - 桌面端控制台支持 `zh`、`en`、`ja`、`ko` 四语渲染与顶栏语言下拉切换器
 
 ## MVP 规划
 

@@ -74,7 +74,11 @@ export {
   type BridgeResponse,
   type CanonicalAgentEvent,
 } from '@nienie/bridge-core';
-export { renderDesktopAppHtml } from './renderer.js';
+export {
+  renderDesktopAppHtml,
+  type DesktopLocale,
+  type RenderDesktopOptions,
+} from './renderer.js';
 export {
   DesktopPreviewServer,
   type DesktopPreviewServerOptions,

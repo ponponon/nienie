@@ -4,7 +4,10 @@ import {
   registerDesktopIpcHandlers,
   type DesktopBridgeController,
 } from './controller.js';
-import { renderDesktopAppHtml } from './renderer.js';
+import {
+  renderDesktopAppHtml,
+  type DesktopLocale,
+} from './renderer.js';
 
 export type DesktopPreviewServerOptions = {
   controller: DesktopBridgeController;
@@ -74,7 +77,10 @@ export class DesktopPreviewServer {
     const url = new URL(req.url ?? '/', `http://${this.host}`);
 
     if (req.method === 'GET' && url.pathname === '/') {
-      const baseHtml = renderDesktopAppHtml(this.controller.getState());
+      const rawLang = url.searchParams.get('lang') ?? 'zh';
+      const locale: DesktopLocale =
+        rawLang === 'en' || rawLang === 'ja' || rawLang === 'ko' ? rawLang : 'zh';
+      const baseHtml = renderDesktopAppHtml(this.controller.getState(), { locale });
       const httpShimScript = `<script>
     if (!window.nienieDesktop) {
       const invoke = async (channel, ...args) => {

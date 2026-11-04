@@ -1,8 +1,109 @@
 import type { DesktopDashboardState } from './controller.js';
 
-export function renderDesktopAppHtml(state: DesktopDashboardState): string {
+export type DesktopLocale = 'zh' | 'en' | 'ja' | 'ko';
+
+export type RenderDesktopOptions = {
+  locale?: DesktopLocale | undefined;
+};
+
+const DESKTOP_I18N: Record<
+  DesktopLocale,
+  {
+    appTitle: string;
+    localBridge: string;
+    startBridge: string;
+    stopBridge: string;
+    localAgents: string;
+    detect: string;
+    mobilePairing: string;
+    newCode: string;
+    publicRelay: string;
+    useCustomRelay: string;
+    useDefaultRelay: string;
+    diagnosticLogs: string;
+    running: string;
+    stopped: string;
+    error: string;
+  }
+> = {
+  zh: {
+    appTitle: 'Nienie Bridge 控制台',
+    localBridge: '本地 Bridge',
+    startBridge: '启动 Bridge',
+    stopBridge: '停止 Bridge',
+    localAgents: '本机 Agents',
+    detect: '探测',
+    mobilePairing: '手机扫码配对',
+    newCode: '刷新配对码',
+    publicRelay: '公网 Relay',
+    useCustomRelay: '使用自定义 Relay',
+    useDefaultRelay: '使用默认 Relay',
+    diagnosticLogs: '诊断日志',
+    running: '运行中',
+    stopped: '已停止',
+    error: '错误',
+  },
+  en: {
+    appTitle: 'Nienie Bridge Console',
+    localBridge: 'Local Bridge',
+    startBridge: 'Start Bridge',
+    stopBridge: 'Stop Bridge',
+    localAgents: 'Local Agents',
+    detect: 'Detect',
+    mobilePairing: 'Mobile Pairing',
+    newCode: 'New Code',
+    publicRelay: 'Public Relay',
+    useCustomRelay: 'Use Custom Relay',
+    useDefaultRelay: 'Use Default Relay',
+    diagnosticLogs: 'Diagnostic Logs',
+    running: 'Running',
+    stopped: 'Stopped',
+    error: 'Error',
+  },
+  ja: {
+    appTitle: 'Nienie Bridge コンソール',
+    localBridge: 'ローカル Bridge',
+    startBridge: 'Bridge を起動',
+    stopBridge: 'Bridge を停止',
+    localAgents: 'ローカル Agents',
+    detect: '検出',
+    mobilePairing: 'モバイルペアリング',
+    newCode: 'コード更新',
+    publicRelay: 'パブリック Relay',
+    useCustomRelay: 'カスタム Relay を使用',
+    useDefaultRelay: 'デフォルト Relay を使用',
+    diagnosticLogs: '診断ログ',
+    running: '実行中',
+    stopped: '停止中',
+    error: 'エラー',
+  },
+  ko: {
+    appTitle: 'Nienie Bridge 콘솔',
+    localBridge: '로컬 Bridge',
+    startBridge: 'Bridge 시작',
+    stopBridge: 'Bridge 중지',
+    localAgents: '로컬 Agents',
+    detect: '감지',
+    mobilePairing: '모바일 페어링',
+    newCode: '새 코드',
+    publicRelay: '퍼블릭 Relay',
+    useCustomRelay: '사용자 지정 Relay 사용',
+    useDefaultRelay: '기본 Relay 사용',
+    diagnosticLogs: '진단 로그',
+    running: '실행 중',
+    stopped: '중지됨',
+    error: '오류',
+  },
+};
+
+export function renderDesktopAppHtml(
+  state: DesktopDashboardState,
+  options: RenderDesktopOptions = {},
+): string {
+  const locale: DesktopLocale = options.locale ?? 'en';
+  const t = DESKTOP_I18N[locale] ?? DESKTOP_I18N.en;
   const isRunning = state.bridge.status === 'running';
-  const statusLabel = isRunning ? 'Running' : state.bridge.status === 'error' ? 'Error' : 'Stopped';
+  const statusLabel = isRunning ? t.running : state.bridge.status === 'error' ? t.error : t.stopped;
   const statusClass = isRunning ? 'badge-success' : state.bridge.status === 'error' ? 'badge-danger' : 'badge-muted';
 
   const agentsHtml = state.agents
@@ -314,16 +415,24 @@ export function renderDesktopAppHtml(state: DesktopDashboardState): string {
   <header class="title-bar">
     <div class="title-brand">
       ${iconBridgeSvg()}
-      <span>Nienie Bridge Console</span>
+      <span>${escapeHtml(t.appTitle)}</span>
     </div>
-    <span class="badge ${statusClass}" id="bridge-status-badge">${statusLabel}</span>
+    <div style="display: flex; align-items: center; gap: var(--space-2); -webkit-app-region: no-drag;">
+      <select class="input" id="select-locale" style="width: auto; padding: 2px 8px;">
+        <option value="zh" ${locale === 'zh' ? 'selected' : ''}>中文</option>
+        <option value="en" ${locale === 'en' ? 'selected' : ''}>English</option>
+        <option value="ja" ${locale === 'ja' ? 'selected' : ''}>日本語</option>
+        <option value="ko" ${locale === 'ko' ? 'selected' : ''}>한국어</option>
+      </select>
+      <span class="badge ${statusClass}" id="bridge-status-badge">${escapeHtml(statusLabel)}</span>
+    </div>
   </header>
 
   <main class="workspace-grid">
     <section class="card">
       <div class="card-header">
-        <h2 class="card-title">${iconBridgeSvg()} Local Bridge</h2>
-        <button class="btn" id="btn-toggle-bridge">${isRunning ? 'Stop Bridge' : 'Start Bridge'}</button>
+        <h2 class="card-title">${iconBridgeSvg()} ${escapeHtml(t.localBridge)}</h2>
+        <button class="btn" id="btn-toggle-bridge">${escapeHtml(isRunning ? t.stopBridge : t.startBridge)}</button>
       </div>
       <div class="field-hint">Machine ID: ${escapeHtml(state.bridge.machineId)}</div>
       <div class="field-hint">Endpoint: ${escapeHtml(state.bridge.wsUrl ?? 'Not listening')}</div>
@@ -332,16 +441,16 @@ export function renderDesktopAppHtml(state: DesktopDashboardState): string {
 
     <section class="card">
       <div class="card-header">
-        <h2 class="card-title">${iconTerminalSvg()} Local Agents</h2>
-        <button class="btn btn-secondary" id="btn-refresh-agents">${iconRefreshSvg()} Detect</button>
+        <h2 class="card-title">${iconTerminalSvg()} ${escapeHtml(t.localAgents)}</h2>
+        <button class="btn btn-secondary" id="btn-refresh-agents">${iconRefreshSvg()} ${escapeHtml(t.detect)}</button>
       </div>
       ${agentsHtml || '<div class="field-hint">No agents detected yet.</div>'}
     </section>
 
     <section class="card">
       <div class="card-header">
-        <h2 class="card-title">${iconQrSvg()} Mobile Pairing</h2>
-        <button class="btn btn-secondary" id="btn-refresh-pairing">${iconRefreshSvg()} New Code</button>
+        <h2 class="card-title">${iconQrSvg()} ${escapeHtml(t.mobilePairing)}</h2>
+        <button class="btn btn-secondary" id="btn-refresh-pairing">${iconRefreshSvg()} ${escapeHtml(t.newCode)}</button>
       </div>
       ${pairingHtml}
       ${devicesHtml}
@@ -349,21 +458,21 @@ export function renderDesktopAppHtml(state: DesktopDashboardState): string {
 
     <section class="card">
       <div class="card-header">
-        <h2 class="card-title">${iconGlobeSvg()} Public Relay</h2>
+        <h2 class="card-title">${iconGlobeSvg()} ${escapeHtml(t.publicRelay)}</h2>
         <span class="badge badge-muted">${state.relay.mode === 'custom' ? 'Custom' : 'Default'}</span>
       </div>
       <div class="field-hint">Default Relay: <code>${escapeHtml(state.relay.defaultRelayUrl)}</code></div>
       <div class="field-hint">Active Relay: <code id="active-relay-url">${escapeHtml(state.relay.activeRelayUrl)}</code></div>
       <input class="input" id="input-custom-relay" type="text" placeholder="wss://relay.example.com" value="${escapeHtml(state.relay.customRelayUrl)}" />
       <div style="display: flex; gap: var(--space-2);">
-        <button class="btn" id="btn-save-custom-relay">Use Custom Relay</button>
-        <button class="btn btn-secondary" id="btn-use-default-relay">Use Default Relay</button>
+        <button class="btn" id="btn-save-custom-relay">${escapeHtml(t.useCustomRelay)}</button>
+        <button class="btn btn-secondary" id="btn-use-default-relay">${escapeHtml(t.useDefaultRelay)}</button>
       </div>
     </section>
 
     <section class="card card-full">
       <div class="card-header">
-        <h2 class="card-title">${iconLogSvg()} Diagnostic Logs</h2>
+        <h2 class="card-title">${iconLogSvg()} ${escapeHtml(t.diagnosticLogs)}</h2>
       </div>
       <div class="log-stream" id="log-stream">
         ${logsHtml}
@@ -372,6 +481,12 @@ export function renderDesktopAppHtml(state: DesktopDashboardState): string {
   </main>
   <script>
     window.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('select-locale')?.addEventListener('change', (ev) => {
+        const nextLang = ev.target.value;
+        const url = new URL(window.location.href);
+        url.searchParams.set('lang', nextLang);
+        window.location.href = url.toString();
+      });
       const api = window.nienieDesktop;
       if (!api) return;
       document.getElementById('btn-toggle-bridge')?.addEventListener('click', () => {

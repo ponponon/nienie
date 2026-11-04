@@ -368,4 +368,38 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('macbook_saved'), findsNothing);
   });
+
+  testWidgets('supports switching between Chinese, English, Japanese, and Korean in mobile UI', (
+    WidgetTester tester,
+  ) async {
+    final client = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: InMemoryCredentialStore(),
+      language: AppLanguage.zh,
+    );
+
+    await tester.pumpWidget(NienieMobileApp(client: client));
+
+    // 1. Chinese (zh)
+    expect(find.text('连接电脑 Bridge'), findsOneWidget);
+    expect(find.text('配对并连接'), findsOneWidget);
+
+    // 2. Switch to English (en)
+    client.setLanguage(AppLanguage.en);
+    await tester.pumpAndSettle();
+    expect(find.text('Connect to Computer Bridge'), findsOneWidget);
+    expect(find.text('Pair & Connect'), findsOneWidget);
+
+    // 3. Switch to Japanese (ja)
+    client.setLanguage(AppLanguage.ja);
+    await tester.pumpAndSettle();
+    expect(find.text('PC Bridge に接続'), findsOneWidget);
+    expect(find.text('ペアリングして接続'), findsOneWidget);
+
+    // 4. Switch to Korean (ko)
+    client.setLanguage(AppLanguage.ko);
+    await tester.pumpAndSettle();
+    expect(find.text('컴퓨터 Bridge 연결'), findsOneWidget);
+    expect(find.text('페어링 및 연결'), findsOneWidget);
+  });
 }
