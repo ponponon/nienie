@@ -15,6 +15,7 @@ Nienie 是一个移动优先的本地 AI 编程 Agent 控制台。手机端使�
 - `docs/architecture/agent-adapters.md`：Agent 适配器约束
 - `docs/protocols/canonical-events.md`：统一事件模型
 - `docs/protocols/mobile-bridge.md`：手机和 Bridge 通信协议
+- `docs/architecture/relay.md`：公网 Relay、隐私边界和可替换配置
 
 ## 目录边界
 
@@ -76,6 +77,8 @@ MVP 只实现 OpenCode 和 Codex。Claude Code、Pi、OpenClaw、ACP 和其他 A
 ## 安全原则
 
 - 默认只监听本机或受控网络接口。
+- 公网连接通过可替换 Relay，默认地址为 `wss://nienie-replay.quniv.cn`。
+- 不得把默认 Relay 设计为不可替换的中心服务。
 - 手机设备必须通过一次性配对码或二维码完成绑定。
 - 每个设备使用可撤销的独立凭据。
 - 不把 Agent API Key、CLI 登录凭据或完整环境变量发给手机。

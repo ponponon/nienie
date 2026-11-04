@@ -1,4 +1,10 @@
 export const PROTOCOL_VERSION = 1 as const;
+export const DEFAULT_RELAY_URL = 'wss://nienie-replay.quniv.cn' as const;
+
+export function resolveRelayUrl(customUrl?: string): string {
+  const value = customUrl?.trim();
+  return value || DEFAULT_RELAY_URL;
+}
 
 export type AgentId = 'opencode' | 'codex';
 export type AgentStatus = 'starting' | 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
@@ -32,13 +38,30 @@ export type AgentSession = {
   updatedAt: string;
 };
 
+export type CreateSessionInput = {
+  title?: string;
+  projectPath?: string;
+  parentSessionId?: string;
+};
+
+export type CanonicalAgentEventType =
+  | 'status'
+  | 'text_delta'
+  | 'thinking_delta'
+  | 'tool_use'
+  | 'tool_result'
+  | 'usage'
+  | 'error';
+
 export type CanonicalAgentEvent = {
   version: typeof PROTOCOL_VERSION;
   eventId: string;
+  machineId?: string;
+  agentId?: AgentId;
   sessionId: string;
   sequence: number;
   timestamp: string;
-  type: 'status' | 'text_delta' | 'thinking_delta' | 'tool_use' | 'tool_result' | 'usage' | 'error';
+  type: CanonicalAgentEventType;
   payload: Record<string, unknown>;
 };
 
@@ -46,7 +69,10 @@ export type BridgeRequest =
   | { type: 'hello'; requestId: string; protocolVersion: typeof PROTOCOL_VERSION }
   | { type: 'agents.list'; requestId: string }
   | { type: 'sessions.list'; requestId: string }
-  | { type: 'session.send'; requestId: string; sessionId: string; message: string };
+  | { type: 'session.create'; requestId: string; agentId: AgentId; input?: CreateSessionInput }
+  | { type: 'session.load'; requestId: string; agentId: AgentId; sessionId: string }
+  | { type: 'session.send'; requestId: string; sessionId: string; message: string }
+  | { type: 'session.cancel'; requestId: string; sessionId: string };
 
 export type BridgeResponse =
   | { type: 'response'; requestId: string; ok: true; data: unknown }

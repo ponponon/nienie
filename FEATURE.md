@@ -16,6 +16,7 @@
 - 建立统一事件协议和适配器架构文档
 - 建立 TypeScript workspace、统一协议包和 Bridge 核心骨架
 - 建立 OpenCode/Codex 适配器接口和 Electron 组合入口
+- 增加可替换公网 Relay 默认配置：`wss://nienie-replay.quniv.cn`
 
 ## MVP 规划
 
@@ -30,6 +31,9 @@
 - [ ] 基础状态和错误事件
 - [ ] 手机发送 Prompt
 - [ ] WebSocket 断线重连
+- [ ] 公网 Relay 连接和设备路由
+- [ ] 自定义 Relay 地址配置
+- [ ] Relay 端到端加密消息转发
 - [ ] 基础权限请求展示
 
 ## 后续规划

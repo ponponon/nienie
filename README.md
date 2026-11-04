@@ -22,6 +22,14 @@ Electron Desktop + Node.js Bridge
 
 Nienie 不是另一个模型服务，也不替代 OpenCode 或 Codex。Agent 继续使用用户电脑上的代码、工具链、账号和工作目录，Nienie 负责提供移动端控制界面。
 
+公网连接默认使用可替换的 Relay：
+
+```text
+wss://nienie-replay.quniv.cn
+```
+
+用户可以在设置中换成自己的 Relay。默认 Relay 只用于方便测试和试用，不是强制的中心服务。
+
 ## MVP 范围
 
 初版必须支持：
@@ -59,6 +67,7 @@ Nienie 不是另一个模型服务，也不替代 OpenCode 或 Codex。Agent 继
 | OpenCode | OpenCode HTTP/SSE 或 SDK | 结构化会话和事件接入 |
 | Codex | Codex 结构化运行接口 | Codex 会话和事件接入 |
 | 手机-电脑通信 | WebSocket | 实时双向消息和事件传输 |
+| 公网连接 | 可替换 WebSocket Relay | 电脑和手机都通过出站连接通信 |
 | 协议 | JSON Schema 风格 JSON | 共享 DTO 和统一事件模型 |
 
 ## 目录
@@ -104,6 +113,7 @@ scripts/                  开发和验证脚本
 - [Agent 适配器](docs/architecture/agent-adapters.md)
 - [统一事件协议](docs/protocols/canonical-events.md)
 - [手机端协议](docs/protocols/mobile-bridge.md)
+- [公网 Relay](docs/architecture/relay.md)
 - [功能记录](FEATURE.md)
 - [失败经验](FailureExperience.md)
 
