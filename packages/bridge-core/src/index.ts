@@ -139,7 +139,11 @@ export class SessionRouter {
   }
 }
 
-export { redactLogText } from '@nienie/agent-events';
+export {
+  CustomJsonlAdapter,
+  redactLogText,
+  type CustomJsonlAdapterOptions,
+} from '@nienie/agent-events';
 export {
   decodePairingQrPayload,
   decryptRelayPayload,

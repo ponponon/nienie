@@ -155,6 +155,7 @@
 - 桌面端全适配器矩阵集成（`includeExtendedAgents` in `apps/desktop`）：支持在桌面端一键启用并探测全部 7 类 Agent（`opencode`、`codex`、`claude-code`、`pi`、`acp`、`openclaw`、`pty`）
 - 移动端远程桌面快照与推送绑定集成（`ScreenCaptureCardItem`、`captureScreen`、`registerPushToken` in `apps/mobile`）：支持在会话时间线中渲染桌面屏幕快照卡片并向 Bridge 注册 iOS/Android 推送凭据
 - 生成 Flutter iOS 与 Android 原生宿主工程（`apps/mobile/ios` & `apps/mobile/android`）：配置 `cn.quniv.nienie_mobile` 包名及不依赖外部包的内联静态分析规则（`analysis_options.yaml`）
+- 实现通用 JSONL 命令 Agent 适配器（`CustomJsonlAdapter` in `@nienie/agent-events` & `@nienie/bridge-core`）：支持接入任意自定义 JSONL CLI Agent，并将未知错误事件安全保留为 `UNRECOGNIZED_AGENT_ERROR`
 
 ## MVP 规划
 

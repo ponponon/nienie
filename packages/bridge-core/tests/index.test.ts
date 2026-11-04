@@ -4,6 +4,7 @@ import type { AgentSession, BridgeResponse, CanonicalAgentEvent } from '@nienie/
 import {
   AgentRegistry,
   BridgeServer,
+  CustomJsonlAdapter,
   HeadlessBridgeDaemon,
   PairingManager,
   PushNotificationRouter,
@@ -859,6 +860,76 @@ describe('bridge core', () => {
         },
       },
     });
+  });
+
+  it('normalizes generic JSONL CLI agent output and preserves unknown errors via CustomJsonlAdapter', async () => {
+    const customAdapter = new CustomJsonlAdapter({
+      id: 'acp',
+      name: 'Generic JSONL Agent',
+      machineId: 'machine_jsonl',
+      runPrompt: async (_sessionId, prompt, emitLine) => {
+        emitLine(JSON.stringify({ type: 'text_delta', delta: `Echo: ${prompt}` }));
+        emitLine(
+          JSON.stringify({
+            type: 'tool_use',
+            toolCallId: 'c_1',
+            name: 'search',
+            input: { query: 'test', apiKey: 'sk-secret' },
+          }),
+        );
+        emitLine(
+          JSON.stringify({
+            type: 'tool_result',
+            toolCallId: 'c_1',
+            content: 'found 2 files',
+            isError: false,
+          }),
+        );
+        emitLine(
+          JSON.stringify({
+            type: 'unrecognized_critical_fault',
+            error: 'Unexpected segfault in plugin',
+          }),
+        );
+      },
+    });
+
+    const events: CanonicalAgentEvent[] = [];
+    customAdapter.onEvent((e) => events.push(e));
+
+    const session = await customAdapter.createSession({ title: 'JSONL Task' });
+    await customAdapter.sendMessage(session.id, 'hello jsonl');
+
+    expect(events.map((e) => ({ seq: e.sequence, type: e.type, payload: e.payload }))).toEqual([
+      { seq: 1, type: 'text_delta', payload: { delta: 'Echo: hello jsonl' } },
+      {
+        seq: 2,
+        type: 'tool_use',
+        payload: {
+          toolCallId: 'c_1',
+          name: 'search',
+          input: { query: 'test', apiKey: '[REDACTED]' },
+        },
+      },
+      {
+        seq: 3,
+        type: 'tool_result',
+        payload: {
+          toolCallId: 'c_1',
+          content: 'found 2 files',
+          isError: false,
+        },
+      },
+      {
+        seq: 4,
+        type: 'error',
+        payload: {
+          code: 'UNRECOGNIZED_AGENT_ERROR',
+          message: 'Unexpected segfault in plugin',
+          retryable: false,
+        },
+      },
+    ]);
   });
 });
 
