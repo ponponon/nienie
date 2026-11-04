@@ -11,6 +11,7 @@ import {
   type CanonicalAgentEvent,
 } from '@nienie/protocol';
 import { type AgentRegistry, SessionRouter } from './index.js';
+import type { PairingManager } from './pairing.js';
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const DEFAULT_HOST = '127.0.0.1';
@@ -19,6 +20,7 @@ const DEFAULT_CLIENT_TIMEOUT_MS = 45_000;
 
 export type BridgeServerOptions = {
   registry: AgentRegistry;
+  pairingManager?: PairingManager | undefined;
   host?: string | undefined;
   port?: number | undefined;
   machineId?: string | undefined;
@@ -40,12 +42,14 @@ type ClientConnection = {
   fragments: Buffer[];
   fragmentedOpcode: number | undefined;
   lastSeenAt: number;
+  authenticatedDeviceId: string | undefined;
   closed: boolean;
 };
 
 export class BridgeServer {
   private readonly registry: AgentRegistry;
   private readonly router: SessionRouter;
+  private readonly pairingManager: PairingManager | undefined;
   private readonly host: string;
   private readonly requestedPort: number;
   private readonly machineId: string;
@@ -56,15 +60,17 @@ export class BridgeServer {
   private httpServer: Server | undefined;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private unsubscribeEvents: (() => void) | undefined;
+  private unsubscribeRevoke: (() => void) | undefined;
   private readonly clients = new Map<string, ClientConnection>();
   private readonly sessionIndex = new Map<string, AgentSession>();
 
   constructor(options: BridgeServerOptions) {
     this.registry = options.registry;
     this.router = new SessionRouter(options.registry);
+    this.pairingManager = options.pairingManager;
     this.host = options.host ?? DEFAULT_HOST;
     this.requestedPort = options.port ?? 0;
-    this.machineId = options.machineId ?? 'machine_local';
+    this.machineId = options.machineId ?? options.pairingManager?.machineId ?? 'machine_local';
     this.maxPayloadBytes = options.maxPayloadBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.clientTimeoutMs = options.clientTimeoutMs ?? DEFAULT_CLIENT_TIMEOUT_MS;
@@ -94,6 +100,15 @@ export class BridgeServer {
     this.unsubscribeEvents = this.registry.onEvent((event) => {
       this.broadcastEvent(event);
     });
+    if (this.pairingManager) {
+      this.unsubscribeRevoke = this.pairingManager.onDeviceRevoked((deviceId) => {
+        for (const client of this.clients.values()) {
+          if (client.authenticatedDeviceId === deviceId) {
+            client.authenticatedDeviceId = undefined;
+          }
+        }
+      });
+    }
 
     this.heartbeatTimer = setInterval(() => {
       this.checkHeartbeats();
@@ -112,6 +127,11 @@ export class BridgeServer {
     if (this.unsubscribeEvents) {
       this.unsubscribeEvents();
       this.unsubscribeEvents = undefined;
+    }
+
+    if (this.unsubscribeRevoke) {
+      this.unsubscribeRevoke();
+      this.unsubscribeRevoke = undefined;
     }
 
     for (const client of this.clients.values()) {
@@ -191,6 +211,7 @@ export class BridgeServer {
       fragments: [],
       fragmentedOpcode: undefined,
       lastSeenAt: Date.now(),
+      authenticatedDeviceId: undefined,
       closed: false,
     };
 
@@ -331,7 +352,7 @@ export class BridgeServer {
 
     const request = parsed.request;
     try {
-      const data = await this.executeRequest(request);
+      const data = await this.executeRequest(client, request);
       this.sendMessage(client, {
         type: 'response',
         requestId: request.requestId,
@@ -351,13 +372,27 @@ export class BridgeServer {
     }
   }
 
-  private async executeRequest(request: BridgeRequest): Promise<unknown> {
+  private async executeRequest(client: ClientConnection, request: BridgeRequest): Promise<unknown> {
     switch (request.type) {
-      case 'hello':
+      case 'hello': {
+        if (request.deviceToken && this.pairingManager) {
+          const device = this.pairingManager.verifyToken(request.deviceToken);
+          if (!device) {
+            throw new BridgeCommandError('UNAUTHORIZED', 'Invalid or revoked device token');
+          }
+          client.authenticatedDeviceId = device.deviceId;
+          return {
+            protocolVersion: PROTOCOL_VERSION,
+            machineId: this.machineId,
+            authenticated: true,
+            deviceId: device.deviceId,
+          };
+        }
         return {
           protocolVersion: PROTOCOL_VERSION,
           machineId: this.machineId,
         };
+      }
 
       case 'ping':
         return {
@@ -365,12 +400,38 @@ export class BridgeServer {
           timestamp: new Date().toISOString(),
         };
 
+      case 'pair.confirm': {
+        if (!this.pairingManager) {
+          throw new BridgeCommandError('PAIRING_UNAVAILABLE', 'Pairing manager is not configured');
+        }
+        const confirmed = this.pairingManager.confirmPairing({
+          pairingCode: request.pairingCode,
+          deviceName: request.deviceName,
+          platform: request.platform,
+        });
+        if (!confirmed) {
+          throw new BridgeCommandError(
+            'INVALID_PAIRING_CODE',
+            'Pairing code is invalid or expired',
+          );
+        }
+        client.authenticatedDeviceId = confirmed.deviceId;
+        return {
+          deviceId: confirmed.deviceId,
+          deviceToken: confirmed.deviceToken,
+          machineId: confirmed.machineId,
+          pairedAt: confirmed.pairedAt,
+        };
+      }
+
       case 'agents.list': {
+        this.requireAuthenticated(client);
         const agents = await this.registry.detectAll();
         return { agents };
       }
 
       case 'sessions.list': {
+        this.requireAuthenticated(client);
         const sessions = await this.registry.listSessions();
         for (const session of sessions) {
           this.sessionIndex.set(session.id, session);
@@ -379,28 +440,48 @@ export class BridgeServer {
       }
 
       case 'session.create': {
+        this.requireAuthenticated(client);
         const session = await this.router.createSession(request.agentId, request.input);
         this.sessionIndex.set(session.id, session);
         return { session };
       }
 
       case 'session.load': {
+        this.requireAuthenticated(client);
         const session = await this.router.loadSession(request.agentId, request.sessionId);
         this.sessionIndex.set(session.id, session);
         return { session };
       }
 
       case 'session.send': {
+        this.requireAuthenticated(client);
         const session = await this.resolveSession(request.sessionId, request.agentId);
         await this.router.sendMessage(session, request.message);
         return { accepted: true, sessionId: session.id };
       }
 
       case 'session.cancel': {
+        this.requireAuthenticated(client);
         const session = await this.resolveSession(request.sessionId);
         await this.router.cancel(session);
         return { cancelled: true, sessionId: session.id };
       }
+    }
+  }
+
+  private isClientAuthorized(client: ClientConnection): boolean {
+    if (!this.pairingManager) {
+      return true;
+    }
+    if (!client.authenticatedDeviceId) {
+      return false;
+    }
+    return this.pairingManager.isDeviceActive(client.authenticatedDeviceId);
+  }
+
+  private requireAuthenticated(client: ClientConnection): void {
+    if (!this.isClientAuthorized(client)) {
+      throw new BridgeCommandError('UNAUTHORIZED', 'Device authentication required');
     }
   }
 
@@ -437,7 +518,9 @@ export class BridgeServer {
       event,
     };
     for (const client of this.clients.values()) {
-      this.sendMessage(client, response);
+      if (this.isClientAuthorized(client)) {
+        this.sendMessage(client, response);
+      }
     }
   }
 

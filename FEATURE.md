@@ -46,12 +46,22 @@
   - 内置 WebSocket Ping/Pong 心跳巡检、超大帧拦截（1009）与客户端断线自动清理
 - 在 `@nienie/desktop` 中提供 `createDesktopBridgeServer()` 组合入口
 
+### 2026-11-04 实现本地配对与设备鉴权机制
+
+- 在 `@nienie/protocol` 中实现 `PairingQrPayload`、`encodePairingQrPayload()` / `decodePairingQrPayload()`（`nienie://pair?data=...` URI 编解码）及 `pair.confirm` 请求校验
+- 在 `@nienie/bridge-core` 中实现 `PairingManager`：
+  - 生成带过期时间（TTL）的 6 位一次性配对码与二维码 URI（二维码不暴漏长期密钥）
+  - 手机完成 `pair.confirm` 后配对码立即作废，签发独立 `deviceId` 与高熵 `deviceToken`（服务端仅存储 SHA-256 哈希）
+  - 支持重连时通过 `hello` 携带 `deviceToken` 恢复设备鉴权
+  - 支持 `revokeDevice()` 单独撤销设备凭据，并在 `BridgeServer` 中实时吊销活跃连接权限与事件广播订阅
+  - 未授权设备发起 `agents.list`、`sessions.list`、`session.create`、`session.load`、`session.send`、`session.cancel` 请求一律拦截并返回 `UNAUTHORIZED`
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查
 - [x] OpenCode 适配器
 - [ ] Codex 适配器
-- [ ] 手机与电脑二维码配对
+- [x] 手机与电脑二维码配对
 - [ ] 手机会话列表
 - [ ] 手机会话详情
 - [x] 流式文本事件

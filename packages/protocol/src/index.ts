@@ -45,6 +45,62 @@ export type CreateSessionInput = {
   parentSessionId?: string | undefined;
 };
 
+export type DevicePlatform = 'ios' | 'android' | 'unknown';
+
+export type PairingQrPayload = {
+  version: typeof PROTOCOL_VERSION;
+  machineId: string;
+  wsUrl: string;
+  relayUrl?: string | undefined;
+  pairingCode: string;
+  expiresAt: string;
+};
+
+export type PairedDevice = {
+  deviceId: string;
+  deviceName: string;
+  platform: DevicePlatform;
+  pairedAt: string;
+  lastSeenAt: string;
+  revokedAt?: string | undefined;
+};
+
+export function encodePairingQrPayload(payload: PairingQrPayload): string {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  return `nienie://pair?data=${encoded}`;
+}
+
+export function decodePairingQrPayload(input: string): PairingQrPayload {
+  const trimmed = input.trim();
+  let jsonText = trimmed;
+  if (trimmed.startsWith('nienie://')) {
+    const url = new URL(trimmed);
+    const dataParam = url.searchParams.get('data');
+    if (!dataParam) {
+      throw new Error('Missing data parameter in pairing QR URI');
+    }
+    jsonText = Buffer.from(dataParam, 'base64url').toString('utf8');
+  }
+  const parsed = JSON.parse(jsonText) as Partial<PairingQrPayload>;
+  if (
+    parsed.version !== PROTOCOL_VERSION ||
+    typeof parsed.machineId !== 'string' ||
+    typeof parsed.wsUrl !== 'string' ||
+    typeof parsed.pairingCode !== 'string' ||
+    typeof parsed.expiresAt !== 'string'
+  ) {
+    throw new Error('Invalid pairing QR payload');
+  }
+  return {
+    version: PROTOCOL_VERSION,
+    machineId: parsed.machineId,
+    wsUrl: parsed.wsUrl,
+    ...(typeof parsed.relayUrl === 'string' ? { relayUrl: parsed.relayUrl } : {}),
+    pairingCode: parsed.pairingCode,
+    expiresAt: parsed.expiresAt,
+  };
+}
+
 export type CanonicalAgentEventType =
   | 'status'
   | 'text_delta'
@@ -69,6 +125,13 @@ export type CanonicalAgentEvent = {
 export type BridgeRequest =
   | { type: 'hello'; requestId: string; protocolVersion: typeof PROTOCOL_VERSION; deviceToken?: string | undefined }
   | { type: 'ping'; requestId: string }
+  | {
+      type: 'pair.confirm';
+      requestId: string;
+      pairingCode: string;
+      deviceName: string;
+      platform?: DevicePlatform | undefined;
+    }
   | { type: 'agents.list'; requestId: string }
   | { type: 'sessions.list'; requestId: string }
   | { type: 'session.create'; requestId: string; agentId: AgentId; input?: CreateSessionInput | undefined }
@@ -177,6 +240,32 @@ export function parseBridgeRequest(
     case 'ping':
       return { ok: true, request: { type: 'ping', requestId } };
 
+    case 'pair.confirm': {
+      if (
+        typeof obj.pairingCode !== 'string' ||
+        !obj.pairingCode.trim() ||
+        typeof obj.deviceName !== 'string' ||
+        !obj.deviceName.trim()
+      ) {
+        return {
+          ok: false,
+          requestId,
+          error: { code: 'BAD_REQUEST', message: 'Invalid pairingCode or deviceName' },
+        };
+      }
+      const platform = isDevicePlatform(obj.platform) ? obj.platform : undefined;
+      return {
+        ok: true,
+        request: {
+          type: 'pair.confirm',
+          requestId,
+          pairingCode: obj.pairingCode.trim(),
+          deviceName: obj.deviceName.trim(),
+          ...(platform ? { platform } : {}),
+        },
+      };
+    }
+
     case 'agents.list':
       return { ok: true, request: { type: 'agents.list', requestId } };
 
@@ -281,4 +370,8 @@ export function parseBridgeRequest(
 
 function isAgentId(value: unknown): value is AgentId {
   return value === 'opencode' || value === 'codex';
+}
+
+function isDevicePlatform(value: unknown): value is DevicePlatform {
+  return value === 'ios' || value === 'android' || value === 'unknown';
 }

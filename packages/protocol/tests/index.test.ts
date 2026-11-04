@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  decodePairingQrPayload,
   DEFAULT_RELAY_URL,
+  encodePairingQrPayload,
   parseBridgeRequest,
   PROTOCOL_VERSION,
   resolveRelayUrl,
@@ -50,5 +52,40 @@ describe('protocol', () => {
     if (!oversized.ok) {
       expect(oversized.error.code).toBe('MESSAGE_TOO_LARGE');
     }
+
+    const pairConfirm = parseBridgeRequest(
+      JSON.stringify({
+        type: 'pair.confirm',
+        requestId: 'req_pair_1',
+        pairingCode: '123456',
+        deviceName: 'iPhone 17 Pro',
+        platform: 'ios',
+      }),
+    );
+    expect(pairConfirm).toEqual({
+      ok: true,
+      request: {
+        type: 'pair.confirm',
+        requestId: 'req_pair_1',
+        pairingCode: '123456',
+        deviceName: 'iPhone 17 Pro',
+        platform: 'ios',
+      },
+    });
+  });
+
+  it('encodes and decodes one-time pairing QR payloads without long-lived secrets', () => {
+    const payload = {
+      version: 1 as const,
+      machineId: 'machine_mac',
+      wsUrl: 'ws://192.168.1.10:4100',
+      relayUrl: DEFAULT_RELAY_URL,
+      pairingCode: '849201',
+      expiresAt: '2026-11-04T12:05:00.000Z',
+    };
+
+    const uri = encodePairingQrPayload(payload);
+    expect(uri.startsWith('nienie://pair?data=')).toBe(true);
+    expect(decodePairingQrPayload(uri)).toEqual(payload);
   });
 });

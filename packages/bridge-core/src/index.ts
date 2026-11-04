@@ -104,3 +104,10 @@ export {
   type BridgeServerAddress,
   type BridgeServerOptions,
 } from './ws-server.js';
+export {
+  PairingManager,
+  type ConfirmPairingInput,
+  type ConfirmPairingResult,
+  type PairingChallenge,
+  type PairingManagerOptions,
+} from './pairing.js';

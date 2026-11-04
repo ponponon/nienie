@@ -71,6 +71,45 @@ error
 - 生产环境不能把长期密钥放进二维码明文。
 - MVP 可以先使用本地网络配对，后续再加入 Tailscale、Relay 或其他远程网络方案。
 
+### 二维码配对载荷 (`nienie://pair?data=<base64url>`)
+
+```json
+{
+  "version": 1,
+  "machineId": "machine_local",
+  "wsUrl": "ws://192.168.1.10:4100",
+  "relayUrl": "wss://nienie-replay.quniv.cn",
+  "pairingCode": "849201",
+  "expiresAt": "2026-11-04T12:05:00.000Z"
+}
+```
+
+### `pair.confirm` 请求与响应
+
+```json
+{
+  "type": "pair.confirm",
+  "requestId": "req_pair_1",
+  "pairingCode": "849201",
+  "deviceName": "iPhone 17 Pro",
+  "platform": "ios"
+}
+```
+
+```json
+{
+  "type": "response",
+  "requestId": "req_pair_1",
+  "ok": true,
+  "data": {
+    "deviceId": "dev_123",
+    "deviceToken": "ntk_...",
+    "machineId": "machine_local",
+    "pairedAt": "2026-11-04T12:00:10.000Z"
+  }
+}
+```
+
 ## 重连要求
 
 - 每个事件包含递增 `sequence`。

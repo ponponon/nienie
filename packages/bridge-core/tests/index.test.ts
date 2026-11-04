@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentAdapter } from '@nienie/agent-events';
 import type { AgentSession, BridgeResponse, CanonicalAgentEvent } from '@nienie/protocol';
-import { AgentRegistry, BridgeServer, SessionRouter } from '../src/index.js';
+import { AgentRegistry, BridgeServer, PairingManager, SessionRouter } from '../src/index.js';
 
 function adapter(id: 'opencode' | 'codex'): AgentAdapter & { emit(event: CanonicalAgentEvent): void } {
   const listeners = new Set<(event: CanonicalAgentEvent) => void>();
@@ -313,6 +313,190 @@ describe('bridge core', () => {
     await waitFor(() => server.getConnectedClientCount() === 1);
     clientA.close();
     await waitFor(() => server.getConnectedClientCount() === 0);
+  });
+
+  it('enforces one-time pairing codes, issues device credentials, rejects unauthorized requests, and revokes devices', async () => {
+    let nowMs = Date.parse('2026-11-04T10:00:00.000Z');
+    const pairingManager = new PairingManager({
+      machineId: 'machine_secure',
+      ttlMs: 60_000,
+      now: () => new Date(nowMs),
+    });
+
+    const registry = new AgentRegistry();
+    const opencode = adapter('opencode');
+    const executedPrompts: string[] = [];
+    opencode.sendMessage = async (_sessionId, message) => {
+      executedPrompts.push(message);
+    };
+    registry.register(opencode);
+
+    const server = new BridgeServer({
+      registry,
+      pairingManager,
+      machineId: 'machine_secure',
+      port: 0,
+    });
+    const { url } = await server.start();
+    cleanups.push(() => server.stop());
+
+    const unauthorizedClient = await connectWsClient(url);
+    const mobileClient = await connectWsClient(url);
+    cleanups.push(async () => {
+      unauthorizedClient.close();
+      mobileClient.close();
+    });
+
+    // 1. Unauthorized client cannot list sessions or send prompts
+    const unauthSessions = await unauthorizedClient.request({
+      type: 'sessions.list',
+      requestId: 'req_unauth_1',
+    });
+    expect(unauthSessions).toEqual({
+      type: 'response',
+      requestId: 'req_unauth_1',
+      ok: false,
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Device authentication required',
+      },
+    });
+
+    const unauthSend = await unauthorizedClient.request({
+      type: 'session.send',
+      requestId: 'req_unauth_2',
+      sessionId: 'ses_seed_1',
+      message: 'malicious command',
+    });
+    expect(unauthSend).toEqual({
+      type: 'response',
+      requestId: 'req_unauth_2',
+      ok: false,
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Device authentication required',
+      },
+    });
+    expect(executedPrompts).toEqual([]);
+
+    // 2. Generate one-time pairing code & QR payload
+    const pairingChallenge = pairingManager.createPairingCode({ wsUrl: url });
+    expect(pairingChallenge.qrUri.startsWith('nienie://pair?data=')).toBe(true);
+    expect(pairingChallenge.pairingCode).toMatch(/^\d{6}$/);
+
+    // 3. Mobile pairs using the one-time pairing code
+    const pairRes = await mobileClient.request({
+      type: 'pair.confirm',
+      requestId: 'req_pair_ok',
+      pairingCode: pairingChallenge.pairingCode,
+      deviceName: 'Pon iPhone',
+      platform: 'ios',
+    });
+    expect(pairRes.type).toBe('response');
+    if (pairRes.type !== 'response' || !pairRes.ok) {
+      throw new Error('Expected successful pair.confirm response');
+    }
+    const pairData = pairRes.data as {
+      deviceId: string;
+      deviceToken: string;
+      machineId: string;
+    };
+    expect(pairData.machineId).toBe('machine_secure');
+    expect(pairData.deviceId).toBeTruthy();
+    expect(pairData.deviceToken.length).toBeGreaterThanOrEqual(32);
+
+    // 4. Reusing the same one-time pairing code is rejected
+    const reuseRes = await unauthorizedClient.request({
+      type: 'pair.confirm',
+      requestId: 'req_pair_reuse',
+      pairingCode: pairingChallenge.pairingCode,
+      deviceName: 'Attacker Phone',
+    });
+    expect(reuseRes).toEqual({
+      type: 'response',
+      requestId: 'req_pair_reuse',
+      ok: false,
+      error: {
+        code: 'INVALID_PAIRING_CODE',
+        message: 'Pairing code is invalid or expired',
+      },
+    });
+
+    // 5. Expired pairing code is rejected
+    const expiringChallenge = pairingManager.createPairingCode({ wsUrl: url });
+    nowMs += 61_000;
+    const expiredRes = await unauthorizedClient.request({
+      type: 'pair.confirm',
+      requestId: 'req_pair_expired',
+      pairingCode: expiringChallenge.pairingCode,
+      deviceName: 'Late Phone',
+    });
+    expect(expiredRes).toEqual({
+      type: 'response',
+      requestId: 'req_pair_expired',
+      ok: false,
+      error: {
+        code: 'INVALID_PAIRING_CODE',
+        message: 'Pairing code is invalid or expired',
+      },
+    });
+
+    // 6. Paired mobile client can now send prompt and receive events
+    const authedSend = await mobileClient.request({
+      type: 'session.send',
+      requestId: 'req_authed_send',
+      sessionId: 'ses_seed_1',
+      message: 'run tests safely',
+    });
+    expect(authedSend).toEqual({
+      type: 'response',
+      requestId: 'req_authed_send',
+      ok: true,
+      data: { accepted: true, sessionId: 'ses_seed_1' },
+    });
+    expect(executedPrompts).toEqual(['run tests safely']);
+
+    // 7. Reconnecting with deviceToken in hello authenticates the new connection
+    const reconnectedClient = await connectWsClient(url);
+    cleanups.push(async () => reconnectedClient.close());
+
+    const helloAuthRes = await reconnectedClient.request({
+      type: 'hello',
+      requestId: 'req_hello_token',
+      protocolVersion: 1,
+      deviceToken: pairData.deviceToken,
+    });
+    expect(helloAuthRes).toEqual({
+      type: 'response',
+      requestId: 'req_hello_token',
+      ok: true,
+      data: {
+        protocolVersion: 1,
+        machineId: 'machine_secure',
+        authenticated: true,
+        deviceId: pairData.deviceId,
+      },
+    });
+
+    // 8. Revoking the device immediately blocks future commands and token reuse
+    expect(pairingManager.revokeDevice(pairData.deviceId)).toBe(true);
+    expect(
+      pairingManager.listDevices().find((d) => d.deviceId === pairData.deviceId)?.revokedAt,
+    ).toBeTruthy();
+
+    const afterRevokeRes = await reconnectedClient.request({
+      type: 'agents.list',
+      requestId: 'req_after_revoke',
+    });
+    expect(afterRevokeRes).toEqual({
+      type: 'response',
+      requestId: 'req_after_revoke',
+      ok: false,
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Device authentication required',
+      },
+    });
   });
 });
 
