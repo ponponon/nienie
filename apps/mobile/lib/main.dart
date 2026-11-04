@@ -1409,12 +1409,14 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   final TextEditingController _wsUrlController =
       TextEditingController(text: 'ws://127.0.0.1:4100');
   final TextEditingController _pairingCodeController = TextEditingController();
+  final TextEditingController _qrUriController = TextEditingController();
   final TextEditingController _promptController = TextEditingController();
 
   @override
   void dispose() {
     _wsUrlController.dispose();
     _pairingCodeController.dispose();
+    _qrUriController.dispose();
     _promptController.dispose();
     super.dispose();
   }
@@ -1531,6 +1533,24 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   },
                   icon: const Icon(Icons.link),
                   label: const Text('Pair & Connect'),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  key: const Key('input-qr-uri'),
+                  controller: _qrUriController,
+                  decoration: const InputDecoration(
+                    labelText: 'Or Paste Pairing QR URI (nienie://pair?data=...)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  key: const Key('btn-pair-qr-uri'),
+                  onPressed: () {
+                    client.pairWithQrUri(_qrUriController.text);
+                  },
+                  icon: const Icon(Icons.qr_code),
+                  label: const Text('Pair with QR URI'),
                 ),
                 if (client.errorMessage != null) ...[
                   const SizedBox(height: 12),

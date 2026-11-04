@@ -295,4 +295,34 @@ void main() {
       expect(find.text('Mobile Session'), findsOneWidget);
     },
   );
+
+  testWidgets('pairs directly by pasting nienie://pair QR URI in the pairing panel', (
+    WidgetTester tester,
+  ) async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+
+    final rawPayload = {
+      'version': 1,
+      'machineId': 'machine_qr_ui',
+      'wsUrl': 'ws://127.0.0.1:4100',
+      'relayUrl': DEFAULT_RELAY_URL,
+      'pairingCode': '777888',
+      'expiresAt': '2026-11-04T12:00:00.000Z',
+    };
+    final encoded = base64Url.encode(utf8.encode(jsonEncode(rawPayload)));
+    final qrUri = 'nienie://pair?data=$encoded';
+
+    await tester.pumpWidget(NienieMobileApp(client: client));
+
+    await tester.enterText(find.byKey(const Key('input-qr-uri')), qrUri);
+    await tester.tap(find.byKey(const Key('btn-pair-qr-uri')));
+    await tester.pumpAndSettle();
+
+    expect(client.connectionState, BridgeConnectionState.connected);
+    expect(find.text('OpenCode'), findsOneWidget);
+  });
 }

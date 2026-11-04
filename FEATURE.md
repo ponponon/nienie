@@ -160,6 +160,7 @@
 - 电脑端配对设备与撤销状态磁盘持久化（`persistenceFilePath` in `PairingManager`）：仅存储 `tokenHash` 摘要，使已绑定手机与已撤销设备状态在 Bridge 重启后自动恢复
 - 移动端一键新建会话按钮（`btn-new-session` in `apps/mobile`）：在移动端顶栏支持一键创建新会话并自动切换至新会话视图
 - 移动端二维码 URI 一键配对、Token 用量卡片与会话取消按钮（`pairWithQrUri`、`UsageSummaryItem`、`cancelActiveSession` in `apps/mobile`）：实现 7 类 `CanonicalAgentEvent` 在移动端的 100% 视觉卡片覆盖与一键中止运行中会话
+- 移动端配对面板 QR URI 快捷输入框与按钮（`input-qr-uri` & `btn-pair-qr-uri` in `apps/mobile`）：支持直接粘贴 `nienie://pair?data=...` URI 一键完成配对连接
 
 ## MVP 规划
 
