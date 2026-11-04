@@ -340,6 +340,25 @@ describe('OpenCodeAdapter', () => {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/config/providers') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            providers: [
+              {
+                id: 'anthropic',
+                name: 'Anthropic',
+                models: {
+                  'claude-sonnet-4': { id: 'claude-sonnet-4', name: 'Claude Sonnet 4' },
+                },
+              },
+            ],
+            default: { anthropic: 'claude-sonnet-4' },
+          }),
+        );
+        return;
+      }
+
       if (req.method === 'GET' && url.pathname === '/session') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(OPENCODE_SESSIONS_FIXTURE));
@@ -491,7 +510,7 @@ describe('OpenCodeAdapter', () => {
     });
     cleanups.push(() => adapter.dispose());
 
-    // 1. detect()
+    // 1. detect() & listModels()
     const info = await adapter.detect();
     expect(info).toEqual({
       id: 'opencode',
@@ -500,6 +519,17 @@ describe('OpenCodeAdapter', () => {
       version: '0.15.2',
       capabilities: adapter.capabilities,
     });
+
+    const models = await adapter.listModels();
+    expect(models).toEqual([
+      {
+        id: 'anthropic/claude-sonnet-4',
+        name: 'Claude Sonnet 4',
+        providerId: 'anthropic',
+        providerName: 'Anthropic',
+        isDefault: true,
+      },
+    ]);
 
     // 2. listSessions()
     const sessions = await adapter.listSessions();

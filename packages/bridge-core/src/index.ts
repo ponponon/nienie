@@ -5,6 +5,7 @@ import type {
   AgentSession,
   CanonicalAgentEvent,
   CreateSessionInput,
+  ModelInfo,
   PermissionDecision,
 } from '@nienie/protocol';
 
@@ -37,6 +38,17 @@ export class AgentRegistry {
   async listSessions(): Promise<AgentSession[]> {
     const sessions = await Promise.all([...this.adapters.values()].map((adapter) => adapter.listSessions()));
     return sessions.flat();
+  }
+
+  async listModels(agentId: AgentId): Promise<ModelInfo[]> {
+    const adapter = this.adapters.get(agentId);
+    if (!adapter) {
+      throw new Error(`No adapter registered for agent: ${agentId}`);
+    }
+    if (!adapter.listModels) {
+      return [];
+    }
+    return adapter.listModels();
   }
 
   onEvent(listener: (event: CanonicalAgentEvent) => void): () => void {

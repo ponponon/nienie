@@ -112,6 +112,14 @@ export type AgentInfo = {
   capabilities: AgentCapabilities;
 };
 
+export type ModelInfo = {
+  id: string;
+  name: string;
+  providerId: string;
+  providerName: string;
+  isDefault: boolean;
+};
+
 export type AgentSession = {
   id: string;
   agentId: AgentId;
@@ -219,11 +227,19 @@ export type BridgeRequest =
     }
   | { type: 'machine.get'; requestId: string }
   | { type: 'agents.list'; requestId: string }
+  | { type: 'models.list'; requestId: string; agentId: AgentId }
   | { type: 'sessions.list'; requestId: string }
   | { type: 'session.create'; requestId: string; agentId: AgentId; input?: CreateSessionInput | undefined }
   | { type: 'session.load'; requestId: string; agentId: AgentId; sessionId: string }
   | { type: 'session.state'; requestId: string; sessionId: string; agentId?: AgentId | undefined }
-  | { type: 'session.send'; requestId: string; sessionId: string; message: string; agentId?: AgentId | undefined }
+  | {
+      type: 'session.send';
+      requestId: string;
+      sessionId: string;
+      message: string;
+      agentId?: AgentId | undefined;
+      modelId?: string | undefined;
+    }
   | { type: 'session.cancel'; requestId: string; sessionId: string }
   | {
       type: 'permission.reply';
@@ -370,6 +386,20 @@ export function parseBridgeRequest(
     case 'agents.list':
       return { ok: true, request: { type: 'agents.list', requestId } };
 
+    case 'models.list': {
+      if (!isAgentId(obj.agentId)) {
+        return {
+          ok: false,
+          requestId,
+          error: { code: 'BAD_REQUEST', message: 'Invalid or missing agentId' },
+        };
+      }
+      return {
+        ok: true,
+        request: { type: 'models.list', requestId, agentId: obj.agentId },
+      };
+    }
+
     case 'machine.get':
       return { ok: true, request: { type: 'machine.get', requestId } };
 
@@ -438,6 +468,9 @@ export function parseBridgeRequest(
           sessionId: obj.sessionId,
           message: obj.message,
           ...(isAgentId(obj.agentId) ? { agentId: obj.agentId } : {}),
+          ...(typeof obj.modelId === 'string' && obj.modelId.trim()
+            ? { modelId: obj.modelId.trim() }
+            : {}),
         },
       };
     }

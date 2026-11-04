@@ -114,6 +114,7 @@
 - 权限审批闭环（`permission.reply`）：对接 OpenCode `POST /session/:id/permissions/:permissionID`（支持 `allow_once`、`allow_always`、`reject`），并在 `BridgeServer` 中严格拦截未授权设备的审批请求
 - 日志脱敏（`redactLogText`）：自动脱敏诊断日志中的 `ntk_*` 设备令牌、`sk-*` API Key、`Bearer`/`Basic` 标头与密码键值
 - 多机器管理：移动端 `DeviceCredentialStore` 支持存储、列出、按 `machineId` 切换与移除多台已配对电脑
+- 模型发现与切换（`models.list`）：`OpenCodeAdapter.listModels()` 对接 `GET /config/providers` 提取可用模型与默认模型，`BridgeServer` 暴露 `models.list` 命令并支持在 `session.send` 中指定 `modelId`
 
 ## MVP 规划
 
@@ -136,7 +137,7 @@
 ## 后续规划
 
 - [x] 文件变更和 Diff 卡片
-- [ ] 模型选择和 Agent 能力展示
+- [x] 模型选择和 Agent 能力展示
 - [x] 会话恢复
 - [x] 多台电脑管理
 - [ ] ACP 适配器

@@ -16,6 +16,7 @@ ping
 pair.confirm
 machine.get
 agents.list
+models.list
 sessions.list
 session.create
 session.load

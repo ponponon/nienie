@@ -7,6 +7,7 @@ import {
   type CanonicalAgentEvent,
   type CanonicalAgentEventType,
   type CreateSessionInput,
+  type ModelInfo,
   type PermissionDecision,
 } from '@nienie/protocol';
 
@@ -15,6 +16,7 @@ export type AgentAdapter = {
   readonly name: string;
   readonly capabilities: AgentCapabilities;
   detect(): Promise<AgentInfo>;
+  listModels?(): Promise<ModelInfo[]>;
   listSessions(): Promise<AgentSession[]>;
   createSession?(input?: CreateSessionInput): Promise<AgentSession>;
   loadSession?(sessionId: string): Promise<AgentSession>;

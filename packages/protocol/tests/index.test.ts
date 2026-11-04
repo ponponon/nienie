@@ -169,5 +169,21 @@ describe('protocol', () => {
         decision: 'allow_once',
       },
     });
+
+    const modelsReq = parseBridgeRequest(
+      JSON.stringify({
+        type: 'models.list',
+        requestId: 'req_models_1',
+        agentId: 'opencode',
+      }),
+    );
+    expect(modelsReq).toEqual({
+      ok: true,
+      request: {
+        type: 'models.list',
+        requestId: 'req_models_1',
+        agentId: 'opencode',
+      },
+    });
   });
 });

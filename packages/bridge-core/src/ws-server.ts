@@ -486,6 +486,12 @@ export class BridgeServer {
         return { agents };
       }
 
+      case 'models.list': {
+        if (!bypassAuth) this.requireAuthenticated(client);
+        const models = await this.registry.listModels(request.agentId);
+        return { agentId: request.agentId, models };
+      }
+
       case 'machine.get': {
         if (!bypassAuth) this.requireAuthenticated(client);
         const [agents, sessions] = await Promise.all([

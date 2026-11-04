@@ -4,6 +4,7 @@ import type {
   AgentStatus,
   CanonicalAgentEvent,
   CreateSessionInput,
+  ModelInfo,
   PermissionDecision,
 } from '@nienie/protocol';
 import { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
@@ -124,6 +125,39 @@ export class OpenCodeAdapter implements AgentAdapter {
     ]);
 
     return sessionsRes.map((raw) => this.mapSession(raw, statusMap[raw.id]));
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    const data = await this.requestJson<{
+      providers?: Array<{
+        id: string;
+        name?: string;
+        models?: Record<string, { id?: string; name?: string }>;
+      }>;
+      default?: Record<string, string>;
+    }>('/config/providers', { method: 'GET' });
+
+    const models: ModelInfo[] = [];
+    const defaults = data.default ?? {};
+
+    for (const provider of data.providers ?? []) {
+      const providerId = provider.id;
+      const providerName = provider.name ?? providerId;
+      const defaultModelId = defaults[providerId];
+
+      for (const [key, model] of Object.entries(provider.models ?? {})) {
+        const modelId = model.id ?? key;
+        models.push({
+          id: `${providerId}/${modelId}`,
+          name: model.name ?? modelId,
+          providerId,
+          providerName,
+          isDefault: defaultModelId === modelId,
+        });
+      }
+    }
+
+    return models;
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {
