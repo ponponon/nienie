@@ -174,6 +174,7 @@
 - 移动端代码模块化分层重构（`apps/mobile/lib/src/*`）：将 `lib/main.dart` 拆分为 `i18n`、`models`、`storage`、`transport`、`state`、`ui` 六大职责子模块，`main.dart` 仅保留 26 行启动入口
 - 移动端 UI 与传输测试替身细粒度拆分（`pairing_panel.dart`、`timeline_card_list.dart`、`fake_bridge_transport.dart`）：将配对面板、时间线卡片列表与测试替身进一步解耦为独立小文件
 - 用户语言偏好与桌面配置跨重启持久化（`saveLanguage` / `loadLanguage` in `apps/mobile` & `preferencesFilePath` / `setLocale` in `apps/desktop`）：手机端与桌面端切换中/英/日/韩语言后自动写入本地持久化文件，冷启动自动恢复上次选择的语言
+- `pnpm start` 幂等重启保护（`scripts/start-mac.mjs`）：启动前自动清理残留的旧 `nienie-desktop.mjs` 进程，避免 `EADDRINUSE: 0.0.0.0:4100` 端口冲突
 
 ## MVP 规划
 

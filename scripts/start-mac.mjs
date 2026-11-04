@@ -10,6 +10,16 @@ const esbuildBin = resolve(
 const entryFile = resolve(rootDir, 'apps/desktop/src/cli.ts');
 const outFile = resolve(rootDir, 'apps/desktop/dist/nienie-desktop.mjs');
 
+if (!process.argv.includes('--smoke')) {
+  try {
+    execFileSync('pkill', ['-f', 'apps/desktop/dist/nienie-desktop.mjs'], {
+      stdio: 'ignore',
+    });
+  } catch {
+    // No existing Nienie desktop process running
+  }
+}
+
 execFileSync(
   esbuildBin,
   [

@@ -117,3 +117,26 @@ Flutter CLI 默认开启了本机 iOS 签名身份自动探测与 `flutter_lints
 ### 预防措施
 
 任何入口文件（如 `main.dart`、`index.ts`）应只承担组合与导出职责；当单个源码文件承载超过 1 个领域职责或超过 400 行时，必须立即按 `i18n`、`models`、`storage`、`transport`、`state`、`ui` 分层拆分。
+
+## 2026-11-04 后台残留进程占用 4100 端口导致用户执行 `pnpm start` 报 `EADDRINUSE`
+
+### 问题
+
+Agent 在后台通过 `nohup` 预启动了 `nienie-desktop.mjs`（占用 `4100` 和 `4101` 端口），随后用户在自己的终端执行 `pnpm start` 时，因端口已被旧实例占用而抛出 `Error: listen EADDRINUSE: address already in use 0.0.0.0:4100`。
+
+### 根因
+
+1. Agent 后台启动常驻进程后未考虑到用户会在交互终端手动执行 `pnpm start`。
+2. `scripts/start-mac.mjs` 启动前未清理已存在的旧 `nienie-desktop.mjs` 实例。
+
+### 影响
+
+用户手动执行 `pnpm start` 直接报错退出，体验受阻。
+
+### 修复
+
+在 `scripts/start-mac.mjs` 启动前自动清理已存在的旧 `apps/desktop/dist/nienie-desktop.mjs` 进程，实现 `pnpm start` 幂等重启。
+
+### 预防措施
+
+本地开发启动脚本（如 `pnpm start`）必须具备幂等性：启动固定端口服务前应自动停止同项目的旧守护进程，或提供清晰的端口占用接管逻辑。
