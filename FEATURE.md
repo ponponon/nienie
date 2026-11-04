@@ -154,6 +154,7 @@
 - 实现 Relay 与 Headless Daemon CLI 启动器（`runRelayCli` & `runDaemonCli` in `@nienie/bridge-core`）：支持通过命令行参数或环境变量直接启动公网 Relay 与无 GUI 守护进程
 - 桌面端全适配器矩阵集成（`includeExtendedAgents` in `apps/desktop`）：支持在桌面端一键启用并探测全部 7 类 Agent（`opencode`、`codex`、`claude-code`、`pi`、`acp`、`openclaw`、`pty`）
 - 移动端远程桌面快照与推送绑定集成（`ScreenCaptureCardItem`、`captureScreen`、`registerPushToken` in `apps/mobile`）：支持在会话时间线中渲染桌面屏幕快照卡片并向 Bridge 注册 iOS/Android 推送凭据
+- 生成 Flutter iOS 与 Android 原生宿主工程（`apps/mobile/ios` & `apps/mobile/android`）：配置 `cn.quniv.nienie_mobile` 包名及不依赖外部包的内联静态分析规则（`analysis_options.yaml`）
 
 ## MVP 规划
 
