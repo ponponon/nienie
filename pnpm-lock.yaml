@@ -17,12 +17,27 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@nienie/adapter-acp':
+        specifier: workspace:*
+        version: link:../../packages/agent-adapters/acp
+      '@nienie/adapter-claude-code':
+        specifier: workspace:*
+        version: link:../../packages/agent-adapters/claude-code
       '@nienie/adapter-codex':
         specifier: workspace:*
         version: link:../../packages/agent-adapters/codex
+      '@nienie/adapter-openclaw':
+        specifier: workspace:*
+        version: link:../../packages/agent-adapters/openclaw
       '@nienie/adapter-opencode':
         specifier: workspace:*
         version: link:../../packages/agent-adapters/opencode
+      '@nienie/adapter-pi':
+        specifier: workspace:*
+        version: link:../../packages/agent-adapters/pi
+      '@nienie/adapter-pty':
+        specifier: workspace:*
+        version: link:../../packages/agent-adapters/pty
       '@nienie/bridge-core':
         specifier: workspace:*
         version: link:../../packages/bridge-core

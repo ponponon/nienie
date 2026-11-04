@@ -10,7 +10,12 @@
   },
   "dependencies": {
     "@nienie/bridge-core": "workspace:*",
+    "@nienie/adapter-acp": "workspace:*",
+    "@nienie/adapter-claude-code": "workspace:*",
     "@nienie/adapter-codex": "workspace:*",
-    "@nienie/adapter-opencode": "workspace:*"
+    "@nienie/adapter-openclaw": "workspace:*",
+    "@nienie/adapter-opencode": "workspace:*",
+    "@nienie/adapter-pi": "workspace:*",
+    "@nienie/adapter-pty": "workspace:*"
   }
 }

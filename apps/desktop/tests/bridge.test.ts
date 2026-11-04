@@ -30,6 +30,26 @@ describe('desktop bridge composition', () => {
     cleanups.push(() => registry.dispose());
     const agents = await registry.detectAll();
     expect(agents.map((agent) => agent.id)).toEqual(['opencode', 'codex']);
+
+    const fullRegistry = createBridgeRegistry({
+      includeExtendedAgents: true,
+      opencode: { baseUrl: 'http://127.0.0.1:1' },
+      codex: { detectVersion: async () => 'codex-cli 0.166.0' },
+      claudeCode: { detectVersion: async () => '1.0.24' },
+      pi: { detectVersion: async () => '0.8.1' },
+      openclaw: { baseUrl: 'http://127.0.0.1:1' },
+    });
+    cleanups.push(() => fullRegistry.dispose());
+    const allAgents = await fullRegistry.detectAll();
+    expect(allAgents.map((agent) => agent.id)).toEqual([
+      'opencode',
+      'codex',
+      'claude-code',
+      'pi',
+      'acp',
+      'openclaw',
+      'pty',
+    ]);
   });
 
   it('completes the OpenCode -> Bridge -> canonical events loop', async () => {

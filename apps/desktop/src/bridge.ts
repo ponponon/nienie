@@ -1,10 +1,21 @@
+import { AcpAdapter, type AcpAdapterOptions } from '@nienie/adapter-acp';
+import { ClaudeCodeAdapter, type ClaudeCodeAdapterOptions } from '@nienie/adapter-claude-code';
 import { CodexAdapter, type CodexAdapterOptions } from '@nienie/adapter-codex';
+import { OpenClawAdapter, type OpenClawAdapterOptions } from '@nienie/adapter-openclaw';
 import { OpenCodeAdapter, type OpenCodeAdapterOptions } from '@nienie/adapter-opencode';
+import { PiAdapter, type PiAdapterOptions } from '@nienie/adapter-pi';
+import { PtyFallbackAdapter, type PtyFallbackAdapterOptions } from '@nienie/adapter-pty';
 import { AgentRegistry, BridgeServer, type BridgeServerOptions } from '@nienie/bridge-core';
 
 export type BridgeRegistryOptions = {
   opencode?: OpenCodeAdapterOptions | undefined;
   codex?: CodexAdapterOptions | undefined;
+  claudeCode?: ClaudeCodeAdapterOptions | undefined;
+  pi?: PiAdapterOptions | undefined;
+  acp?: AcpAdapterOptions | undefined;
+  openclaw?: OpenClawAdapterOptions | undefined;
+  pty?: PtyFallbackAdapterOptions | undefined;
+  includeExtendedAgents?: boolean | undefined;
 };
 
 export type DesktopBridgeOptions = BridgeRegistryOptions &
@@ -14,6 +25,15 @@ export function createBridgeRegistry(options: BridgeRegistryOptions = {}): Agent
   const registry = new AgentRegistry();
   registry.register(new OpenCodeAdapter(options.opencode));
   registry.register(new CodexAdapter(options.codex));
+
+  if (options.includeExtendedAgents) {
+    registry.register(new ClaudeCodeAdapter(options.claudeCode));
+    registry.register(new PiAdapter(options.pi));
+    registry.register(new AcpAdapter(options.acp));
+    registry.register(new OpenClawAdapter(options.openclaw));
+    registry.register(new PtyFallbackAdapter(options.pty));
+  }
+
   return registry;
 }
 
