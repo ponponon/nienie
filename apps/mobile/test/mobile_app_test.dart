@@ -325,4 +325,34 @@ void main() {
     expect(client.connectionState, BridgeConnectionState.connected);
     expect(find.text('OpenCode'), findsOneWidget);
   });
+
+  testWidgets('lists saved machines in pairing panel and reconnects with one tap', (
+    WidgetTester tester,
+  ) async {
+    final store = InMemoryCredentialStore();
+    await store.save(
+      const SavedDeviceCredential(
+        machineId: 'macbook_saved',
+        wsUrl: 'ws://127.0.0.1:4100',
+        deviceId: 'dev_saved_1',
+        deviceToken: 'ntk_saved_token_1',
+      ),
+    );
+
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: store,
+    );
+    await client.refreshSavedMachines();
+
+    await tester.pumpWidget(NienieMobileApp(client: client));
+    await tester.pumpAndSettle();
+
+    expect(find.text('macbook_saved'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('btn-reconnect-machine-macbook_saved')));
+    await tester.pumpAndSettle();
+
+    expect(client.connectionState, BridgeConnectionState.connected);
+  });
 }

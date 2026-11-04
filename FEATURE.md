@@ -161,6 +161,7 @@
 - 移动端一键新建会话按钮（`btn-new-session` in `apps/mobile`）：在移动端顶栏支持一键创建新会话并自动切换至新会话视图
 - 移动端二维码 URI 一键配对、Token 用量卡片与会话取消按钮（`pairWithQrUri`、`UsageSummaryItem`、`cancelActiveSession` in `apps/mobile`）：实现 7 类 `CanonicalAgentEvent` 在移动端的 100% 视觉卡片覆盖与一键中止运行中会话
 - 移动端配对面板 QR URI 快捷输入框与按钮（`input-qr-uri` & `btn-pair-qr-uri` in `apps/mobile`）：支持直接粘贴 `nienie://pair?data=...` URI 一键完成配对连接
+- 移动端已保存电脑列表与一键重连（`refreshSavedMachines` & `btn-reconnect-machine-*` in `apps/mobile`）：在配对面板展示已绑定电脑并支持一键凭 `deviceToken` 免扫码重连
 
 ## MVP 规划
 

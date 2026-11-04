@@ -894,6 +894,7 @@ class MobileBridgeClient extends ChangeNotifier {
 
   BridgeConnectionState connectionState = BridgeConnectionState.disconnected;
   String? errorMessage;
+  List<SavedDeviceCredential> savedMachines = const [];
   List<AgentInfo> agents = const [];
   List<ModelInfo> models = const [];
   String? selectedModelId;
@@ -921,6 +922,16 @@ class MobileBridgeClient extends ChangeNotifier {
     return _sessionStatusBySession[sessionId] ??
         activeSession?.status ??
         'idle';
+  }
+
+  Future<void> refreshSavedMachines() async {
+    savedMachines = await credentialStore.listMachines();
+    notifyListeners();
+  }
+
+  Future<void> removeSavedMachine(String machineId) async {
+    await credentialStore.removeMachine(machineId);
+    await refreshSavedMachines();
   }
 
   Future<void> pairWithQrUri(
@@ -971,6 +982,7 @@ class MobileBridgeClient extends ChangeNotifier {
           deviceToken: data['deviceToken'] as String,
         ),
       );
+      savedMachines = await credentialStore.listMachines();
 
       connectionState = BridgeConnectionState.connected;
       await refreshAgents();
@@ -1552,6 +1564,48 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   icon: const Icon(Icons.qr_code),
                   label: const Text('Pair with QR URI'),
                 ),
+                if (client.savedMachines.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Saved Computers',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final machine in client.savedMachines)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.computer, size: 16, color: Color(0xFF10B981)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  machine.machineId,
+                                  style: const TextStyle(fontWeight: FontWeight.w600),
+                                ),
+                                Text(
+                                  machine.wsUrl,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF9CA3AF),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          FilledButton.tonal(
+                            key: Key('btn-reconnect-machine-${machine.machineId}'),
+                            onPressed: () =>
+                                client.reconnectWithSavedCredential(machine.machineId),
+                            child: const Text('Reconnect'),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
                 if (client.errorMessage != null) ...[
                   const SizedBox(height: 12),
                   Text(
