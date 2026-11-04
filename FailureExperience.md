@@ -188,3 +188,27 @@ Agent 在后台通过 `nohup` 预启动了 `nienie-desktop.mjs`（占用 `4100` 
 ### 预防措施
 
 所有控制台与移动端页面设计必须遵循「首屏核心零滚动（Above-the-fold First）」原则：最高频操作（如配对码、重连按钮、会话流）必须置于首屏最上方；列表项超过 4 项时必须采用多列紧凑网格或在线优先折叠，严禁让未启用的次要项把核心操作挤出首屏。
+
+## 2026-11-04 CSS Grid 缺失 `minmax(0, 1fr)` 与卡片 `min-width: 0` 导致长 URI 撑爆网格并出现横向滚动条
+
+### 问题
+
+将「手机扫码配对」移至桌面端双列网格左列后，包含 200+ 字符无空格 Base64 的 `nienie://pair?data=...` 文本且配置了 `white-space: nowrap`，因 `.workspace-grid` 使用了 `1.15fr 0.85fr` 且 `.card` 未设置 `min-width: 0`，导致左列被长字符串撑宽至 1400px+，右列被挤压成单字竖排窄条，整个窗口出现横向滚动条；用户向右横向滚动后，非固定顶栏随之左移，导致顶栏右侧的语言选择框与 macOS 左上角原生红黄绿按钮重叠。
+
+### 根因
+
+CSS Grid 中 `1fr` 等同于 `minmax(auto, 1fr)`，当子元素未声明 `min-width: 0` 且内部含有 `white-space: nowrap` 的超长无空格字符串时，网格轨道会按内容的固有最大宽度无限横向膨胀。
+
+### 影响
+
+页面出现严重的横向滚动、右列文字被挤压成竖排、横向滚动时顶栏控件与 macOS 红黄绿窗口按钮重叠。
+
+### 修复
+
+1. 将 `.workspace-grid` 列定义改为 `grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr)`，并为 `.card` 增加 `min-width: 0; overflow: hidden;`。
+2. 为 `html, body` 增加 `max-width: 100vw; overflow-x: hidden;`，为 `.title-bar` 增加 `position: sticky; top: 0; z-index: 100;`。
+3. 将右列「本地 Bridge」的三列小格子改为水平对齐的键值对行（`.kv-row`），避免窄宽度下文字竖排折行。
+
+### 预防措施
+
+任何包含长 URL、Base64、Token、路径或日志的 CSS Grid / Flex 容器，其轨道必须使用 `minmax(0, 1fr)` 且子项必须设置 `min-width: 0; overflow: hidden;`，根容器必须设置 `overflow-x: hidden` 严禁产生横向滚动条。

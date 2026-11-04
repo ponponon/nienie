@@ -19,7 +19,7 @@ const DESKTOP_I18N: Record<
     newCode: string;
     pairingCodeLabel: string;
     expiresPrefix: string;
-    pairingUriLabel: string;
+    copyUriBtn: string;
     machineLabel: string;
     endpointLabel: string;
     connectedDevicesLabel: string;
@@ -47,20 +47,20 @@ const DESKTOP_I18N: Record<
     detect: '重新探测',
     mobilePairing: '手机扫码配对',
     newCode: '刷新配对码',
-    pairingCodeLabel: '一次性配对码 (手机输入)',
+    pairingCodeLabel: '6 位一次性配对码',
     expiresPrefix: '有效期至',
-    pairingUriLabel: '配对链接',
+    copyUriBtn: '复制配对链接',
     machineLabel: '本机标识',
     endpointLabel: '监听地址',
-    connectedDevicesLabel: '已连手机',
+    connectedDevicesLabel: '已连接手机',
     detectedBadge: '可用',
     unavailableBadge: '未安装',
     publicRelay: '公网 Relay',
     defaultRelayLabel: '默认地址',
     activeRelayLabel: '当前生效',
-    useCustomRelay: '应用自定义',
+    useCustomRelay: '应用自定义 Relay',
     useDefaultRelay: '恢复默认',
-    diagnosticLogs: '运行日志 (次要信息)',
+    diagnosticLogs: '运行日志',
     running: '运行中',
     stopped: '已停止',
     error: '异常',
@@ -68,7 +68,7 @@ const DESKTOP_I18N: Record<
     revokedBadge: '已撤销',
   },
   en: {
-    appTitle: 'Nienie Console',
+    appTitle: 'Nienie Bridge Console',
     localBridge: 'Local Bridge',
     startBridge: 'Start Bridge',
     stopBridge: 'Stop Bridge',
@@ -78,16 +78,16 @@ const DESKTOP_I18N: Record<
     newCode: 'New Code',
     pairingCodeLabel: 'One-Time Pairing Code',
     expiresPrefix: 'Expires',
-    pairingUriLabel: 'Pairing URI',
-    machineLabel: 'Machine',
+    copyUriBtn: 'Copy Pairing URI',
+    machineLabel: 'Machine ID',
     endpointLabel: 'Endpoint',
-    connectedDevicesLabel: 'Devices',
+    connectedDevicesLabel: 'Connected Devices',
     detectedBadge: 'Ready',
     unavailableBadge: 'Offline',
     publicRelay: 'Public Relay',
     defaultRelayLabel: 'Default',
     activeRelayLabel: 'Active',
-    useCustomRelay: 'Use Custom',
+    useCustomRelay: 'Use Custom Relay',
     useDefaultRelay: 'Use Default',
     diagnosticLogs: 'Diagnostic Logs',
     running: 'Running',
@@ -97,7 +97,7 @@ const DESKTOP_I18N: Record<
     revokedBadge: 'Revoked',
   },
   ja: {
-    appTitle: 'Nienie コンソール',
+    appTitle: 'Nienie Bridge コンソール',
     localBridge: 'ローカル Bridge',
     startBridge: '起動',
     stopBridge: '停止',
@@ -107,7 +107,7 @@ const DESKTOP_I18N: Record<
     newCode: 'コード更新',
     pairingCodeLabel: 'ワンタイムコード',
     expiresPrefix: '有効期限',
-    pairingUriLabel: 'ペアリング URI',
+    copyUriBtn: 'URI をコピー',
     machineLabel: 'マシン ID',
     endpointLabel: '待受アドレス',
     connectedDevicesLabel: '接続台数',
@@ -126,17 +126,17 @@ const DESKTOP_I18N: Record<
     revokedBadge: '解除済',
   },
   ko: {
-    appTitle: 'Nienie 콘솔',
+    appTitle: 'Nienie Bridge 콘솔',
     localBridge: '로컬 Bridge',
     startBridge: '시작',
     stopBridge: '중지',
     localAgents: '로컬 Agents',
     detect: '다시 감지',
-    mobilePairing: '모바일 페어링 (최우선)',
+    mobilePairing: '모바일 페어링',
     newCode: '새 코드',
     pairingCodeLabel: '일회용 페어링 코드',
     expiresPrefix: '만료 시간',
-    pairingUriLabel: '페어링 URI',
+    copyUriBtn: 'URI 복사',
     machineLabel: '머신 ID',
     endpointLabel: '엔드포인트',
     connectedDevicesLabel: '연결 기기',
@@ -166,7 +166,6 @@ export function renderDesktopAppHtml(
   const statusLabel = isRunning ? t.running : state.bridge.status === 'error' ? t.error : t.stopped;
   const statusClass = isRunning ? 'badge-success' : state.bridge.status === 'error' ? 'badge-danger' : 'badge-muted';
 
-  // Sort agents so detected/available agents appear first
   const sortedAgents = [...state.agents].sort(
     (a, b) => Number(b.available) - Number(a.available),
   );
@@ -195,8 +194,10 @@ export function renderDesktopAppHtml(
           <div class="field-hint">${escapeHtml(t.pairingCodeLabel)}</div>
           <div class="pairing-code" id="pairing-code">${escapeHtml(state.pairing.pairingCode)}</div>
           <div class="field-hint">${escapeHtml(t.expiresPrefix)} ${escapeHtml(state.pairing.expiresAt.slice(11, 19))}</div>
-          <div class="field-hint" style="margin-top: 6px;">${escapeHtml(t.pairingUriLabel)}</div>
-          <code class="uri-box" title="${escapeHtml(state.pairing.qrUri)}">${escapeHtml(state.pairing.qrUri)}</code>
+          <div class="uri-row">
+            <code class="uri-box" id="pairing-uri-code">${escapeHtml(state.pairing.qrUri)}</code>
+            <button class="btn btn-secondary" id="btn-copy-uri" type="button">${escapeHtml(t.copyUriBtn)}</button>
+          </div>
         </div>
       </div>
     `
@@ -206,8 +207,8 @@ export function renderDesktopAppHtml(
     .map((device) => {
       const revoked = Boolean(device.revokedAt);
       return `
-        <div class="device-chip" data-device-id="${escapeHtml(device.deviceId)}">
-          <span>${escapeHtml(device.deviceName)} (${escapeHtml(device.platform)})</span>
+        <div class="kv-row" data-device-id="${escapeHtml(device.deviceId)}">
+          <span class="kv-label">${escapeHtml(device.deviceName)} (${escapeHtml(device.platform)})</span>
           ${
             revoked
               ? `<span class="badge badge-danger">${escapeHtml(t.revokedBadge)}</span>`
@@ -275,28 +276,37 @@ export function renderDesktopAppHtml(
       padding: 0;
     }
 
-    body {
+    html, body {
+      width: 100%;
+      max-width: 100vw;
+      overflow-x: hidden;
       background: var(--color-bg-primary);
       color: var(--color-text-primary);
       font-family: var(--font-family);
       font-size: var(--text-base);
       line-height: 1.4;
-      height: 100vh;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
       -webkit-font-smoothing: antialiased;
     }
 
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
     .title-bar {
-      height: 40px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      width: 100%;
+      height: 42px;
       padding-left: 78px;
-      padding-right: var(--space-4);
+      padding-right: 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       border-bottom: 1px solid var(--color-border);
-      background: rgba(255, 255, 255, 0.88);
+      background: rgba(255, 255, 255, 0.92);
       backdrop-filter: blur(16px);
       -webkit-app-region: drag;
       user-select: none;
@@ -310,24 +320,27 @@ export function renderDesktopAppHtml(
       font-weight: 600;
       font-size: var(--text-base);
       color: var(--color-text-primary);
+      white-space: nowrap;
     }
 
     .workspace-grid {
       display: grid;
-      grid-template-columns: 1.15fr 0.85fr;
-      gap: 10px;
-      padding: 10px 12px;
-      max-width: 1280px;
+      grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+      gap: 12px;
+      padding: 12px 16px;
       width: 100%;
+      max-width: 1200px;
       margin: 0 auto;
     }
 
     .card {
+      min-width: 0;
+      overflow: hidden;
       background: var(--color-bg-secondary);
-      border: 1px solid rgba(0, 0, 0, 0.05);
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
       border-radius: var(--radius-md);
-      padding: 10px 12px;
+      padding: 12px 14px;
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -341,6 +354,7 @@ export function renderDesktopAppHtml(
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
     }
 
     .card-title {
@@ -350,11 +364,13 @@ export function renderDesktopAppHtml(
       font-size: var(--text-lg);
       font-weight: 600;
       color: var(--color-text-primary);
+      white-space: nowrap;
     }
 
     .btn {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 4px;
       background: var(--color-accent);
       color: #FFFFFF;
@@ -363,8 +379,9 @@ export function renderDesktopAppHtml(
       padding: 5px 10px;
       font-size: var(--text-xs);
       font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
       cursor: pointer;
-      transition: background 0.15s ease;
     }
 
     .btn:hover {
@@ -386,8 +403,9 @@ export function renderDesktopAppHtml(
       color: var(--color-danger);
       border: 1px solid rgba(255, 59, 48, 0.2);
       border-radius: 6px;
-      padding: 1px 6px;
-      font-size: 10px;
+      padding: 2px 8px;
+      font-size: 11px;
+      white-space: nowrap;
       cursor: pointer;
     }
 
@@ -396,8 +414,10 @@ export function renderDesktopAppHtml(
       align-items: center;
       padding: 2px 8px;
       border-radius: 999px;
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
 
     .badge-success {
@@ -418,12 +438,17 @@ export function renderDesktopAppHtml(
     .pairing-content {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .qr-frame {
+      flex-shrink: 0;
     }
 
     .qr-frame svg {
-      width: 112px;
-      height: 112px;
+      width: 108px;
+      height: 108px;
       display: block;
       border: 1px solid var(--color-border);
       border-radius: var(--radius-sm);
@@ -434,23 +459,35 @@ export function renderDesktopAppHtml(
     .pairing-details {
       flex: 1;
       min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
     }
 
     .pairing-code {
       font-family: var(--font-mono);
-      font-size: 26px;
+      font-size: 28px;
       font-weight: 700;
-      letter-spacing: 3px;
+      letter-spacing: 4px;
       color: var(--color-accent);
-      line-height: 1.2;
-      margin: 2px 0;
+      line-height: 1.15;
+    }
+
+    .uri-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+      min-width: 0;
     }
 
     .uri-box {
+      flex: 1;
+      min-width: 0;
       display: block;
       font-family: var(--font-mono);
       font-size: 10px;
-      padding: 4px 6px;
+      padding: 4px 8px;
       background: var(--color-bg-elevated);
       border: 1px solid var(--color-border);
       border-radius: 6px;
@@ -460,32 +497,42 @@ export function renderDesktopAppHtml(
       color: var(--color-text-secondary);
     }
 
-    .stat-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
+    .kv-list {
+      display: flex;
+      flex-direction: column;
       gap: 6px;
     }
 
-    .stat-box {
+    .kv-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 10px;
       background: var(--color-bg-elevated);
       border-radius: var(--radius-sm);
-      padding: 6px 8px;
+      font-size: var(--text-xs);
       min-width: 0;
     }
 
-    .stat-value {
+    .kv-label {
+      color: var(--color-text-secondary);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .kv-value {
       font-family: var(--font-mono);
-      font-size: var(--text-xs);
       font-weight: 600;
+      color: var(--color-text-primary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-top: 2px;
     }
 
     .agents-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 6px;
     }
 
@@ -493,15 +540,17 @@ export function renderDesktopAppHtml(
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 5px 8px;
+      gap: 6px;
+      padding: 6px 8px;
       background: var(--color-bg-elevated);
       border-radius: var(--radius-sm);
       font-size: var(--text-xs);
+      min-width: 0;
     }
 
     .agent-online {
-      border: 1px solid rgba(7, 193, 96, 0.3);
-      background: rgba(7, 193, 96, 0.04);
+      border: 1px solid rgba(7, 193, 96, 0.35);
+      background: rgba(7, 193, 96, 0.05);
     }
 
     .agent-meta {
@@ -521,25 +570,19 @@ export function renderDesktopAppHtml(
     .agent-version, .field-hint {
       font-size: 11px;
       color: var(--color-text-secondary);
-    }
-
-    .device-chip {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 4px 8px;
-      background: var(--color-bg-elevated);
-      border-radius: 6px;
-      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .input {
       width: 100%;
+      min-width: 0;
       background: var(--color-bg-elevated);
       border: 1px solid var(--color-border);
       border-radius: var(--radius-sm);
       color: var(--color-text-primary);
-      padding: 5px 8px;
+      padding: 6px 10px;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }
@@ -548,22 +591,29 @@ export function renderDesktopAppHtml(
       background: var(--color-bg-elevated);
       border: 1px solid var(--color-border);
       border-radius: var(--radius-sm);
-      padding: 6px 8px;
-      max-height: 92px;
+      padding: 6px 10px;
+      max-height: 88px;
       overflow-y: auto;
       font-family: var(--font-mono);
-      font-size: 10px;
+      font-size: 11px;
     }
 
     .log-row {
       display: flex;
-      gap: 6px;
+      gap: 8px;
       padding: 1px 0;
+      min-width: 0;
     }
 
     .log-time {
       color: var(--color-text-secondary);
       flex-shrink: 0;
+    }
+
+    .log-msg {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
   </style>
 </head>
@@ -573,8 +623,8 @@ export function renderDesktopAppHtml(
       ${iconBridgeSvg()}
       <span>${escapeHtml(t.appTitle)}</span>
     </div>
-    <div style="display: flex; align-items: center; gap: var(--space-2); -webkit-app-region: no-drag;">
-      <select class="input" id="select-locale" style="width: auto; padding: 2px 8px;">
+    <div style="display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag;">
+      <select class="input" id="select-locale" style="width: auto; padding: 3px 8px;">
         <option value="zh" ${locale === 'zh' ? 'selected' : ''}>中文</option>
         <option value="en" ${locale === 'en' ? 'selected' : ''}>English</option>
         <option value="ja" ${locale === 'ja' ? 'selected' : ''}>日本語</option>
@@ -585,7 +635,7 @@ export function renderDesktopAppHtml(
   </header>
 
   <main class="workspace-grid">
-    <!-- Row 1 Left (Most Important): Mobile QR & One-Time Code Pairing -->
+    <!-- Row 1 Left: Mobile QR & One-Time Code Pairing -->
     <section class="card">
       <div class="card-header">
         <h2 class="card-title">${iconQrSvg()} ${escapeHtml(t.mobilePairing)}</h2>
@@ -600,24 +650,24 @@ export function renderDesktopAppHtml(
         <h2 class="card-title">${iconBridgeSvg()} ${escapeHtml(t.localBridge)}</h2>
         <button class="btn" id="btn-toggle-bridge">${escapeHtml(isRunning ? t.stopBridge : t.startBridge)}</button>
       </div>
-      <div class="stat-grid">
-        <div class="stat-box">
-          <div class="field-hint">${escapeHtml(t.machineLabel)}</div>
-          <div class="stat-value" title="${escapeHtml(state.bridge.machineId)}">${escapeHtml(state.bridge.machineId)}</div>
+      <div class="kv-list">
+        <div class="kv-row">
+          <span class="kv-label">${escapeHtml(t.machineLabel)}</span>
+          <span class="kv-value">${escapeHtml(state.bridge.machineId)}</span>
         </div>
-        <div class="stat-box">
-          <div class="field-hint">${escapeHtml(t.endpointLabel)}</div>
-          <div class="stat-value" title="${escapeHtml(state.bridge.wsUrl ?? '-')}">${escapeHtml(state.bridge.wsUrl ?? '-')}</div>
+        <div class="kv-row">
+          <span class="kv-label">${escapeHtml(t.endpointLabel)}</span>
+          <span class="kv-value">${escapeHtml(state.bridge.wsUrl ?? '-')}</span>
         </div>
-        <div class="stat-box">
-          <div class="field-hint">${escapeHtml(t.connectedDevicesLabel)}</div>
-          <div class="stat-value">${state.bridge.connectedClients}</div>
+        <div class="kv-row">
+          <span class="kv-label">${escapeHtml(t.connectedDevicesLabel)}</span>
+          <span class="kv-value">${state.bridge.connectedClients}</span>
         </div>
+        ${devicesHtml}
       </div>
-      ${devicesHtml}
     </section>
 
-    <!-- Row 2 Left: Compact 2-Column Local Agents Grid (Detected First) -->
+    <!-- Row 2 Left: Compact 2-Column Local Agents Grid -->
     <section class="card">
       <div class="card-header">
         <h2 class="card-title">${iconTerminalSvg()} ${escapeHtml(t.localAgents)}</h2>
@@ -636,14 +686,14 @@ export function renderDesktopAppHtml(
       </div>
       <div class="field-hint">${escapeHtml(t.defaultRelayLabel)}: <code>${escapeHtml(state.relay.defaultRelayUrl)}</code></div>
       <div class="field-hint">${escapeHtml(t.activeRelayLabel)}: <code id="active-relay-url">${escapeHtml(state.relay.activeRelayUrl)}</code></div>
-      <div style="display: flex; gap: 6px; align-items: center;">
-        <input class="input" id="input-custom-relay" type="text" placeholder="wss://relay.example.com" value="${escapeHtml(state.relay.customRelayUrl)}" />
-        <button class="btn" id="btn-save-custom-relay" style="flex-shrink: 0;">${escapeHtml(t.useCustomRelay)}</button>
-        <button class="btn btn-secondary" id="btn-use-default-relay" style="flex-shrink: 0;">${escapeHtml(t.useDefaultRelay)}</button>
+      <input class="input" id="input-custom-relay" type="text" placeholder="wss://relay.example.com" value="${escapeHtml(state.relay.customRelayUrl)}" />
+      <div style="display: flex; gap: 8px;">
+        <button class="btn" id="btn-save-custom-relay">${escapeHtml(t.useCustomRelay)}</button>
+        <button class="btn btn-secondary" id="btn-use-default-relay">${escapeHtml(t.useDefaultRelay)}</button>
       </div>
     </section>
 
-    <!-- Row 3 Bottom (Secondary Info): Compact Diagnostic Logs -->
+    <!-- Row 3 Bottom: Compact Diagnostic Logs -->
     <section class="card card-full">
       <div class="card-header">
         <h2 class="card-title">${iconLogSvg()} ${escapeHtml(t.diagnosticLogs)}</h2>
@@ -660,6 +710,12 @@ export function renderDesktopAppHtml(
         const url = new URL(window.location.href);
         url.searchParams.set('lang', nextLang);
         window.location.href = url.toString();
+      });
+      document.getElementById('btn-copy-uri')?.addEventListener('click', () => {
+        const uri = document.getElementById('pairing-uri-code')?.textContent;
+        if (uri && navigator.clipboard) {
+          navigator.clipboard.writeText(uri);
+        }
       });
       const api = window.nienieDesktop;
       if (!api) return;

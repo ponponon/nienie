@@ -240,6 +240,8 @@ describe('desktop bridge composition', () => {
     expect(html).toContain('Content-Security-Policy');
     expect(html).toContain('--color-bg-primary: #F2F2F7');
     expect(html).toContain('padding-left: 78px');
+    expect(html).toContain('overflow-x: hidden');
+    expect(html).toContain('minmax(0,');
     expect(html).toContain(DEFAULT_RELAY_URL);
     expect(html).toContain('<svg');
     expect(html).toContain('window.nienieDesktop');
