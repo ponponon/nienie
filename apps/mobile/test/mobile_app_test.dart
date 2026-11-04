@@ -354,5 +354,17 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(client.connectionState, BridgeConnectionState.connected);
+
+    await client.loadModels('opencode');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('chip-model-anthropic/claude-sonnet-4')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('btn-disconnect')));
+    await tester.pumpAndSettle();
+    expect(client.connectionState, BridgeConnectionState.disconnected);
+
+    await tester.tap(find.byKey(const Key('btn-remove-machine-macbook_saved')));
+    await tester.pumpAndSettle();
+    expect(find.text('macbook_saved'), findsNothing);
   });
 }

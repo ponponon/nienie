@@ -934,6 +934,13 @@ class MobileBridgeClient extends ChangeNotifier {
     await refreshSavedMachines();
   }
 
+  Future<void> disconnect() async {
+    await transport.close();
+    connectionState = BridgeConnectionState.disconnected;
+    activeSession = null;
+    await refreshSavedMachines();
+  }
+
   Future<void> pairWithQrUri(
     String qrUri, {
     String deviceName = 'Nienie Flutter Mobile',
@@ -1456,6 +1463,15 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   const Text('Nienie Console'),
                   const Spacer(),
                   _buildConnectionBadge(client.connectionState),
+                  if (client.connectionState == BridgeConnectionState.connected) ...[
+                    const SizedBox(width: 8),
+                    IconButton(
+                      key: const Key('btn-disconnect'),
+                      tooltip: 'Disconnect',
+                      onPressed: client.disconnect,
+                      icon: const Icon(Icons.link_off, size: 18),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1602,6 +1618,13 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                 client.reconnectWithSavedCredential(machine.machineId),
                             child: const Text('Reconnect'),
                           ),
+                          const SizedBox(width: 4),
+                          IconButton(
+                            key: Key('btn-remove-machine-${machine.machineId}'),
+                            tooltip: 'Remove Machine',
+                            onPressed: () => client.removeSavedMachine(machine.machineId),
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                          ),
                         ],
                       ),
                     ),
@@ -1673,6 +1696,25 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             ],
           ),
         ),
+        if (client.models.isNotEmpty)
+          SizedBox(
+            height: 44,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              scrollDirection: Axis.horizontal,
+              itemCount: client.models.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final model = client.models[index];
+                return ChoiceChip(
+                  key: Key('chip-model-${model.id}'),
+                  label: Text(model.name),
+                  selected: client.selectedModelId == model.id,
+                  onSelected: (_) => client.selectModel(model.id),
+                );
+              },
+            ),
+          ),
         // Session selector list
         SizedBox(
           height: 76,
