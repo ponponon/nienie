@@ -132,6 +132,15 @@
 - 移动端局域网直连失败自动回退公网 Relay（`AutoFallbackBridgeTransport` in `apps/mobile`）：优先尝试局域网 `wsUrl`，不可达时自动切换至 `RelayBridgeTransport`（默认 `wss://nienie-replay.quniv.cn` 或用户自定义 Relay）
 - GitHub Actions 跨端 CI 流水线（`.github/workflows/ci.yml`）：自动配置 Node.js 22、pnpm 与 Flutter 环境并执行 `pnpm verify`
 
+### 2026-11-04 实现第二阶段扩展适配器（Claude Code 与 Pi）
+
+- 实现 `@nienie/adapter-claude-code`（`ClaudeCodeAdapter` & `ClaudeCodeEventNormalizer`）：
+  - 对接 `claude -p --output-format stream-json --verbose` 与 `--resume <session_id>`
+  - 将 `system(init)`、`assistant(thinking/text/tool_use)`、`user(tool_result)`、`result(usage/error)` 统一映射为 Nienie `CanonicalAgentEvent`
+- 实现 `@nienie/adapter-pi`（`PiAdapter` & `PiEventNormalizer`）：
+  - 对接 `pi --mode json --session <id> -p` 结构化 JSON 流
+  - 将 `agent_start`、`message_update`、`tool_execution_start`、`tool_execution_end`、`agent_end` 统一映射为 Nienie `CanonicalAgentEvent`
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查
@@ -166,8 +175,8 @@
 
 ## 后续 Agent 适配路线
 
-- [ ] Claude Code 结构化流适配
-- [ ] Pi RPC 适配
+- [x] Claude Code 结构化流适配
+- [x] Pi RPC 适配
 - [ ] 通用 ACP 适配器
 - [ ] OpenClaw Gateway 适配
 - [ ] 其他 JSONL / HTTP Agent 适配

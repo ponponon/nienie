@@ -90,7 +90,14 @@ export function resolveRelayUrl(customUrl?: string): string {
   return value || DEFAULT_RELAY_URL;
 }
 
-export type AgentId = 'opencode' | 'codex';
+export type AgentId =
+  | 'opencode'
+  | 'codex'
+  | 'claude-code'
+  | 'pi'
+  | 'acp'
+  | 'openclaw'
+  | 'pty';
 export type AgentStatus = 'starting' | 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
 
 export type AgentCapabilities = {
@@ -607,8 +614,18 @@ export function parseBridgeRequest(
   }
 }
 
+const VALID_AGENT_IDS = new Set<AgentId>([
+  'opencode',
+  'codex',
+  'claude-code',
+  'pi',
+  'acp',
+  'openclaw',
+  'pty',
+]);
+
 function isAgentId(value: unknown): value is AgentId {
-  return value === 'opencode' || value === 'codex';
+  return typeof value === 'string' && VALID_AGENT_IDS.has(value as AgentId);
 }
 
 function isDevicePlatform(value: unknown): value is DevicePlatform {
