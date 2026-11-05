@@ -14,6 +14,16 @@ const DESKTOP_I18N: Record<
     navAgents: string;
     navNetwork: string;
     navSystem: string;
+    navAbout: string;
+    autoUpdateTitle: string;
+    feedbackTitle: string;
+    feedbackDesc: string;
+    copyDiagBtn: string;
+    appreciateTitle: string;
+    appreciateDesc: string;
+    copyrightOwner: string;
+    termsLink: string;
+    privacyLink: string;
     heroTitle: string;
     heroSubtitle: string;
     localBridge: string;
@@ -62,6 +72,16 @@ const DESKTOP_I18N: Record<
     navAgents: 'AI 助手',
     navNetwork: '跨设备网络',
     navSystem: '偏好与日志',
+    navAbout: '升级和反馈',
+    autoUpdateTitle: '有新版本时自动更新',
+    feedbackTitle: '我要反馈',
+    feedbackDesc: '遇到问题或有功能建议？可一键复制脱敏诊断摘要提交反馈',
+    copyDiagBtn: '复制诊断反馈包',
+    appreciateTitle: '赞赏与支持作者',
+    appreciateDesc: '如果 Nienie 帮您提升了开发效率，欢迎微信扫码赞赏支持持续迭代',
+    copyrightOwner: 'ponponon 版权所有',
+    termsLink: '用户协议',
+    privacyLink: '隐私政策',
     heroTitle: '手机扫码连接',
     heroSubtitle: '打开手机 Nienie 扫描二维码，自动绑定这台 Mac',
     localBridge: '本地 Bridge',
@@ -109,6 +129,16 @@ const DESKTOP_I18N: Record<
     navAgents: 'AI Agents',
     navNetwork: 'Network & Relay',
     navSystem: 'Preferences',
+    navAbout: 'Update & Feedback',
+    autoUpdateTitle: 'Automatically install updates',
+    feedbackTitle: 'Send Feedback',
+    feedbackDesc: 'Copy redacted diagnostic summary to report an issue or suggestion',
+    copyDiagBtn: 'Copy Diagnostic Report',
+    appreciateTitle: 'Support the Developer',
+    appreciateDesc: 'If Nienie improves your workflow, scan via WeChat to buy me a coffee',
+    copyrightOwner: 'Created by ponponon',
+    termsLink: 'Terms of Use',
+    privacyLink: 'Privacy Policy',
     heroTitle: 'Scan QR Code with Phone',
     heroSubtitle: 'Open Nienie on your phone and scan to pair with this Mac',
     localBridge: 'Local Bridge',
@@ -156,6 +186,16 @@ const DESKTOP_I18N: Record<
     navAgents: 'AI アシスタント',
     navNetwork: 'ネットワーク',
     navSystem: '環境設定',
+    navAbout: 'アップデートとフィードバック',
+    autoUpdateTitle: '新しいバージョンを自動更新',
+    feedbackTitle: 'フィードバックを送る',
+    feedbackDesc: '診断サマリーをコピーして不具合の報告や要望を送信できます',
+    copyDiagBtn: '診断レポートをコピー',
+    appreciateTitle: '開発者を応援する',
+    appreciateDesc: 'Nienie が役立ったら WeChat で開発をサポートしていただけると嬉しいです',
+    copyrightOwner: 'ponponon All Rights Reserved',
+    termsLink: '利用規約',
+    privacyLink: 'プライバシーポリシー',
     heroTitle: 'QR コードでスマホ接続',
     heroSubtitle: 'スマホの Nienie アプリでスキャンしてこの Mac とペアリングします',
     localBridge: 'ローカル Bridge',
@@ -203,6 +243,16 @@ const DESKTOP_I18N: Record<
     navAgents: 'AI 에이전트',
     navNetwork: '네트워크 설정',
     navSystem: '환경설정',
+    navAbout: '업데이트 및 피드백',
+    autoUpdateTitle: '새 버전 자동 업데이트',
+    feedbackTitle: '피드백 보내기',
+    feedbackDesc: '진단 요약을 복사하여 버그 리포트나 기능 제안을 보내주세요',
+    copyDiagBtn: '진단 리포트 복사',
+    appreciateTitle: '개발자 후원하기',
+    appreciateDesc: 'Nienie가 도움이 되었다면 WeChat 스캔으로 개발자를 응원해 주세요',
+    copyrightOwner: 'ponponon 판권 소유',
+    termsLink: '이용약관',
+    privacyLink: '개인정보 처리방침',
     heroTitle: 'QR 코드로 휴대폰 연결',
     heroSubtitle: '휴대폰 Nienie 앱으로 스캔하여 이 Mac과 연결합니다',
     localBridge: '로컬 Bridge',
@@ -742,6 +792,79 @@ export function renderDesktopAppHtml(
       overflow: hidden;
       text-overflow: ellipsis;
     }
+
+    /* WeType Upgrade & Feedback Page */
+    .about-pane-inner {
+      min-height: calc(100vh - 48px);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .about-hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 26px 0 24px;
+    }
+
+    .about-app-icon {
+      width: 74px;
+      height: 74px;
+      border-radius: 18px;
+      background: #FFFFFF;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .about-app-name {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--color-text-primary);
+      margin-top: 14px;
+    }
+
+    .about-app-version {
+      font-size: 13px;
+      color: var(--color-text-secondary);
+      margin-top: 4px;
+    }
+
+    .about-footer {
+      margin-top: auto;
+      padding-top: 24px;
+      text-align: center;
+      font-size: 11px;
+      color: #999999;
+      line-height: 1.75;
+    }
+
+    .about-links {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .about-link {
+      color: #888888;
+      text-decoration: underline;
+      cursor: pointer;
+      background: none;
+      border: none;
+      font-size: 11px;
+      font-family: var(--font-family);
+    }
+
+    .expand-drawer {
+      display: none;
+      padding: 0 0 16px;
+      border-bottom: 1px solid var(--color-divider);
+    }
+
+    .expand-drawer.open {
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -763,6 +886,10 @@ export function renderDesktopAppHtml(
       <button class="nav-item" data-tab-target="system" type="button">
         ${iconSettingsSvg()}
         <span>${escapeHtml(t.navSystem)}</span>
+      </button>
+      <button class="nav-item" data-tab-target="about" type="button">
+        ${iconUpgradeSvg()}
+        <span>${escapeHtml(t.navAbout)}</span>
       </button>
 
       <div class="sidebar-footer">
@@ -891,6 +1018,56 @@ export function renderDesktopAppHtml(
           </div>
         </div>
       </section>
+
+      <!-- Tab 5: Upgrade & Feedback (1:1 WeType Style) -->
+      <section class="tab-pane" data-pane="about">
+        <div class="about-pane-inner">
+          <div class="about-hero">
+            <div class="about-app-icon">
+              ${iconBrandBadgeSvg()}
+            </div>
+            <div class="about-app-name">Nienie</div>
+            <div class="about-app-version">0.1.0(100)</div>
+          </div>
+
+          <div class="wetype-group">
+            <div class="wetype-row">
+              <div class="row-title">${escapeHtml(t.autoUpdateTitle)}</div>
+              <button class="wetype-switch ${state.autoUpdate !== false ? 'on' : ''}" id="btn-toggle-auto-update" type="button" aria-label="${escapeHtml(t.autoUpdateTitle)}"></button>
+            </div>
+
+            <div class="wetype-row" id="row-toggle-feedback" style="cursor: pointer;">
+              <div class="row-title">${escapeHtml(t.feedbackTitle)}</div>
+              ${iconChevronRightSvg()}
+            </div>
+            <div class="expand-drawer" id="drawer-feedback">
+              <div class="row-desc" style="margin-bottom: 10px;">${escapeHtml(t.feedbackDesc)}</div>
+              <div style="display: flex; gap: 8px;">
+                <button class="wetype-btn" id="btn-copy-diagnostics" type="button">${escapeHtml(t.copyDiagBtn)}</button>
+              </div>
+            </div>
+
+            <div class="wetype-row" id="row-toggle-appreciate" style="cursor: pointer;">
+              <div class="row-title">${escapeHtml(t.appreciateTitle)}</div>
+              ${iconChevronRightSvg()}
+            </div>
+            <div class="expand-drawer" id="drawer-appreciate" style="border-bottom: none; text-align: center;">
+              <div class="row-desc" style="margin-bottom: 10px;">${escapeHtml(t.appreciateDesc)}</div>
+              <img src="/assets/wechat-appreciate.jpg" alt="WeChat Appreciate QR" style="max-width: 180px; border-radius: 10px; border: 1px solid #EAEAEA;" />
+            </div>
+          </div>
+
+          <footer class="about-footer">
+            <div>${escapeHtml(t.copyrightOwner)}</div>
+            <div>Copyright © 2026 ponponon. All rights reserved.</div>
+            <div class="about-links">
+              <button class="about-link" id="btn-show-terms" type="button">${escapeHtml(t.termsLink)}</button>
+              <span>·</span>
+              <button class="about-link" id="btn-show-privacy" type="button">${escapeHtml(t.privacyLink)}</button>
+            </div>
+          </footer>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -929,8 +1106,32 @@ export function renderDesktopAppHtml(
           if (btn) btn.textContent = '${escapeHtml(t.copiedText)}';
         }
       });
+      document.getElementById('row-toggle-feedback')?.addEventListener('click', () => {
+        document.getElementById('drawer-feedback')?.classList.toggle('open');
+      });
+      document.getElementById('row-toggle-appreciate')?.addEventListener('click', () => {
+        document.getElementById('drawer-appreciate')?.classList.toggle('open');
+      });
+      document.getElementById('btn-copy-diagnostics')?.addEventListener('click', (ev) => {
+        const btn = ev.currentTarget;
+        const diag = JSON.stringify({
+          version: '0.1.0(100)',
+          machineId: '${escapeHtml(state.bridge.machineId)}',
+          bridgeStatus: '${escapeHtml(state.bridge.status)}',
+          relayMode: '${escapeHtml(state.relay.mode)}',
+        }, null, 2);
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(diag);
+          if (btn) btn.textContent = '${escapeHtml(t.copiedText)}';
+        }
+      });
       const api = window.nienieDesktop;
       if (!api) return;
+      document.getElementById('btn-toggle-auto-update')?.addEventListener('click', () => {
+        if (api.setAutoUpdate) {
+          api.setAutoUpdate(${state.autoUpdate !== false ? 'false' : 'true'});
+        }
+      });
       document.getElementById('btn-toggle-bridge')?.addEventListener('click', () => {
         ${isRunning ? 'api.stopBridge()' : 'api.startBridge()'};
       });
@@ -1000,4 +1201,16 @@ function iconRefreshMiniSvg(): string {
 
 function iconCopyMiniSvg(): string {
   return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+}
+
+function iconUpgradeSvg(): string {
+  return `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4"/><path d="M12 16V8"/></svg>`;
+}
+
+function iconChevronRightSvg(): string {
+  return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#B2B2B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`;
+}
+
+function iconBrandBadgeSvg(): string {
+  return `<svg width="50" height="50" viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="25" cy="25" r="25" fill="#17B378"/><path d="M16 32V18L25 29L34 18V32" stroke="#FFFFFF" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }

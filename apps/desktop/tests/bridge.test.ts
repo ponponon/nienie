@@ -292,8 +292,10 @@ describe('desktop bridge composition', () => {
 
     ctrl1.setLocale('ko');
     ctrl1.setMachineName('MacBook-Pro-M5-Office');
+    ctrl1.setAutoUpdate(false);
     expect(ctrl1.getState().locale).toBe('ko');
     expect(ctrl1.getState().bridge.machineId).toBe('MacBook-Pro-M5-Office');
+    expect(ctrl1.getState().autoUpdate).toBe(false);
 
     const ctrl2 = new DesktopBridgeController({
       machineId: 'mac_pref',
@@ -304,6 +306,12 @@ describe('desktop bridge composition', () => {
     cleanups.push(() => ctrl2.dispose());
     expect(ctrl2.getState().locale).toBe('ko');
     expect(ctrl2.getState().bridge.machineId).toBe('MacBook-Pro-M5-Office');
+    expect(ctrl2.getState().autoUpdate).toBe(false);
+
+    const zhHtml = renderDesktopAppHtml(ctrl1.getState(), { locale: 'zh' });
+    expect(zhHtml).toContain('升级和反馈');
+    expect(zhHtml).toContain('有新版本时自动更新');
+    expect(zhHtml).toContain('我要反馈');
   });
 
   it('serves an interactive desktop console over localhost via DesktopPreviewServer', async () => {

@@ -1,4 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { resolve } from 'node:path';
 import {
   createDesktopPreloadApi,
   registerDesktopIpcHandlers,
@@ -104,6 +106,7 @@ export class DesktopPreviewServer {
           refreshPairing: 'desktop:refresh-pairing',
           setRelay: 'desktop:set-relay',
           setMachineName: 'desktop:set-machine-name',
+          setAutoUpdate: 'desktop:set-auto-update',
           revokeDevice: 'desktop:revoke-device',
         };
         acc[method] = (...args) => invoke(map[method], ...args);
@@ -121,6 +124,19 @@ export class DesktopPreviewServer {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(this.controller.getState()));
       return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/assets/wechat-appreciate.jpg') {
+      const candidates = [
+        resolve(process.cwd(), 'apps/desktop/assets/wechat-appreciate.jpg'),
+        resolve(process.cwd(), 'assets/wechat-appreciate.jpg'),
+      ];
+      const found = candidates.find((p) => existsSync(p));
+      if (found) {
+        res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'public, max-age=3600' });
+        res.end(readFileSync(found));
+        return;
+      }
     }
 
     if (req.method === 'POST' && url.pathname === '/api/ipc') {

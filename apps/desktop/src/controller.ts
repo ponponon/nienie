@@ -27,6 +27,7 @@ export const NIENIE_IPC_CHANNELS = {
   SET_RELAY: 'desktop:set-relay',
   SET_LOCALE: 'desktop:set-locale',
   SET_MACHINE_NAME: 'desktop:set-machine-name',
+  SET_AUTO_UPDATE: 'desktop:set-auto-update',
   REVOKE_DEVICE: 'desktop:revoke-device',
 } as const;
 
@@ -54,6 +55,7 @@ export type DesktopRelayConfig = {
 
 export type DesktopDashboardState = {
   locale: DesktopLocale;
+  autoUpdate: boolean;
   bridge: {
     status: 'stopped' | 'running' | 'error';
     wsUrl?: string | undefined;
@@ -98,6 +100,7 @@ export class DesktopBridgeController {
   private unsubscribeEvents: (() => void) | undefined;
 
   private locale: DesktopLocale = 'zh';
+  private autoUpdate = true;
   private bridgeServer: BridgeServer | undefined;
   private bridgeStatus: 'stopped' | 'running' | 'error' = 'stopped';
   private wsUrl: string | undefined;
@@ -152,6 +155,7 @@ export class DesktopBridgeController {
   getState(): DesktopDashboardState {
     return {
       locale: this.locale,
+      autoUpdate: this.autoUpdate,
       bridge: {
         status: this.bridgeStatus,
         ...(this.wsUrl ? { wsUrl: this.wsUrl } : {}),
@@ -294,6 +298,13 @@ export class DesktopBridgeController {
     return this.getState();
   }
 
+  setAutoUpdate(enabled: boolean): DesktopDashboardState {
+    this.autoUpdate = Boolean(enabled);
+    this.savePreferences();
+    this.appendLog('info', `Auto-update ${this.autoUpdate ? 'enabled' : 'disabled'}`);
+    return this.getState();
+  }
+
   revokeDevice(deviceId: string): DesktopDashboardState {
     const revoked = this.pairingManager.revokeDevice(deviceId);
     if (revoked) {
@@ -339,11 +350,15 @@ export class DesktopBridgeController {
       const raw = JSON.parse(readFileSync(this.preferencesFilePath, 'utf8')) as {
         machineId?: string;
         locale?: DesktopLocale;
+        autoUpdate?: boolean;
         relayMode?: 'default' | 'custom';
         customRelayUrl?: string;
       };
       if (typeof raw.machineId === 'string' && raw.machineId.trim()) {
         this.machineId = raw.machineId.trim();
+      }
+      if (typeof raw.autoUpdate === 'boolean') {
+        this.autoUpdate = raw.autoUpdate;
       }
       if (
         raw.locale === 'zh' ||
@@ -373,6 +388,7 @@ export class DesktopBridgeController {
         {
           machineId: this.machineId,
           locale: this.locale,
+          autoUpdate: this.autoUpdate,
           relayMode: this.relayMode,
           customRelayUrl: this.customRelayUrl,
         },
@@ -409,6 +425,9 @@ export function registerDesktopIpcHandlers(
   ipcMain.handle(NIENIE_IPC_CHANNELS.SET_MACHINE_NAME, (_event, name) =>
     controller.setMachineName(String(name ?? '')),
   );
+  ipcMain.handle(NIENIE_IPC_CHANNELS.SET_AUTO_UPDATE, (_event, enabled) =>
+    controller.setAutoUpdate(Boolean(enabled)),
+  );
   ipcMain.handle(NIENIE_IPC_CHANNELS.REVOKE_DEVICE, (_event, deviceId) =>
     controller.revokeDevice(String(deviceId)),
   );
@@ -426,6 +445,7 @@ export type DesktopPreloadApi = {
   refreshPairing(): Promise<DesktopDashboardState>;
   setRelay(input: SetRelayInput): Promise<DesktopDashboardState>;
   setMachineName(name: string): Promise<DesktopDashboardState>;
+  setAutoUpdate(enabled: boolean): Promise<DesktopDashboardState>;
   revokeDevice(deviceId: string): Promise<DesktopDashboardState>;
 };
 
@@ -447,6 +467,11 @@ export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPr
       ipcRenderer.invoke(
         NIENIE_IPC_CHANNELS.SET_MACHINE_NAME,
         name,
+      ) as Promise<DesktopDashboardState>,
+    setAutoUpdate: (enabled: boolean) =>
+      ipcRenderer.invoke(
+        NIENIE_IPC_CHANNELS.SET_AUTO_UPDATE,
+        enabled,
       ) as Promise<DesktopDashboardState>,
     revokeDevice: (deviceId: string) =>
       ipcRenderer.invoke(

@@ -195,6 +195,9 @@
 - 本机名称自动读取系统主机名与自定义持久化（`os.hostname()` & `setMachineName` in `apps/desktop`）：
   - 默认自动读取系统真实主机名（如 `MacBook-Pro-M5`，去掉 `.local` 后缀），替代硬编码的 `macbook_local`
   - 在「偏好与日志」页提供自定义本机名称输入框与保存按钮，修改后实时更新配对二维码并持久化写入 `.nienie/desktop-preferences.json`
+- 微信输入法风格「升级和反馈」页面与作者赞赏码集成（`about` Tab in `apps/desktop`）：
+  - 居中应用圆角图标徽章、`Nienie` 标题与 `0.1.0(100)` 版本号
+  - 支持「有新版本时自动更新」开关切换与持久化（`setAutoUpdate`）、「我要反馈」一键复制脱敏诊断包、「赞赏与支持作者」展开微信赞赏码（`/assets/wechat-appreciate.jpg`）及沉底版权与协议声明
 
 ## MVP 规划
 
