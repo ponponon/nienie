@@ -61,20 +61,20 @@ const DESKTOP_I18N: Record<
     navNetwork: '跨设备网络',
     navSystem: '偏好与日志',
     heroTitle: '手机扫码连接',
-    heroSubtitle: '打开手机 Nienie 扫描二维码，自動绑定这台 Mac',
+    heroSubtitle: '打开手机 Nienie 扫描二维码，自动绑定这台 Mac',
     localBridge: '本地 Bridge',
     bridgeDesc: '开启后允许手机通过局域网或 USB 连接这台电脑',
     startBridge: '启动服务',
     stopBridge: '停止服务',
     localAgents: '本机 AI 助手',
     agentsDesc: '已自动检测这台 Mac 上安装的编程 Agent',
-    detect: '重新检测...',
+    detect: '重新检测',
     mobilePairing: '手机连接',
-    newCode: '更换配对码...',
+    newCode: '更换配对码',
     pairingCodeLabel: '6 位数字配对码',
     pairingCodeDesc: '如果不方便扫码，可在手机端直接输入此数字连接',
-    copyUriBtn: '复制口令...',
-    copiedText: '已复制',
+    copyUriBtn: '复制连接口令',
+    copiedText: '✓ 已复制',
     machineLabel: '本机名称',
     endpointLabel: '监听地址',
     connectedDevicesLabel: '已连接手机',
@@ -87,7 +87,7 @@ const DESKTOP_I18N: Record<
     relayDefaultDesc: '不在同一 Wi-Fi 时，通过加密中继服务自动穿透连接',
     relayCustomTitle: '自定义中继服务器',
     relayCustomDesc: '使用您自己部署的私有 WebSocket Relay 地址',
-    useCustomRelay: '应用...',
+    useCustomRelay: '保存并应用',
     useDefaultRelay: '恢复默认',
     languageTitle: '界面语言',
     languageDesc: '设置桌面端控制台的显示语言',
@@ -96,7 +96,7 @@ const DESKTOP_I18N: Record<
     running: '运行中',
     stopped: '已停止',
     error: '异常',
-    revokeBtn: '移除...',
+    revokeBtn: '移除',
     revokedBadge: '已移除',
   },
   en: {
@@ -113,13 +113,13 @@ const DESKTOP_I18N: Record<
     stopBridge: 'Stop',
     localAgents: 'Local AI Agents',
     agentsDesc: 'Coding agents detected on this computer',
-    detect: 'Detect...',
+    detect: 'Refresh',
     mobilePairing: 'Phone Pairing',
-    newCode: 'New Code...',
+    newCode: 'Refresh Code',
     pairingCodeLabel: '6-Digit Pairing Code',
     pairingCodeDesc: 'Enter this code on your phone if camera scanning is unavailable',
-    copyUriBtn: 'Copy Link...',
-    copiedText: 'Copied',
+    copyUriBtn: 'Copy Pairing Link',
+    copiedText: '✓ Copied',
     machineLabel: 'Computer Name',
     endpointLabel: 'Local Endpoint',
     connectedDevicesLabel: 'Paired Phones',
@@ -132,7 +132,7 @@ const DESKTOP_I18N: Record<
     relayDefaultDesc: 'Connect across networks via end-to-end encrypted relay',
     relayCustomTitle: 'Custom Relay Server',
     relayCustomDesc: 'Use your own self-hosted WebSocket Relay endpoint',
-    useCustomRelay: 'Apply...',
+    useCustomRelay: 'Apply',
     useDefaultRelay: 'Reset',
     languageTitle: 'Language',
     languageDesc: 'Choose display language for desktop console',
@@ -141,7 +141,7 @@ const DESKTOP_I18N: Record<
     running: 'Running',
     stopped: 'Stopped',
     error: 'Error',
-    revokeBtn: 'Revoke...',
+    revokeBtn: 'Revoke',
     revokedBadge: 'Revoked',
   },
   ja: {
@@ -158,13 +158,13 @@ const DESKTOP_I18N: Record<
     stopBridge: '停止',
     localAgents: 'ローカル AI',
     agentsDesc: 'この Mac で検出されたコーディングエージェント',
-    detect: '再検出...',
+    detect: '再検出',
     mobilePairing: 'スマホ接続',
-    newCode: '更新...',
+    newCode: 'コード更新',
     pairingCodeLabel: '6桁のペアリングコード',
     pairingCodeDesc: 'カメラが使えない場合はスマホでこの番号を入力してください',
-    copyUriBtn: 'コピー...',
-    copiedText: 'コピー完了',
+    copyUriBtn: 'リンクをコピー',
+    copiedText: '✓ コピー完了',
     machineLabel: 'コンピュータ名',
     endpointLabel: 'ローカルアドレス',
     connectedDevicesLabel: 'ペアリング済み端末',
@@ -177,7 +177,7 @@ const DESKTOP_I18N: Record<
     relayDefaultDesc: '外出先からでも暗号化中継で安全に接続します',
     relayCustomTitle: 'カスタム Relay サーバー',
     relayCustomDesc: '独自の WebSocket Relay アドレスを指定します',
-    useCustomRelay: '適用...',
+    useCustomRelay: '適用',
     useDefaultRelay: '標準に戻す',
     languageTitle: '表示言語',
     languageDesc: 'コンソールの表示言語を切り替えます',
@@ -186,7 +186,7 @@ const DESKTOP_I18N: Record<
     running: '実行中',
     stopped: '停止中',
     error: 'エラー',
-    revokeBtn: '解除...',
+    revokeBtn: '解除',
     revokedBadge: '解除済',
   },
   ko: {
@@ -203,13 +203,13 @@ const DESKTOP_I18N: Record<
     stopBridge: '중지',
     localAgents: '로컬 AI 에이전트',
     agentsDesc: '이 Mac에서 감지된 코딩 에이전트',
-    detect: '다시 감지...',
+    detect: '다시 감지',
     mobilePairing: '휴대폰 연결',
-    newCode: '새 코드...',
+    newCode: '새 코드',
     pairingCodeLabel: '6자리 페어링 코드',
     pairingCodeDesc: '카메라 스캔이 어려울 경우 휴대폰에 이 번호를 입력하세요',
-    copyUriBtn: '링크 복사...',
-    copiedText: '복사됨',
+    copyUriBtn: '연결 링크 복사',
+    copiedText: '✓ 복사됨',
     machineLabel: '컴퓨터 이름',
     endpointLabel: '로컬 주소',
     connectedDevicesLabel: '연결된 휴대폰',
@@ -222,7 +222,7 @@ const DESKTOP_I18N: Record<
     relayDefaultDesc: '외부 네트워크에서도 암호화 릴레이로 자동 연결합니다',
     relayCustomTitle: '사용자 지정 Relay 서버',
     relayCustomDesc: '직접 구축한 프라이빗 WebSocket Relay 주소를 사용합니다',
-    useCustomRelay: '적용...',
+    useCustomRelay: '적용',
     useDefaultRelay: '기본값 복원',
     languageTitle: '표시 언어',
     languageDesc: '데스크톱 콘솔의 표시 언어를 설정합니다',
@@ -231,7 +231,7 @@ const DESKTOP_I18N: Record<
     running: '실행 중',
     stopped: '중지됨',
     error: '오류',
-    revokeBtn: '해제...',
+    revokeBtn: '해제',
     revokedBadge: '해제됨',
   },
 };
@@ -277,8 +277,8 @@ export function renderDesktopAppHtml(
               <div class="row-title">${escapeHtml(t.heroTitle)}</div>
               <div class="row-desc">${escapeHtml(t.heroSubtitle)}</div>
               <div style="margin-top: 10px; display: flex; gap: 8px;">
-                <button class="wetype-btn" id="btn-refresh-pairing" type="button">${escapeHtml(t.newCode)}</button>
-                <button class="wetype-btn" id="btn-copy-uri" type="button">${escapeHtml(t.copyUriBtn)}</button>
+                <button class="wetype-btn" id="btn-refresh-pairing" type="button">${iconRefreshMiniSvg()}<span>${escapeHtml(t.newCode)}</span></button>
+                <button class="wetype-btn" id="btn-copy-uri" type="button">${iconCopyMiniSvg()}<span>${escapeHtml(t.copyUriBtn)}</span></button>
               </div>
             </div>
           </div>
@@ -345,8 +345,8 @@ export function renderDesktopAppHtml(
       --color-text-secondary: #888888;
       --color-divider: #F0F0F0;
       --color-btn-border: #DCDCDC;
-      --font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'SF Pro Text', sans-serif;
-      --font-mono: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+      --font-family: system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+      --font-mono: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
     }
 
     * {
@@ -637,12 +637,15 @@ export function renderDesktopAppHtml(
       transform: translateX(18px);
     }
 
-    /* WeType Outlined Secondary Button ("设置..." / "管理...") */
+    /* WeType Outlined Secondary Button */
     .wetype-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
       background: #FFFFFF;
       border: 1px solid var(--color-btn-border);
       border-radius: 6px;
-      padding: 4px 14px;
+      padding: 5px 12px;
       font-family: var(--font-family);
       font-size: 12px;
       font-weight: 400;
@@ -650,10 +653,12 @@ export function renderDesktopAppHtml(
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
+      transition: background 0.12s ease, border-color 0.12s ease;
     }
 
     .wetype-btn:hover {
       background: #F7F7F7;
+      border-color: #C8C8C8;
     }
 
     .wetype-input {
@@ -668,12 +673,27 @@ export function renderDesktopAppHtml(
     }
 
     .wetype-select {
-      background: #FFFFFF;
+      appearance: none;
+      -webkit-appearance: none;
+      background-color: #FFFFFF;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 15 5 5 5-5'/%3E%3Cpath d='m7 9 5-5 5 5'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 9px center;
       border: 1px solid var(--color-btn-border);
       border-radius: 6px;
-      padding: 4px 10px;
+      padding: 5px 28px 5px 12px;
+      font-family: var(--font-family);
       font-size: 12px;
+      font-weight: 400;
       color: var(--color-text-primary);
+      cursor: pointer;
+      outline: none;
+      transition: background-color 0.12s ease, border-color 0.12s ease;
+    }
+
+    .wetype-select:hover {
+      background-color: #F7F7F7;
+      border-color: #C8C8C8;
     }
 
     details.more-collapse {
@@ -863,13 +883,23 @@ export function renderDesktopAppHtml(
 
   <script>
     window.addEventListener('DOMContentLoaded', () => {
+      const activateTab = (target) => {
+        if (!target) return;
+        document.querySelectorAll('[data-tab-target]').forEach((b) => b.classList.remove('active'));
+        document.querySelectorAll('[data-pane]').forEach((p) => p.classList.remove('active'));
+        document.querySelector('[data-tab-target="' + target + '"]')?.classList.add('active');
+        document.querySelector('[data-pane="' + target + '"]')?.classList.add('active');
+        try {
+          sessionStorage.setItem('nienie_active_tab', target);
+        } catch {}
+      };
+      try {
+        const savedTab = sessionStorage.getItem('nienie_active_tab');
+        if (savedTab) activateTab(savedTab);
+      } catch {}
       document.querySelectorAll('[data-tab-target]').forEach((btn) => {
         btn.addEventListener('click', () => {
-          const target = btn.getAttribute('data-tab-target');
-          document.querySelectorAll('[data-tab-target]').forEach((b) => b.classList.remove('active'));
-          document.querySelectorAll('[data-pane]').forEach((p) => p.classList.remove('active'));
-          btn.classList.add('active');
-          document.querySelector('[data-pane="' + target + '"]')?.classList.add('active');
+          activateTab(btn.getAttribute('data-tab-target'));
         });
       });
       document.getElementById('select-locale')?.addEventListener('change', (ev) => {
@@ -939,4 +969,12 @@ function iconCrossDeviceSvg(): string {
 
 function iconSettingsSvg(): string {
   return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+}
+
+function iconRefreshMiniSvg(): string {
+  return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
+}
+
+function iconCopyMiniSvg(): string {
+  return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 }
