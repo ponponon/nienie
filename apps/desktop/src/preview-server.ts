@@ -103,6 +103,7 @@ export class DesktopPreviewServer {
           refreshAgents: 'desktop:refresh-agents',
           refreshPairing: 'desktop:refresh-pairing',
           setRelay: 'desktop:set-relay',
+          setMachineName: 'desktop:set-machine-name',
           revokeDevice: 'desktop:revoke-device',
         };
         acc[method] = (...args) => invoke(map[method], ...args);

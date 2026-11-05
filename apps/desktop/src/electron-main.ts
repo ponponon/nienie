@@ -28,7 +28,7 @@ async function bootstrap() {
   const previewPort = Number(process.env.NIENIE_PREVIEW_PORT ?? 4101);
 
   controller = new DesktopBridgeController({
-    machineId: process.env.NIENIE_MACHINE_ID ?? 'macbook_local',
+    ...(process.env.NIENIE_MACHINE_ID ? { machineId: process.env.NIENIE_MACHINE_ID } : {}),
     host,
     port: bridgePort,
     includeExtendedAgents: true,

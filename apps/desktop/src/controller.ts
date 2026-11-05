@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
+import { hostname, networkInterfaces } from 'node:os';
 import { dirname } from 'node:path';
 import qrcode from 'qrcode-generator';
 import type { CodexAdapterOptions } from '@nienie/adapter-codex';
@@ -26,6 +26,7 @@ export const NIENIE_IPC_CHANNELS = {
   REFRESH_PAIRING: 'desktop:refresh-pairing',
   SET_RELAY: 'desktop:set-relay',
   SET_LOCALE: 'desktop:set-locale',
+  SET_MACHINE_NAME: 'desktop:set-machine-name',
   REVOKE_DEVICE: 'desktop:revoke-device',
 } as const;
 
@@ -87,7 +88,7 @@ export type SetRelayInput = {
 };
 
 export class DesktopBridgeController {
-  private readonly machineId: string;
+  private machineId: string;
   private readonly host: string;
   private readonly requestedPort: number;
   private readonly maxLogs: number;
@@ -109,7 +110,8 @@ export class DesktopBridgeController {
   private logSequence = 0;
 
   constructor(options: DesktopBridgeControllerOptions = {}) {
-    this.machineId = options.machineId ?? 'machine_local';
+    const defaultHostName = hostname().replace(/\.local$/i, '').trim() || 'machine_local';
+    this.machineId = options.machineId?.trim() || defaultHostName;
     this.host = options.host ?? '127.0.0.1';
     this.requestedPort = options.port ?? 0;
     this.maxLogs = options.maxLogs ?? 200;
@@ -277,6 +279,21 @@ export class DesktopBridgeController {
     return this.getState();
   }
 
+  setMachineName(name: string): DesktopDashboardState {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      return this.getState();
+    }
+    this.machineId = trimmed;
+    this.pairingManager.setMachineId(trimmed);
+    this.savePreferences();
+    this.appendLog('info', `Updated machine name to ${trimmed}`);
+    if (this.pairingView) {
+      this.refreshPairingCode();
+    }
+    return this.getState();
+  }
+
   revokeDevice(deviceId: string): DesktopDashboardState {
     const revoked = this.pairingManager.revokeDevice(deviceId);
     if (revoked) {
@@ -320,10 +337,14 @@ export class DesktopBridgeController {
     }
     try {
       const raw = JSON.parse(readFileSync(this.preferencesFilePath, 'utf8')) as {
+        machineId?: string;
         locale?: DesktopLocale;
         relayMode?: 'default' | 'custom';
         customRelayUrl?: string;
       };
+      if (typeof raw.machineId === 'string' && raw.machineId.trim()) {
+        this.machineId = raw.machineId.trim();
+      }
       if (
         raw.locale === 'zh' ||
         raw.locale === 'en' ||
@@ -350,6 +371,7 @@ export class DesktopBridgeController {
       this.preferencesFilePath,
       JSON.stringify(
         {
+          machineId: this.machineId,
           locale: this.locale,
           relayMode: this.relayMode,
           customRelayUrl: this.customRelayUrl,
@@ -384,6 +406,9 @@ export function registerDesktopIpcHandlers(
   ipcMain.handle(NIENIE_IPC_CHANNELS.SET_LOCALE, (_event, locale) =>
     controller.setLocale(locale as DesktopLocale),
   );
+  ipcMain.handle(NIENIE_IPC_CHANNELS.SET_MACHINE_NAME, (_event, name) =>
+    controller.setMachineName(String(name ?? '')),
+  );
   ipcMain.handle(NIENIE_IPC_CHANNELS.REVOKE_DEVICE, (_event, deviceId) =>
     controller.revokeDevice(String(deviceId)),
   );
@@ -400,6 +425,7 @@ export type DesktopPreloadApi = {
   refreshAgents(): Promise<DesktopDashboardState>;
   refreshPairing(): Promise<DesktopDashboardState>;
   setRelay(input: SetRelayInput): Promise<DesktopDashboardState>;
+  setMachineName(name: string): Promise<DesktopDashboardState>;
   revokeDevice(deviceId: string): Promise<DesktopDashboardState>;
 };
 
@@ -417,6 +443,11 @@ export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPr
       ipcRenderer.invoke(NIENIE_IPC_CHANNELS.REFRESH_PAIRING) as Promise<DesktopDashboardState>,
     setRelay: (input: SetRelayInput) =>
       ipcRenderer.invoke(NIENIE_IPC_CHANNELS.SET_RELAY, input) as Promise<DesktopDashboardState>,
+    setMachineName: (name: string) =>
+      ipcRenderer.invoke(
+        NIENIE_IPC_CHANNELS.SET_MACHINE_NAME,
+        name,
+      ) as Promise<DesktopDashboardState>,
     revokeDevice: (deviceId: string) =>
       ipcRenderer.invoke(
         NIENIE_IPC_CHANNELS.REVOKE_DEVICE,

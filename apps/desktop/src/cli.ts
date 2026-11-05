@@ -20,7 +20,7 @@ const bridgePort = isSmoke ? 0 : Number(process.env.NIENIE_BRIDGE_PORT ?? 4100);
 const previewPort = isSmoke ? 0 : Number(process.env.NIENIE_PREVIEW_PORT ?? 4101);
 
 const controller = new DesktopBridgeController({
-  machineId: process.env.NIENIE_MACHINE_ID ?? 'macbook_local',
+  ...(process.env.NIENIE_MACHINE_ID ? { machineId: process.env.NIENIE_MACHINE_ID } : {}),
   host,
   port: bridgePort,
   includeExtendedAgents: true,

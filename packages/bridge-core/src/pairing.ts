@@ -52,7 +52,7 @@ type StoredDeviceRecord = PairedDevice & {
 };
 
 export class PairingManager {
-  readonly machineId: string;
+  machineId: string;
   private readonly relayUrl: string;
   private readonly ttlMs: number;
   private readonly persistenceFilePath: string | undefined;
@@ -70,6 +70,13 @@ export class PairingManager {
     this.persistenceFilePath = options.persistenceFilePath;
     this.now = options.now ?? (() => new Date());
     this.loadPersistedDevices();
+  }
+
+  setMachineId(machineId: string): void {
+    const trimmed = machineId.trim();
+    if (trimmed) {
+      this.machineId = trimmed;
+    }
   }
 
   createPairingCode(input: { wsUrl: string; relayUrl?: string | undefined }): PairingChallenge {

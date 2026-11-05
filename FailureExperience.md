@@ -315,3 +315,26 @@ CSS Grid 中 `1fr` 等同于 `minmax(auto, 1fr)`，当子元素未声明 `min-wi
 ### 预防措施
 
 在设置列表行（Setting Row）中，右侧同一水平线只允许放置短控件（如 Toggle Switch、单个短按钮或宽度 ≤110px 的下拉框）；凡是包含 URL/路径等长文本输入框的设置项，输入框必须独立置于标题与说明文字的下一层并左对齐缩进。
+
+## 2026-11-04 本机名称硬编码为 `macbook_local` 且不支持用户自定义修改
+
+### 问题
+
+桌面端启动入口将默认 `machineId` 硬编码为 `'macbook_local'`，在「偏好与日志」页仅只读显示 `macbook_local`，既未反映用户真实的电脑主机名，也不支持多台电脑场景下用户自定义命名。
+
+### 根因
+
+原型阶段使用了占位字符串 `'macbook_local'`，未对接 `os.hostname()`，也未在偏好设置中暴露重命名接口。
+
+### 影响
+
+当用户拥有多台电脑（如办公室 MacBook、家里台式机、Linux 服务器）时，手机端看到的机器标识千篇一律且无法按习惯自定义。
+
+### 修复
+
+1. 默认自动读取 `os.hostname().replace(/\.local$/i, '')`（如 `MacBook-Pro-M5`）。
+2. 在 `DesktopBridgeController` 与 `PairingManager` 中实现 `setMachineName(name)` 与 `desktop:set-machine-name` IPC，在「偏好与日志」页提供自定义名称输入框与「保存」按钮，修改后同步刷新配对二维码并持久化至 `.nienie/desktop-preferences.json`。
+
+### 预防措施
+
+涉及设备/机器身份展示的字段，默认值应取自操作系统真实主机名（`os.hostname()`），并允许用户在偏好设置中自定义重命名与持久化。

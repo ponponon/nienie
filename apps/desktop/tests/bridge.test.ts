@@ -291,7 +291,9 @@ describe('desktop bridge composition', () => {
     expect(ctrl1.getState().locale).toBe('zh');
 
     ctrl1.setLocale('ko');
+    ctrl1.setMachineName('MacBook-Pro-M5-Office');
     expect(ctrl1.getState().locale).toBe('ko');
+    expect(ctrl1.getState().bridge.machineId).toBe('MacBook-Pro-M5-Office');
 
     const ctrl2 = new DesktopBridgeController({
       machineId: 'mac_pref',
@@ -301,6 +303,7 @@ describe('desktop bridge composition', () => {
     });
     cleanups.push(() => ctrl2.dispose());
     expect(ctrl2.getState().locale).toBe('ko');
+    expect(ctrl2.getState().bridge.machineId).toBe('MacBook-Pro-M5-Office');
   });
 
   it('serves an interactive desktop console over localhost via DesktopPreviewServer', async () => {

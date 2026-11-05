@@ -30,6 +30,8 @@ const DESKTOP_I18N: Record<
     copyUriBtn: string;
     copiedText: string;
     machineLabel: string;
+    machineDesc: string;
+    saveMachineBtn: string;
     endpointLabel: string;
     connectedDevicesLabel: string;
     connectedDevicesDesc: string;
@@ -76,6 +78,8 @@ const DESKTOP_I18N: Record<
     copyUriBtn: '复制连接口令',
     copiedText: '✓ 已复制',
     machineLabel: '本机名称',
+    machineDesc: '手机连接时显示的电脑名称，默认读取系统主机名',
+    saveMachineBtn: '保存',
     endpointLabel: '监听地址',
     connectedDevicesLabel: '已连接手机',
     connectedDevicesDesc: '管理已授权访问这台 Mac 的移动设备',
@@ -121,6 +125,8 @@ const DESKTOP_I18N: Record<
     copyUriBtn: 'Copy Pairing Link',
     copiedText: '✓ Copied',
     machineLabel: 'Computer Name',
+    machineDesc: 'Display name shown on paired phones (defaults to system hostname)',
+    saveMachineBtn: 'Save',
     endpointLabel: 'Local Endpoint',
     connectedDevicesLabel: 'Paired Phones',
     connectedDevicesDesc: 'Manage mobile devices authorized for this Mac',
@@ -166,6 +172,8 @@ const DESKTOP_I18N: Record<
     copyUriBtn: 'リンクをコピー',
     copiedText: '✓ コピー完了',
     machineLabel: 'コンピュータ名',
+    machineDesc: 'スマホ側に表示されるこの Mac の名前（初期値はホスト名）',
+    saveMachineBtn: '保存',
     endpointLabel: 'ローカルアドレス',
     connectedDevicesLabel: 'ペアリング済み端末',
     connectedDevicesDesc: 'この Mac へのアクセスを許可したスマホを管理します',
@@ -211,6 +219,8 @@ const DESKTOP_I18N: Record<
     copyUriBtn: '연결 링크 복사',
     copiedText: '✓ 복사됨',
     machineLabel: '컴퓨터 이름',
+    machineDesc: '휴대폰 연결 시 표시되는 컴퓨터 이름 (기본값: 시스템 호스트명)',
+    saveMachineBtn: '저장',
     endpointLabel: '로컬 주소',
     connectedDevicesLabel: '연결된 휴대폰',
     connectedDevicesDesc: '이 Mac에 접근 권한이 있는 모바일 기기 관리',
@@ -857,12 +867,15 @@ export function renderDesktopAppHtml(
               <option value="ko" ${locale === 'ko' ? 'selected' : ''}>한국어</option>
             </select>
           </div>
-          <div class="wetype-row">
+          <div class="wetype-row" style="flex-direction: column; align-items: stretch; gap: 10px;">
             <div>
               <div class="row-title">${escapeHtml(t.machineLabel)}</div>
-              <div class="row-desc">${escapeHtml(state.bridge.machineId)}</div>
+              <div class="row-desc">${escapeHtml(t.machineDesc)} · <code>${escapeHtml(state.bridge.wsUrl ?? '-')}</code></div>
             </div>
-            <span class="row-right-text">${escapeHtml(state.bridge.wsUrl ?? '-')}</span>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <input class="wetype-input" id="input-machine-name" style="flex: 1; width: auto;" type="text" value="${escapeHtml(state.bridge.machineId)}" />
+              <button class="wetype-btn" id="btn-save-machine-name" type="button">${escapeHtml(t.saveMachineBtn)}</button>
+            </div>
           </div>
         </div>
 
@@ -933,6 +946,12 @@ export function renderDesktopAppHtml(
       });
       document.getElementById('btn-use-default-relay')?.addEventListener('click', () => {
         api.setRelay({ mode: 'default' });
+      });
+      document.getElementById('btn-save-machine-name')?.addEventListener('click', () => {
+        const input = document.getElementById('input-machine-name');
+        if (input && input.value.trim()) {
+          api.setMachineName(input.value.trim());
+        }
       });
       document.getElementById('row-use-default-relay')?.addEventListener('click', (ev) => {
         if (ev.target && ev.target.id === 'btn-use-default-relay') return;

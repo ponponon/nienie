@@ -192,6 +192,9 @@
   - 每一行采用 `14px` `font-weight: 500` `#1A1A1A` 主标题 + `12px` `#888888` 副标题 + `#F0F0F0` 极细分割线，搭配 iOS 翡翠绿胶囊拨动开关（`.wetype-switch`）、单选圆点（`.wetype-radio`）与 `#DCDCDC` 细描边次级按钮
   - 手机端同步对齐微信输入法分组列表行、翡翠绿 `#17B378` 与细描边按钮风格
   - 优化按钮与选择器细节：移除立即执行按钮后的 `...` 并配内联 SVG 图标，重写 `.wetype-select`（`appearance: none` + 自定义上下双箭头 SVG），并支持跨刷新记忆当前选中的导航 Tab
+- 本机名称自动读取系统主机名与自定义持久化（`os.hostname()` & `setMachineName` in `apps/desktop`）：
+  - 默认自动读取系统真实主机名（如 `MacBook-Pro-M5`，去掉 `.local` 后缀），替代硬编码的 `macbook_local`
+  - 在「偏好与日志」页提供自定义本机名称输入框与保存按钮，修改后实时更新配对二维码并持久化写入 `.nienie/desktop-preferences.json`
 
 ## MVP 规划
 
