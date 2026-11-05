@@ -338,3 +338,26 @@ CSS Grid 中 `1fr` 等同于 `minmax(auto, 1fr)`，当子元素未声明 `min-wi
 ### 预防措施
 
 涉及设备/机器身份展示的字段，默认值应取自操作系统真实主机名（`os.hostname()`），并允许用户在偏好设置中自定义重命名与持久化。
+
+## 2026-11-04 `pnpm start` 缺少源码监听与 UI 热更新（Hot Reload），导致每次修改界面需手动 `Ctrl+C` 重启
+
+### 问题
+
+在迭代桌面端 UI（`apps/desktop/src/renderer.ts`）的过程中，`scripts/start-mac.mjs` 只在进程启动时打包了一次静态产物，未开启源码文件监听与页面自动热刷新，导致每次修改完样式或布局后，用户都必须去终端按 `Ctrl+C` 再重新执行 `pnpm start` 才能看到最新界面。
+
+### 根因
+
+桌面端启动器只实现了单次构建拉起，未接入 `fs.watch` + 动态模块重载 + SSE 页面自动刷新机制。
+
+### 影响
+
+UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口。
+
+### 修复
+
+1. 在 `scripts/start-mac.mjs` 中使用 `fs.watch` 递归监听 `apps/desktop/src/*.ts`，文件保存后 60ms 内通过 `esbuild` 重新编译 `apps/desktop/dist/renderer-live.mjs`。
+2. 在 `DesktopPreviewServer` 中提供 `GET /api/hot-reload` SSE 流，监听 `renderer-live.mjs` 更新并向 Electron `BrowserWindow` 推送 `reload` 事件，前端通过 `EventSource` 自动调用 `window.location.reload()` 并借助 `sessionStorage` 保留当前激活的 Tab，同时动态 `import()` 最新 `renderer-live.mjs?t=<mtime>`，实现不断开 Bridge 连接、不关窗口的毫秒级无感热更新。
+
+### 预防措施
+
+所有 GUI 开发启动命令（如 `pnpm start`）必须默认开启文件监听与 UI 热更新（Hot Reload / Live Reload），避免要求用户在开发调试阶段反复手动重启进程。

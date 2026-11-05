@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   createDesktopPreloadApi,
   registerDesktopIpcHandlers,
@@ -15,22 +16,27 @@ export type DesktopPreviewServerOptions = {
   controller: DesktopBridgeController;
   host?: string | undefined;
   port?: number | undefined;
+  liveRendererPath?: string | undefined;
 };
 
 export class DesktopPreviewServer {
   private readonly controller: DesktopBridgeController;
   private readonly host: string;
   private readonly requestedPort: number;
+  private readonly liveRendererPath: string | undefined;
   private readonly ipcHandlers = new Map<
     string,
     (event: unknown, ...args: unknown[]) => unknown | Promise<unknown>
   >();
+  private readonly hotReloadClients = new Set<ServerResponse>();
+  private liveWatcher: FSWatcher | undefined;
   private httpServer: Server | undefined;
 
   constructor(options: DesktopPreviewServerOptions) {
     this.controller = options.controller;
     this.host = options.host ?? '127.0.0.1';
     this.requestedPort = options.port ?? 0;
+    this.liveRendererPath = options.liveRendererPath;
 
     registerDesktopIpcHandlers(
       {
@@ -56,6 +62,17 @@ export class DesktopPreviewServer {
     });
 
     this.httpServer = server;
+    if (this.liveRendererPath && existsSync(this.liveRendererPath)) {
+      try {
+        this.liveWatcher = watch(this.liveRendererPath, () => {
+          for (const client of this.hotReloadClients) {
+            client.write('data: reload\n\n');
+          }
+        });
+      } catch {
+        // Ignore watch errors
+      }
+    }
     const addr = server.address();
     if (!addr || typeof addr === 'string') {
       throw new Error('DesktopPreviewServer is not listening on a TCP port');
@@ -68,6 +85,14 @@ export class DesktopPreviewServer {
   }
 
   async stop(): Promise<void> {
+    if (this.liveWatcher) {
+      this.liveWatcher.close();
+      this.liveWatcher = undefined;
+    }
+    for (const client of this.hotReloadClients) {
+      client.end();
+    }
+    this.hotReloadClients.clear();
     const server = this.httpServer;
     this.httpServer = undefined;
     if (server) {
@@ -75,8 +100,40 @@ export class DesktopPreviewServer {
     }
   }
 
+  private async renderHtml(
+    state: ReturnType<DesktopBridgeController['getState']>,
+    locale: DesktopLocale,
+  ): Promise<string> {
+    if (this.liveRendererPath && existsSync(this.liveRendererPath)) {
+      try {
+        const mtime = statSync(this.liveRendererPath).mtimeMs;
+        const mod = (await import(
+          `${pathToFileURL(this.liveRendererPath).href}?t=${mtime}`
+        )) as { renderDesktopAppHtml?: typeof renderDesktopAppHtml };
+        if (typeof mod.renderDesktopAppHtml === 'function') {
+          return mod.renderDesktopAppHtml(state, { locale });
+        }
+      } catch {
+        // Fall back to static renderer
+      }
+    }
+    return renderDesktopAppHtml(state, { locale });
+  }
+
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', `http://${this.host}`);
+
+    if (req.method === 'GET' && url.pathname === '/api/hot-reload') {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      res.write('data: connected\n\n');
+      this.hotReloadClients.add(res);
+      req.on('close', () => this.hotReloadClients.delete(res));
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/') {
       const rawLang = url.searchParams.get('lang');
@@ -84,8 +141,14 @@ export class DesktopPreviewServer {
         this.controller.setLocale(rawLang);
       }
       const state = this.controller.getState();
-      const baseHtml = renderDesktopAppHtml(state, { locale: state.locale });
+      const baseHtml = await this.renderHtml(state, state.locale);
       const httpShimScript = `<script>
+    if (typeof EventSource !== 'undefined') {
+      const es = new EventSource('/api/hot-reload');
+      es.onmessage = (ev) => {
+        if (ev.data === 'reload') window.location.reload();
+      };
+    }
     if (!window.nienieDesktop) {
       const invoke = async (channel, ...args) => {
         const res = await fetch('/api/ipc', {

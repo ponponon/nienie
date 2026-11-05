@@ -53,6 +53,7 @@ async function bootstrap() {
     controller,
     host: '127.0.0.1',
     port: previewPort,
+    liveRendererPath: resolve(process.cwd(), 'apps/desktop/dist/renderer-live.mjs'),
   });
   const previewAddr = await preview.start();
   const lanIp = detectLanIp();

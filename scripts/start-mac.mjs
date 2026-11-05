@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { watch } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +24,25 @@ if (!process.argv.includes('--smoke')) {
       // No stale process
     }
   }
+}
+
+const rendererEntry = resolve(rootDir, 'apps/desktop/src/renderer.ts');
+const rendererLiveOut = resolve(rootDir, 'apps/desktop/dist/renderer-live.mjs');
+
+function bundleLiveRenderer() {
+  execFileSync(
+    esbuildBin,
+    [
+      rendererEntry,
+      '--bundle',
+      '--platform=node',
+      '--format=esm',
+      '--target=node22',
+      `--outfile=${rendererLiveOut}`,
+      '--log-level=silent',
+    ],
+    { cwd: rootDir, stdio: 'ignore' },
+  );
 }
 
 if (isSmokeOrHeadless) {
@@ -51,6 +71,8 @@ if (isSmokeOrHeadless) {
   const entryFile = resolve(rootDir, 'apps/desktop/src/electron-main.ts');
   const outFile = resolve(rootDir, 'apps/desktop/dist/electron-main.cjs');
 
+  bundleLiveRenderer();
+
   execFileSync(
     esbuildBin,
     [
@@ -65,6 +87,21 @@ if (isSmokeOrHeadless) {
     { cwd: rootDir, stdio: 'inherit' },
   );
 
+  const srcDir = resolve(rootDir, 'apps/desktop/src');
+  let debounceTimer;
+  const watcher = watch(srcDir, { recursive: true }, (_eventType, filename) => {
+    if (!filename || !filename.endsWith('.ts')) return;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      try {
+        bundleLiveRenderer();
+        process.stdout.write(`[Hot Reload] Rebuilt UI from ${filename}\n`);
+      } catch (err) {
+        process.stderr.write(`[Hot Reload] Build error: ${err.message}\n`);
+      }
+    }, 60);
+  });
+
   const requireFromDesktop = createRequire(resolve(rootDir, 'apps/desktop/package.json'));
   const electronBinary = requireFromDesktop('electron');
 
@@ -72,5 +109,8 @@ if (isSmokeOrHeadless) {
     cwd: rootDir,
     stdio: 'inherit',
   });
-  child.on('exit', (code) => process.exit(code ?? 0));
+  child.on('exit', (code) => {
+    watcher.close();
+    process.exit(code ?? 0);
+  });
 }
