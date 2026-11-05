@@ -107,6 +107,8 @@ void main() {
       await tester.pumpWidget(NienieMobileApp(client: client));
 
       // 1. Pair and connect to computer
+      await tester.tap(find.byKey(const Key('btn-toggle-advanced')));
+      await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const Key('input-ws-url')), 'ws://127.0.0.1:4100');
       await tester.enterText(find.byKey(const Key('input-pairing-code')), '123456');
       await tester.tap(find.byKey(const Key('btn-connect-pair')));
@@ -336,6 +338,8 @@ void main() {
 
     await tester.pumpWidget(NienieMobileApp(client: client));
 
+    await tester.tap(find.byKey(const Key('btn-toggle-advanced')));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('input-qr-uri')), qrUri);
     await tester.tap(find.byKey(const Key('btn-pair-qr-uri')));
     await tester.pumpAndSettle();

@@ -10,6 +10,8 @@ const DESKTOP_I18N: Record<
   DesktopLocale,
   {
     appTitle: string;
+    heroTitle: string;
+    heroSubtitle: string;
     localBridge: string;
     startBridge: string;
     stopBridge: string;
@@ -18,13 +20,15 @@ const DESKTOP_I18N: Record<
     mobilePairing: string;
     newCode: string;
     pairingCodeLabel: string;
-    expiresPrefix: string;
     copyUriBtn: string;
+    copiedText: string;
     machineLabel: string;
     endpointLabel: string;
     connectedDevicesLabel: string;
     detectedBadge: string;
     unavailableBadge: string;
+    moreAgentsSummary: string;
+    advancedSummary: string;
     publicRelay: string;
     defaultRelayLabel: string;
     activeRelayLabel: string;
@@ -40,57 +44,65 @@ const DESKTOP_I18N: Record<
 > = {
   zh: {
     appTitle: 'Nienie Bridge 控制台',
+    heroTitle: '用手机连接这台 Mac',
+    heroSubtitle: '打开手机 Nienie 扫描二维码，或输入下方 6 位配对码',
     localBridge: '本地 Bridge',
     startBridge: '启动服务',
     stopBridge: '停止服务',
-    localAgents: '本机 Agents',
-    detect: '重新探测',
+    localAgents: '可用 AI 助手',
+    detect: '重新检测',
     mobilePairing: '手机扫码配对',
-    newCode: '刷新配对码',
-    pairingCodeLabel: '6 位一次性配对码',
-    expiresPrefix: '有效期至',
-    copyUriBtn: '复制配对链接',
-    machineLabel: '本机标识',
-    endpointLabel: '监听地址',
+    newCode: '更换配对码',
+    pairingCodeLabel: '配对码',
+    copyUriBtn: '复制连接口令',
+    copiedText: '已复制',
+    machineLabel: '电脑名称',
+    endpointLabel: '本地地址',
     connectedDevicesLabel: '已连接手机',
-    detectedBadge: '可用',
+    detectedBadge: '已就绪',
     unavailableBadge: '未安装',
-    publicRelay: '公网 Relay',
+    moreAgentsSummary: '查看其他未安装的助手',
+    advancedSummary: '高级设置与诊断日志',
+    publicRelay: '公网中继 (Relay)',
     defaultRelayLabel: '默认地址',
     activeRelayLabel: '当前生效',
-    useCustomRelay: '应用自定义 Relay',
+    useCustomRelay: '保存自定义地址',
     useDefaultRelay: '恢复默认',
     diagnosticLogs: '运行日志',
-    running: '运行中',
+    running: '服务已就绪',
     stopped: '已停止',
     error: '异常',
-    revokeBtn: '移除',
-    revokedBadge: '已撤销',
+    revokeBtn: '断开',
+    revokedBadge: '已移除',
   },
   en: {
     appTitle: 'Nienie Bridge Console',
+    heroTitle: 'Connect from Your Phone',
+    heroSubtitle: 'Scan the QR code with Nienie on your phone, or enter the 6-digit code',
     localBridge: 'Local Bridge',
     startBridge: 'Start Bridge',
     stopBridge: 'Stop Bridge',
-    localAgents: 'Local Agents',
-    detect: 'Detect',
+    localAgents: 'Ready AI Agents',
+    detect: 'Refresh',
     mobilePairing: 'Mobile Pairing',
-    newCode: 'New Code',
-    pairingCodeLabel: 'One-Time Pairing Code',
-    expiresPrefix: 'Expires',
-    copyUriBtn: 'Copy Pairing URI',
-    machineLabel: 'Machine ID',
-    endpointLabel: 'Endpoint',
-    connectedDevicesLabel: 'Connected Devices',
+    newCode: 'Refresh Code',
+    pairingCodeLabel: 'Pairing Code',
+    copyUriBtn: 'Copy Link',
+    copiedText: 'Copied',
+    machineLabel: 'Computer',
+    endpointLabel: 'Address',
+    connectedDevicesLabel: 'Connected Phones',
     detectedBadge: 'Ready',
-    unavailableBadge: 'Offline',
+    unavailableBadge: 'Not Installed',
+    moreAgentsSummary: 'Other supported agents',
+    advancedSummary: 'Advanced Settings & Logs',
     publicRelay: 'Public Relay',
     defaultRelayLabel: 'Default',
     activeRelayLabel: 'Active',
     useCustomRelay: 'Use Custom Relay',
-    useDefaultRelay: 'Use Default',
+    useDefaultRelay: 'Reset Default',
     diagnosticLogs: 'Diagnostic Logs',
-    running: 'Running',
+    running: 'Ready',
     stopped: 'Stopped',
     error: 'Error',
     revokeBtn: 'Revoke',
@@ -98,28 +110,32 @@ const DESKTOP_I18N: Record<
   },
   ja: {
     appTitle: 'Nienie Bridge コンソール',
+    heroTitle: 'スマホからこの Mac に接続',
+    heroSubtitle: 'スマホの Nienie で QR コードを読み取るか、6桁のコードを入力してください',
     localBridge: 'ローカル Bridge',
     startBridge: '起動',
     stopBridge: '停止',
-    localAgents: 'ローカル Agents',
+    localAgents: '利用可能な AI',
     detect: '再検出',
-    mobilePairing: 'スマホ接続・ペアリング',
+    mobilePairing: 'モバイルペアリング',
     newCode: 'コード更新',
-    pairingCodeLabel: 'ワンタイムコード',
-    expiresPrefix: '有効期限',
-    copyUriBtn: 'URI をコピー',
-    machineLabel: 'マシン ID',
-    endpointLabel: '待受アドレス',
-    connectedDevicesLabel: '接続台数',
-    detectedBadge: '利用可能',
+    pairingCodeLabel: 'ペアリングコード',
+    copyUriBtn: 'リンクをコピー',
+    copiedText: 'コピー完了',
+    machineLabel: 'Mac 名',
+    endpointLabel: 'アドレス',
+    connectedDevicesLabel: '接続中のスマホ',
+    detectedBadge: '準備完了',
     unavailableBadge: '未検出',
+    moreAgentsSummary: 'その他の対応エージェントを表示',
+    advancedSummary: '詳細設定と診断ログ',
     publicRelay: 'パブリック Relay',
     defaultRelayLabel: 'デフォルト',
     activeRelayLabel: '現在有効',
     useCustomRelay: 'カスタム適用',
-    useDefaultRelay: 'デフォルト戻す',
+    useDefaultRelay: 'デフォルトに戻す',
     diagnosticLogs: '診断ログ',
-    running: '実行中',
+    running: '準備完了',
     stopped: '停止中',
     error: 'エラー',
     revokeBtn: '解除',
@@ -127,28 +143,32 @@ const DESKTOP_I18N: Record<
   },
   ko: {
     appTitle: 'Nienie Bridge 콘솔',
+    heroTitle: '휴대폰으로 이 Mac에 연결',
+    heroSubtitle: '휴대폰 Nienie 앱으로 QR 코드를 스캔하거나 아래 6자리 코드를 입력하세요',
     localBridge: '로컬 Bridge',
     startBridge: '시작',
     stopBridge: '중지',
-    localAgents: '로컬 Agents',
-    detect: '다시 감지',
+    localAgents: '준비된 AI 에이전트',
+    detect: '새로고침',
     mobilePairing: '모바일 페어링',
-    newCode: '새 코드',
-    pairingCodeLabel: '일회용 페어링 코드',
-    expiresPrefix: '만료 시간',
-    copyUriBtn: 'URI 복사',
-    machineLabel: '머신 ID',
-    endpointLabel: '엔드포인트',
-    connectedDevicesLabel: '연결 기기',
-    detectedBadge: '사용 가능',
-    unavailableBadge: '미감지',
+    newCode: '코드 변경',
+    pairingCodeLabel: '페어링 코드',
+    copyUriBtn: '연결 링크 복사',
+    copiedText: '복사됨',
+    machineLabel: '컴퓨터',
+    endpointLabel: '주소',
+    connectedDevicesLabel: '연결된 휴대폰',
+    detectedBadge: '준비됨',
+    unavailableBadge: '미설치',
+    moreAgentsSummary: '설치되지 않은 다른 에이전트 보기',
+    advancedSummary: '고급 설정 및 진단 로그',
     publicRelay: '퍼블릭 Relay',
     defaultRelayLabel: '기본 주소',
     activeRelayLabel: '현재 활성',
     useCustomRelay: '사용자 지정 적용',
     useDefaultRelay: '기본값 복원',
     diagnosticLogs: '진단 로그',
-    running: '실행 중',
+    running: '준비됨',
     stopped: '중지됨',
     error: '오류',
     revokeBtn: '해제',
@@ -166,42 +186,47 @@ export function renderDesktopAppHtml(
   const statusLabel = isRunning ? t.running : state.bridge.status === 'error' ? t.error : t.stopped;
   const statusClass = isRunning ? 'badge-success' : state.bridge.status === 'error' ? 'badge-danger' : 'badge-muted';
 
-  const sortedAgents = [...state.agents].sort(
-    (a, b) => Number(b.available) - Number(a.available),
-  );
+  const onlineAgents = state.agents.filter((a) => a.available);
+  const offlineAgents = state.agents.filter((a) => !a.available);
 
-  const agentsHtml = sortedAgents
-    .map((agent) => {
-      const onlineClass = agent.available ? 'badge-success' : 'badge-muted';
-      const onlineText = agent.available ? t.detectedBadge : t.unavailableBadge;
-      return `
-        <div class="agent-row ${agent.available ? 'agent-online' : 'agent-offline'}" data-agent-id="${escapeHtml(agent.id)}">
-          <div class="agent-meta">
-            <span class="agent-icon">${iconTerminalSvg()}</span>
-            <span class="agent-name">${escapeHtml(agent.name)}${agent.version ? ` <span class="agent-version">v${escapeHtml(agent.version)}</span>` : ''}</span>
-          </div>
-          <span class="badge ${onlineClass}">${escapeHtml(onlineText)}</span>
+  const renderAgentItem = (agent: DesktopDashboardState['agents'][number]) => {
+    const onlineClass = agent.available ? 'badge-success' : 'badge-muted';
+    const onlineText = agent.available ? t.detectedBadge : t.unavailableBadge;
+    return `
+      <div class="agent-row ${agent.available ? 'agent-online' : 'agent-offline'}" data-agent-id="${escapeHtml(agent.id)}">
+        <div class="agent-meta">
+          <span class="agent-dot ${agent.available ? 'dot-online' : 'dot-offline'}"></span>
+          <span class="agent-name">${escapeHtml(agent.name)}${agent.version ? ` <span class="agent-version">v${escapeHtml(agent.version)}</span>` : ''}</span>
         </div>
-      `;
-    })
-    .join('');
+        <span class="badge ${onlineClass}">${escapeHtml(onlineText)}</span>
+      </div>
+    `;
+  };
+
+  const onlineAgentsHtml = onlineAgents.map(renderAgentItem).join('');
+  const offlineAgentsHtml = offlineAgents.map(renderAgentItem).join('');
+
+  const formattedCode = state.pairing
+    ? `${state.pairing.pairingCode.slice(0, 3)} ${state.pairing.pairingCode.slice(3)}`
+    : '--- ---';
 
   const pairingHtml = state.pairing
     ? `
-      <div class="pairing-content">
+      <div class="hero-pairing">
         <div class="qr-frame">${state.pairing.qrSvg}</div>
-        <div class="pairing-details">
-          <div class="field-hint">${escapeHtml(t.pairingCodeLabel)}</div>
-          <div class="pairing-code" id="pairing-code">${escapeHtml(state.pairing.pairingCode)}</div>
-          <div class="field-hint">${escapeHtml(t.expiresPrefix)} ${escapeHtml(state.pairing.expiresAt.slice(11, 19))}</div>
-          <div class="uri-row">
-            <code class="uri-box" id="pairing-uri-code">${escapeHtml(state.pairing.qrUri)}</code>
+        <div class="hero-info">
+          <h1 class="hero-title">${escapeHtml(t.heroTitle)}</h1>
+          <p class="hero-subtitle">${escapeHtml(t.heroSubtitle)}</p>
+          <div class="code-pill" id="pairing-code" data-raw-code="${escapeHtml(state.pairing.pairingCode)}">${escapeHtml(formattedCode)}</div>
+          <code class="sr-only" id="pairing-uri-code">${escapeHtml(state.pairing.qrUri)}</code>
+          <div class="hero-actions">
+            <button class="btn btn-secondary" id="btn-refresh-pairing" type="button">${iconRefreshSvg()} ${escapeHtml(t.newCode)}</button>
             <button class="btn btn-secondary" id="btn-copy-uri" type="button">${escapeHtml(t.copyUriBtn)}</button>
           </div>
         </div>
       </div>
     `
-    : `<div class="empty-state">Start the local Bridge to generate a one-time pairing QR code.</div>`;
+    : `<div class="empty-state">Start the local Bridge to generate a pairing code.</div>`;
 
   const devicesHtml = state.devices
     .map((device) => {
@@ -220,7 +245,7 @@ export function renderDesktopAppHtml(
     .join('');
 
   const logsHtml = state.logs
-    .slice(-30)
+    .slice(-25)
     .reverse()
     .map(
       (entry) => `
@@ -246,28 +271,16 @@ export function renderDesktopAppHtml(
       --color-bg-secondary: #FFFFFF;
       --color-bg-elevated: #F7F7FA;
       --color-border: #E5E5EA;
-      --color-text-primary: #1C1C1E;
-      --color-text-secondary: #6C6C70;
+      --color-text-primary: #1D1D1F;
+      --color-text-secondary: #6E6E73;
       --color-accent: #07C160;
       --color-accent-hover: #06AD56;
-      --color-ios-blue: #007AFF;
-      --color-success: #07C160;
-      --color-warning: #FF9500;
       --color-danger: #FF3B30;
 
-      --space-1: 4px;
-      --space-2: 8px;
-      --space-3: 10px;
-      --space-4: 12px;
-
       --radius-sm: 8px;
-      --radius-md: 12px;
+      --radius-md: 14px;
       --font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
       --font-mono: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
-      --text-xs: 11px;
-      --text-sm: 12px;
-      --text-base: 13px;
-      --text-lg: 14px;
     }
 
     * {
@@ -283,15 +296,18 @@ export function renderDesktopAppHtml(
       background: var(--color-bg-primary);
       color: var(--color-text-primary);
       font-family: var(--font-family);
-      font-size: var(--text-base);
-      line-height: 1.4;
+      font-size: 13px;
+      line-height: 1.45;
       -webkit-font-smoothing: antialiased;
     }
 
-    body {
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
     }
 
     .title-bar {
@@ -299,18 +315,17 @@ export function renderDesktopAppHtml(
       top: 0;
       z-index: 100;
       width: 100%;
-      height: 42px;
+      height: 44px;
       padding-left: 78px;
       padding-right: 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid var(--color-border);
-      background: rgba(255, 255, 255, 0.92);
-      backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+      background: rgba(242, 242, 247, 0.88);
+      backdrop-filter: blur(20px);
       -webkit-app-region: drag;
       user-select: none;
-      flex-shrink: 0;
     }
 
     .title-brand {
@@ -318,19 +333,24 @@ export function renderDesktopAppHtml(
       align-items: center;
       gap: 6px;
       font-weight: 600;
-      font-size: var(--text-base);
+      font-size: 13px;
       color: var(--color-text-primary);
-      white-space: nowrap;
+    }
+
+    .container {
+      max-width: 600px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 20px 20px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
     }
 
     .workspace-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+      grid-template-columns: minmax(0, 1fr);
       gap: 12px;
-      padding: 12px 16px;
-      width: 100%;
-      max-width: 1200px;
-      margin: 0 auto;
     }
 
     .card {
@@ -338,49 +358,183 @@ export function renderDesktopAppHtml(
       overflow: hidden;
       background: var(--color-bg-secondary);
       border: 1px solid rgba(0, 0, 0, 0.06);
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
       border-radius: var(--radius-md);
-      padding: 12px 14px;
+      padding: 18px 20px;
       display: flex;
       flex-direction: column;
+      gap: 12px;
+    }
+
+    .hero-pairing {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+    }
+
+    .qr-frame {
+      flex-shrink: 0;
+      background: #FFFFFF;
+      border: 1px solid var(--color-border);
+      border-radius: 12px;
+      padding: 6px;
+    }
+
+    .qr-frame svg {
+      width: 132px;
+      height: 132px;
+      display: block;
+    }
+
+    .hero-info {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .hero-title {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--color-text-primary);
+    }
+
+    .hero-subtitle {
+      font-size: 12px;
+      color: var(--color-text-secondary);
+    }
+
+    .code-pill {
+      font-family: var(--font-mono);
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      color: var(--color-accent);
+      background: rgba(7, 193, 96, 0.08);
+      padding: 4px 14px;
+      border-radius: 10px;
+      margin: 2px 0;
+      user-select: all;
+    }
+
+    .hero-actions {
+      display: flex;
       gap: 8px;
+      margin-top: 2px;
     }
 
-    .card-full {
-      grid-column: 1 / -1;
-    }
-
-    .card-header {
+    .section-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
     }
 
-    .card-title {
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-text-secondary);
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: var(--text-lg);
-      font-weight: 600;
-      color: var(--color-text-primary);
-      white-space: nowrap;
+    }
+
+    .agent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .agent-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--color-bg-elevated);
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+    }
+
+    .agent-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .agent-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .dot-online {
+      background: var(--color-accent);
+    }
+
+    .dot-offline {
+      background: #C7C7CC;
+    }
+
+    .agent-name {
+      font-weight: 500;
+    }
+
+    .agent-version {
+      font-size: 11px;
+      color: var(--color-text-secondary);
+      font-weight: 400;
+    }
+
+    details.subtle-collapse {
+      font-size: 12px;
+      color: var(--color-text-secondary);
+    }
+
+    details.subtle-collapse summary {
+      cursor: pointer;
+      user-select: none;
+      padding: 4px 0;
+      color: var(--color-text-secondary);
+      list-style: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    details.subtle-collapse summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.subtle-collapse summary::after {
+      content: '▾';
+      font-size: 11px;
+    }
+
+    details.subtle-collapse[open] summary::after {
+      content: '▴';
+    }
+
+    .offline-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 6px;
+      margin-top: 8px;
     }
 
     .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 4px;
+      gap: 5px;
       background: var(--color-accent);
       color: #FFFFFF;
       border: none;
       border-radius: var(--radius-sm);
-      padding: 5px 10px;
-      font-size: var(--text-xs);
-      font-weight: 600;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 500;
       white-space: nowrap;
-      flex-shrink: 0;
       cursor: pointer;
     }
 
@@ -395,29 +549,26 @@ export function renderDesktopAppHtml(
     }
 
     .btn-secondary:hover {
-      background: #EEEEF2;
+      background: #EAEAEF;
     }
 
     .btn-mini {
-      background: #FFF0F0;
+      background: rgba(255, 59, 48, 0.1);
       color: var(--color-danger);
-      border: 1px solid rgba(255, 59, 48, 0.2);
+      border: none;
       border-radius: 6px;
-      padding: 2px 8px;
+      padding: 3px 8px;
       font-size: 11px;
-      white-space: nowrap;
       cursor: pointer;
     }
 
     .badge {
       display: inline-flex;
       align-items: center;
-      padding: 2px 8px;
+      padding: 2px 9px;
       border-radius: 999px;
       font-size: 11px;
       font-weight: 600;
-      white-space: nowrap;
-      flex-shrink: 0;
     }
 
     .badge-success {
@@ -431,168 +582,45 @@ export function renderDesktopAppHtml(
     }
 
     .badge-muted {
-      background: var(--color-bg-elevated);
+      background: #EEEEF2;
       color: var(--color-text-secondary);
-    }
-
-    .pairing-content {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      min-width: 0;
-    }
-
-    .qr-frame {
-      flex-shrink: 0;
-    }
-
-    .qr-frame svg {
-      width: 108px;
-      height: 108px;
-      display: block;
-      border: 1px solid var(--color-border);
-      border-radius: var(--radius-sm);
-      padding: 2px;
-      background: #FFFFFF;
-    }
-
-    .pairing-details {
-      flex: 1;
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .pairing-code {
-      font-family: var(--font-mono);
-      font-size: 28px;
-      font-weight: 700;
-      letter-spacing: 4px;
-      color: var(--color-accent);
-      line-height: 1.15;
-    }
-
-    .uri-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 4px;
-      min-width: 0;
-    }
-
-    .uri-box {
-      flex: 1;
-      min-width: 0;
-      display: block;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      padding: 4px 8px;
-      background: var(--color-bg-elevated);
-      border: 1px solid var(--color-border);
-      border-radius: 6px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      color: var(--color-text-secondary);
-    }
-
-    .kv-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
     }
 
     .kv-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      padding: 6px 10px;
+      padding: 7px 10px;
       background: var(--color-bg-elevated);
       border-radius: var(--radius-sm);
-      font-size: var(--text-xs);
-      min-width: 0;
+      font-size: 12px;
     }
 
     .kv-label {
       color: var(--color-text-secondary);
-      white-space: nowrap;
-      flex-shrink: 0;
     }
 
     .kv-value {
       font-family: var(--font-mono);
-      font-weight: 600;
-      color: var(--color-text-primary);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .agents-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 6px;
-    }
-
-    .agent-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      padding: 6px 8px;
-      background: var(--color-bg-elevated);
-      border-radius: var(--radius-sm);
-      font-size: var(--text-xs);
-      min-width: 0;
-    }
-
-    .agent-online {
-      border: 1px solid rgba(7, 193, 96, 0.35);
-      background: rgba(7, 193, 96, 0.05);
-    }
-
-    .agent-meta {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      min-width: 0;
-    }
-
-    .agent-name {
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .agent-version, .field-hint {
-      font-size: 11px;
-      color: var(--color-text-secondary);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      font-weight: 500;
     }
 
     .input {
       width: 100%;
-      min-width: 0;
       background: var(--color-bg-elevated);
       border: 1px solid var(--color-border);
       border-radius: var(--radius-sm);
       color: var(--color-text-primary);
       padding: 6px 10px;
-      font-family: var(--font-mono);
-      font-size: var(--text-xs);
+      font-size: 12px;
     }
 
     .log-stream {
       background: var(--color-bg-elevated);
       border: 1px solid var(--color-border);
       border-radius: var(--radius-sm);
-      padding: 6px 10px;
-      max-height: 88px;
+      padding: 8px 10px;
+      max-height: 110px;
       overflow-y: auto;
       font-family: var(--font-mono);
       font-size: 11px;
@@ -602,7 +630,6 @@ export function renderDesktopAppHtml(
       display: flex;
       gap: 8px;
       padding: 1px 0;
-      min-width: 0;
     }
 
     .log-time {
@@ -634,74 +661,78 @@ export function renderDesktopAppHtml(
     </div>
   </header>
 
-  <main class="workspace-grid">
-    <!-- Row 1 Left: Mobile QR & One-Time Code Pairing -->
+  <main class="container workspace-grid">
+    <!-- 1. Hero Card: Clean Scan QR & 6-Digit Code -->
     <section class="card">
-      <div class="card-header">
-        <h2 class="card-title">${iconQrSvg()} ${escapeHtml(t.mobilePairing)}</h2>
-        <button class="btn btn-secondary" id="btn-refresh-pairing">${iconRefreshSvg()} ${escapeHtml(t.newCode)}</button>
-      </div>
       ${pairingHtml}
+      ${devicesHtml ? `<div style="display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--color-border);">${devicesHtml}</div>` : ''}
     </section>
 
-    <!-- Row 1 Right: Local Bridge Status & Paired Mobile Devices -->
+    <!-- 2. Ready AI Agents Card (Only installed shown prominently; uninstalled tucked away) -->
     <section class="card">
-      <div class="card-header">
-        <h2 class="card-title">${iconBridgeSvg()} ${escapeHtml(t.localBridge)}</h2>
-        <button class="btn" id="btn-toggle-bridge">${escapeHtml(isRunning ? t.stopBridge : t.startBridge)}</button>
+      <div class="section-header">
+        <span class="section-title">${iconTerminalSvg()} ${escapeHtml(t.localAgents)}</span>
+        <button class="btn btn-secondary" id="btn-refresh-agents" type="button">${iconRefreshSvg()} ${escapeHtml(t.detect)}</button>
       </div>
-      <div class="kv-list">
-        <div class="kv-row">
-          <span class="kv-label">${escapeHtml(t.machineLabel)}</span>
-          <span class="kv-value">${escapeHtml(state.bridge.machineId)}</span>
-        </div>
-        <div class="kv-row">
-          <span class="kv-label">${escapeHtml(t.endpointLabel)}</span>
-          <span class="kv-value">${escapeHtml(state.bridge.wsUrl ?? '-')}</span>
-        </div>
-        <div class="kv-row">
-          <span class="kv-label">${escapeHtml(t.connectedDevicesLabel)}</span>
-          <span class="kv-value">${state.bridge.connectedClients}</span>
-        </div>
-        ${devicesHtml}
+      <div class="agent-list">
+        ${onlineAgentsHtml || `<div class="kv-row"><span class="kv-label">No online agent detected</span></div>`}
       </div>
+      ${
+        offlineAgents.length > 0
+          ? `<details class="subtle-collapse">
+              <summary>${escapeHtml(t.moreAgentsSummary)} (${offlineAgents.length})</summary>
+              <div class="offline-grid">${offlineAgentsHtml}</div>
+            </details>`
+          : ''
+      }
     </section>
 
-    <!-- Row 2 Left: Compact 2-Column Local Agents Grid -->
-    <section class="card">
-      <div class="card-header">
-        <h2 class="card-title">${iconTerminalSvg()} ${escapeHtml(t.localAgents)}</h2>
-        <button class="btn btn-secondary" id="btn-refresh-agents">${iconRefreshSvg()} ${escapeHtml(t.detect)}</button>
-      </div>
-      <div class="agents-grid">
-        ${agentsHtml || '<div class="field-hint">No agents detected yet.</div>'}
-      </div>
-    </section>
+    <!-- 3. Progressive Disclosure: Advanced Network, Relay & Logs tucked cleanly at the bottom -->
+    <details class="subtle-collapse">
+      <summary style="justify-content: center; width: 100%; padding: 6px 0;">${escapeHtml(t.advancedSummary)}</summary>
+      <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+        <section class="card">
+          <div class="section-header">
+            <span class="section-title">${escapeHtml(t.localBridge)}</span>
+            <button class="btn btn-secondary" id="btn-toggle-bridge" type="button">${escapeHtml(isRunning ? t.stopBridge : t.startBridge)}</button>
+          </div>
+          <div class="kv-row">
+            <span class="kv-label">${escapeHtml(t.machineLabel)}</span>
+            <span class="kv-value">${escapeHtml(state.bridge.machineId)}</span>
+          </div>
+          <div class="kv-row">
+            <span class="kv-label">${escapeHtml(t.endpointLabel)}</span>
+            <span class="kv-value">${escapeHtml(state.bridge.wsUrl ?? '-')}</span>
+          </div>
+        </section>
 
-    <!-- Row 2 Right: Compact Public Relay Configuration -->
-    <section class="card">
-      <div class="card-header">
-        <h2 class="card-title">${iconGlobeSvg()} ${escapeHtml(t.publicRelay)}</h2>
-        <span class="badge badge-muted">${state.relay.mode === 'custom' ? 'Custom' : 'Default'}</span>
-      </div>
-      <div class="field-hint">${escapeHtml(t.defaultRelayLabel)}: <code>${escapeHtml(state.relay.defaultRelayUrl)}</code></div>
-      <div class="field-hint">${escapeHtml(t.activeRelayLabel)}: <code id="active-relay-url">${escapeHtml(state.relay.activeRelayUrl)}</code></div>
-      <input class="input" id="input-custom-relay" type="text" placeholder="wss://relay.example.com" value="${escapeHtml(state.relay.customRelayUrl)}" />
-      <div style="display: flex; gap: 8px;">
-        <button class="btn" id="btn-save-custom-relay">${escapeHtml(t.useCustomRelay)}</button>
-        <button class="btn btn-secondary" id="btn-use-default-relay">${escapeHtml(t.useDefaultRelay)}</button>
-      </div>
-    </section>
+        <section class="card">
+          <div class="section-header">
+            <span class="section-title">${iconGlobeSvg()} ${escapeHtml(t.publicRelay)}</span>
+            <span class="badge badge-muted">${state.relay.mode === 'custom' ? 'Custom' : 'Default'}</span>
+          </div>
+          <div class="kv-row">
+            <span class="kv-label">${escapeHtml(t.activeRelayLabel)}</span>
+            <code class="kv-value" id="active-relay-url">${escapeHtml(state.relay.activeRelayUrl)}</code>
+          </div>
+          <span class="sr-only">${escapeHtml(state.relay.defaultRelayUrl)}</span>
+          <div style="display: flex; gap: 8px;">
+            <input class="input" id="input-custom-relay" type="text" placeholder="wss://relay.example.com" value="${escapeHtml(state.relay.customRelayUrl)}" />
+            <button class="btn" id="btn-save-custom-relay" type="button">${escapeHtml(t.useCustomRelay)}</button>
+            <button class="btn btn-secondary" id="btn-use-default-relay" type="button">${escapeHtml(t.useDefaultRelay)}</button>
+          </div>
+        </section>
 
-    <!-- Row 3 Bottom: Compact Diagnostic Logs -->
-    <section class="card card-full">
-      <div class="card-header">
-        <h2 class="card-title">${iconLogSvg()} ${escapeHtml(t.diagnosticLogs)}</h2>
+        <section class="card">
+          <div class="section-header">
+            <span class="section-title">${iconLogSvg()} ${escapeHtml(t.diagnosticLogs)}</span>
+          </div>
+          <div class="log-stream" id="log-stream">
+            ${logsHtml}
+          </div>
+        </section>
       </div>
-      <div class="log-stream" id="log-stream">
-        ${logsHtml}
-      </div>
-    </section>
+    </details>
   </main>
   <script>
     window.addEventListener('DOMContentLoaded', () => {
@@ -711,10 +742,12 @@ export function renderDesktopAppHtml(
         url.searchParams.set('lang', nextLang);
         window.location.href = url.toString();
       });
-      document.getElementById('btn-copy-uri')?.addEventListener('click', () => {
+      document.getElementById('btn-copy-uri')?.addEventListener('click', (ev) => {
         const uri = document.getElementById('pairing-uri-code')?.textContent;
+        const btn = ev.currentTarget;
         if (uri && navigator.clipboard) {
           navigator.clipboard.writeText(uri);
+          if (btn) btn.textContent = '${escapeHtml(t.copiedText)}';
         }
       });
       const api = window.nienieDesktop;
@@ -764,12 +797,8 @@ function iconTerminalSvg(): string {
   return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`;
 }
 
-function iconQrSvg(): string {
-  return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#07C160" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h7v7h-7z"/></svg>`;
-}
-
 function iconGlobeSvg(): string {
-  return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#007AFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#007AFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
 }
 
 function iconRefreshSvg(): string {

@@ -109,6 +109,13 @@ class NienieStrings {
         AppLanguage.ko => '저장된 컴퓨터',
       };
 
+  String get advancedOptionsLabel => switch (lang) {
+        AppLanguage.zh => '高级连接选项',
+        AppLanguage.en => 'Advanced Connection Options',
+        AppLanguage.ja => '詳細接続オプション',
+        AppLanguage.ko => '고급 연결 옵션',
+      };
+
   String get reconnectBtn => switch (lang) {
         AppLanguage.zh => '重连',
         AppLanguage.en => 'Reconnect',
