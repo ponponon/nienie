@@ -810,7 +810,7 @@ export function renderDesktopAppHtml(
         </header>
 
         <div class="wetype-group">
-          <div class="wetype-row">
+          <div class="wetype-row" id="row-use-default-relay" style="cursor: pointer;">
             <div class="row-left">
               <span class="wetype-radio ${isDefaultRelay ? 'checked' : ''}"></span>
               <div>
@@ -821,7 +821,7 @@ export function renderDesktopAppHtml(
             <button class="wetype-btn" id="btn-use-default-relay" type="button">${escapeHtml(t.useDefaultRelay)}</button>
           </div>
 
-          <div class="wetype-row">
+          <div class="wetype-row" style="flex-direction: column; align-items: stretch; gap: 10px;">
             <div class="row-left">
               <span class="wetype-radio ${!isDefaultRelay ? 'checked' : ''}"></span>
               <div>
@@ -829,8 +829,8 @@ export function renderDesktopAppHtml(
                 <div class="row-desc">${escapeHtml(t.relayCustomDesc)}</div>
               </div>
             </div>
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <input class="wetype-input" id="input-custom-relay" type="text" placeholder="wss://relay.example.com" value="${escapeHtml(state.relay.customRelayUrl)}" />
+            <div style="display: flex; gap: 8px; align-items: center; padding-left: 28px;">
+              <input class="wetype-input" id="input-custom-relay" style="flex: 1; width: auto;" type="text" placeholder="wss://relay.example.com" value="${escapeHtml(state.relay.customRelayUrl)}" />
               <button class="wetype-btn" id="btn-save-custom-relay" type="button">${escapeHtml(t.useCustomRelay)}</button>
             </div>
           </div>
@@ -932,6 +932,10 @@ export function renderDesktopAppHtml(
         api.setRelay({ mode: 'custom', customRelayUrl: input ? input.value : '' });
       });
       document.getElementById('btn-use-default-relay')?.addEventListener('click', () => {
+        api.setRelay({ mode: 'default' });
+      });
+      document.getElementById('row-use-default-relay')?.addEventListener('click', (ev) => {
+        if (ev.target && ev.target.id === 'btn-use-default-relay') return;
         api.setRelay({ mode: 'default' });
       });
       document.querySelectorAll('[data-revoke-device-id]').forEach((btn) => {
