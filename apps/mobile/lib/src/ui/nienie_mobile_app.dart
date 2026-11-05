@@ -35,11 +35,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       title: 'Nienie Mobile',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.light(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: const Color(0xFFEDEDED),
+        scaffoldBackgroundColor: const Color(0xFFF0F0F2),
         cardColor: const Color(0xFFFFFFFF),
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF07C160),
-          primary: const Color(0xFF07C160),
+          seedColor: const Color(0xFF17B378),
+          primary: const Color(0xFF17B378),
         ),
       ),
       home: AnimatedBuilder(
@@ -55,7 +55,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
               titleSpacing: 12,
               title: Row(
                 children: [
-                  const Icon(Icons.chat_bubble_rounded, size: 18, color: Color(0xFF07C160)),
+                  const Icon(Icons.keyboard_command_key_rounded, size: 18, color: Color(0xFF17B378)),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(

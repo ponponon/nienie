@@ -72,7 +72,10 @@ async function bootstrap() {
   }
   process.stdout.write('========================================================\n\n');
 
-  const mainWindow = new BrowserWindow(createDesktopWindowOptions());
+  const mainWindow = new BrowserWindow({
+    ...createDesktopWindowOptions(),
+    trafficLightPosition: { x: 24, y: 22 },
+  });
   await mainWindow.loadURL(previewAddr.url);
   mainWindow.show();
   mainWindow.focus();

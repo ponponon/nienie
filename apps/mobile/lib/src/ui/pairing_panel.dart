@@ -24,6 +24,12 @@ class PairingPanel extends StatefulWidget {
 class _PairingPanelState extends State<PairingPanel> {
   bool _showAdvanced = false;
 
+  static const Color _weTypeGreen = Color(0xFF17B378);
+  static const Color _textPrimary = Color(0xFF1A1A1A);
+  static const Color _textSecondary = Color(0xFF888888);
+  static const Color _dividerColor = Color(0xFFF0F0F0);
+  static const Color _btnBorderColor = Color(0xFFDCDCDC);
+
   void _openCameraScanner(BuildContext context) {
     showModalBottomSheet<void>(
       context: context,
@@ -49,210 +55,258 @@ class _PairingPanelState extends State<PairingPanel> {
     final client = widget.client;
     final s = client.strings;
     return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       children: [
-        // 1. Saved Computers (Top priority when present)
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 12),
+          child: Text(
+            s.connectTitle,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: _textPrimary,
+            ),
+          ),
+        ),
+
+        // Group 1: Saved Computers (WeType Grouped List Style)
         if (client.savedMachines.isNotEmpty)
           Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 18),
             decoration: BoxDecoration(
-              color: const Color(0xFFFFFFFF),
-              borderRadius: BorderRadius.circular(14),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  s.savedComputersTitle,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF6E6E73),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                for (final machine in client.savedMachines)
+                for (int i = 0; i < client.savedMachines.length; i++) ...[
+                  if (i > 0) const Divider(height: 1, color: _dividerColor),
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                     child: Row(
                       children: [
-                        const Icon(Icons.laptop_mac, size: 18, color: Color(0xFF07C160)),
-                        const SizedBox(width: 8),
+                        Container(
+                          width: 18,
+                          height: 18,
+                          decoration: const BoxDecoration(
+                            color: _weTypeGreen,
+                            shape: BoxShape.circle,
+                          ),
+                          alignment: Alignment.center,
+                          child: Container(
+                            width: 6,
+                            height: 6,
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
                         Expanded(
-                          child: Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                machine.machineId,
+                                client.savedMachines[i].machineId,
                                 style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF1D1D1F),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: _textPrimary,
                                 ),
                               ),
-                              const SizedBox(width: 6),
-                              Flexible(
-                                child: Text(
-                                  machine.wsUrl,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Color(0xFF8E8E93),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
+                              const SizedBox(height: 2),
+                              Text(
+                                client.savedMachines[i].wsUrl,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: _textSecondary,
                                 ),
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
                         ),
                         SizedBox(
-                          height: 32,
-                          child: FilledButton.tonal(
-                            key: Key('btn-reconnect-machine-${machine.machineId}'),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF07C160).withValues(alpha: 0.12),
-                              foregroundColor: const Color(0xFF07C160),
-                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                          height: 28,
+                          child: OutlinedButton(
+                            key: Key(
+                              'btn-reconnect-machine-${client.savedMachines[i].machineId}',
                             ),
-                            onPressed: () =>
-                                client.reconnectWithSavedCredential(machine.machineId),
-                            child: Text(s.reconnectBtn, style: const TextStyle(fontSize: 12)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: _textPrimary,
+                              side: const BorderSide(color: _btnBorderColor),
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                            ),
+                            onPressed: () => client.reconnectWithSavedCredential(
+                              client.savedMachines[i].machineId,
+                            ),
+                            child: Text(
+                              s.reconnectBtn,
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
+                            ),
                           ),
                         ),
                         IconButton(
-                          key: Key('btn-remove-machine-${machine.machineId}'),
+                          key: Key('btn-remove-machine-${client.savedMachines[i].machineId}'),
                           visualDensity: VisualDensity.compact,
                           tooltip: 'Remove Machine',
-                          onPressed: () => client.removeSavedMachine(machine.machineId),
+                          onPressed: () => client.removeSavedMachine(
+                            client.savedMachines[i].machineId,
+                          ),
                           icon: const Icon(
-                            Icons.delete_outline,
-                            size: 17,
-                            color: Color(0xFF8E8E93),
+                            Icons.close,
+                            size: 16,
+                            color: _textSecondary,
                           ),
                         ),
                       ],
                     ),
                   ),
+                ],
               ],
             ),
           ),
 
-        // 2. Clean Apple/WeChat Style Hero Card: Scan QR + 6-Digit Code Only
+        // Group 2: Primary Pairing Card (WeType Clean Grouped Rows)
         Container(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.symmetric(horizontal: 18),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFFFFF),
-            borderRadius: BorderRadius.circular(14),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                s.connectTitle,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF1D1D1F),
-                ),
-              ),
-              const SizedBox(height: 16),
-              // Primary Action: Big WeChat Green Camera Scan Button
-              SizedBox(
-                height: 46,
-                child: FilledButton.icon(
-                  key: const Key('btn-open-qr-scanner'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF07C160),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                  onPressed: () => _openCameraScanner(context),
-                  icon: const Icon(Icons.qr_code_scanner, size: 20),
-                  label: Text(
-                    s.scanQrBtn,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              // Secondary Simple Action: 6-Digit Code + Connect
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      key: const Key('input-pairing-code'),
-                      controller: widget.pairingCodeController,
-                      keyboardType: TextInputType.number,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 2,
-                        color: Color(0xFF1D1D1F),
+              // Row 1: Camera QR Scan
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            s.scanQrBtn,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: _textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            s.scanQrHint,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: _textSecondary,
+                            ),
+                          ),
+                        ],
                       ),
-                      decoration: InputDecoration(
-                        hintText: s.pairingCodeLabel,
-                        hintStyle: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w400,
-                          letterSpacing: 0,
-                          color: Color(0xFF8E8E93),
+                    ),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      height: 34,
+                      child: FilledButton.icon(
+                        key: const Key('btn-open-qr-scanner'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _weTypeGreen,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
-                        filled: true,
-                        fillColor: const Color(0xFFF7F7FA),
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 11,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: BorderSide.none,
+                        onPressed: () => _openCameraScanner(context),
+                        icon: const Icon(Icons.qr_code_scanner, size: 16),
+                        label: const Text(
+                          'QR',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    height: 42,
-                    child: OutlinedButton(
-                      key: const Key('btn-connect-pair'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF07C160),
-                        side: const BorderSide(color: Color(0xFF07C160)),
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: _dividerColor),
+              // Row 2: 6-Digit Pairing Code
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        key: const Key('input-pairing-code'),
+                        controller: widget.pairingCodeController,
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 1.5,
+                          color: _textPrimary,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: s.pairingCodeLabel,
+                          hintStyle: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w400,
+                            letterSpacing: 0,
+                            color: _textSecondary,
+                          ),
+                          isDense: true,
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(vertical: 6),
                         ),
                       ),
-                      onPressed: () {
-                        client.pairAndConnect(
-                          wsUrl: widget.wsUrlController.text,
-                          pairingCode: widget.pairingCodeController.text,
-                        );
-                      },
-                      child: Text(
-                        s.pairAndConnectBtn,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                    ),
+                    const SizedBox(width: 10),
+                    SizedBox(
+                      height: 30,
+                      child: OutlinedButton(
+                        key: const Key('btn-connect-pair'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _textPrimary,
+                          side: const BorderSide(color: _btnBorderColor),
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
+                        onPressed: () {
+                          client.pairAndConnect(
+                            wsUrl: widget.wsUrlController.text,
+                            pairingCode: widget.pairingCodeController.text,
+                          );
+                        },
+                        child: Text(
+                          s.pairAndConnectBtn,
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-              if (client.errorMessage != null) ...[
-                const SizedBox(height: 10),
-                Text(
-                  client.errorMessage!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Color(0xFFFF3B30), fontSize: 12),
+                  ],
                 ),
-              ],
+              ),
+              if (client.errorMessage != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    client.errorMessage!,
+                    style: const TextStyle(color: Color(0xFFFF3B30), fontSize: 12),
+                  ),
+                ),
             ],
           ),
         ),
 
-        // 3. Progressive Disclosure: Advanced Options tucked cleanly at the bottom
+        // Progressive Disclosure: Advanced Options
         const SizedBox(height: 8),
         Center(
           child: TextButton.icon(
@@ -261,20 +315,20 @@ class _PairingPanelState extends State<PairingPanel> {
             icon: Icon(
               _showAdvanced ? Icons.expand_less : Icons.expand_more,
               size: 16,
-              color: const Color(0xFF8E8E93),
+              color: _textSecondary,
             ),
             label: Text(
               s.advancedOptionsLabel,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
+              style: const TextStyle(fontSize: 12, color: _textSecondary),
             ),
           ),
         ),
         if (_showAdvanced)
           Container(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFFFFFFFF),
-              borderRadius: BorderRadius.circular(14),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -282,45 +336,42 @@ class _PairingPanelState extends State<PairingPanel> {
                 TextField(
                   key: const Key('input-ws-url'),
                   controller: widget.wsUrlController,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF1D1D1F)),
+                  style: const TextStyle(fontSize: 13, color: _textPrimary),
                   decoration: InputDecoration(
                     labelText: s.wsUrlLabel,
+                    labelStyle: const TextStyle(fontSize: 12, color: _textSecondary),
+                    border: InputBorder.none,
                     isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
                   ),
                 ),
-                const SizedBox(height: 10),
+                const Divider(height: 1, color: _dividerColor),
                 Row(
                   children: [
                     Expanded(
                       child: TextField(
                         key: const Key('input-qr-uri'),
                         controller: widget.qrUriController,
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF1D1D1F)),
+                        style: const TextStyle(fontSize: 12, color: _textPrimary),
                         decoration: InputDecoration(
                           hintText: s.qrUriLabel,
+                          hintStyle: const TextStyle(fontSize: 12, color: _textSecondary),
+                          border: InputBorder.none,
                           isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 9,
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
                     SizedBox(
-                      height: 36,
-                      child: TextButton(
+                      height: 28,
+                      child: OutlinedButton(
                         key: const Key('btn-pair-qr-uri'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _textPrimary,
+                          side: const BorderSide(color: _btnBorderColor),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
                         onPressed: () {
                           client.pairWithQrUri(widget.qrUriController.text);
                         },

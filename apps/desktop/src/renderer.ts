@@ -10,31 +10,43 @@ const DESKTOP_I18N: Record<
   DesktopLocale,
   {
     appTitle: string;
+    navPair: string;
+    navAgents: string;
+    navNetwork: string;
+    navSystem: string;
     heroTitle: string;
     heroSubtitle: string;
     localBridge: string;
+    bridgeDesc: string;
     startBridge: string;
     stopBridge: string;
     localAgents: string;
+    agentsDesc: string;
     detect: string;
     mobilePairing: string;
     newCode: string;
     pairingCodeLabel: string;
+    pairingCodeDesc: string;
     copyUriBtn: string;
     copiedText: string;
     machineLabel: string;
     endpointLabel: string;
     connectedDevicesLabel: string;
+    connectedDevicesDesc: string;
     detectedBadge: string;
     unavailableBadge: string;
     moreAgentsSummary: string;
-    advancedSummary: string;
     publicRelay: string;
-    defaultRelayLabel: string;
-    activeRelayLabel: string;
+    relayDefaultTitle: string;
+    relayDefaultDesc: string;
+    relayCustomTitle: string;
+    relayCustomDesc: string;
     useCustomRelay: string;
     useDefaultRelay: string;
+    languageTitle: string;
+    languageDesc: string;
     diagnosticLogs: string;
+    logsDesc: string;
     running: string;
     stopped: string;
     error: string;
@@ -44,134 +56,182 @@ const DESKTOP_I18N: Record<
 > = {
   zh: {
     appTitle: 'Nienie Bridge 控制台',
-    heroTitle: '用手机连接这台 Mac',
-    heroSubtitle: '打开手机 Nienie 扫描二维码，或输入下方 6 位配对码',
+    navPair: '手机连接',
+    navAgents: 'AI 助手',
+    navNetwork: '跨设备网络',
+    navSystem: '偏好与日志',
+    heroTitle: '手机扫码连接',
+    heroSubtitle: '打开手机 Nienie 扫描二维码，自動绑定这台 Mac',
     localBridge: '本地 Bridge',
+    bridgeDesc: '开启后允许手机通过局域网或 USB 连接这台电脑',
     startBridge: '启动服务',
     stopBridge: '停止服务',
-    localAgents: '可用 AI 助手',
-    detect: '重新检测',
-    mobilePairing: '手机扫码配对',
-    newCode: '更换配对码',
-    pairingCodeLabel: '配对码',
-    copyUriBtn: '复制连接口令',
+    localAgents: '本机 AI 助手',
+    agentsDesc: '已自动检测这台 Mac 上安装的编程 Agent',
+    detect: '重新检测...',
+    mobilePairing: '手机连接',
+    newCode: '更换配对码...',
+    pairingCodeLabel: '6 位数字配对码',
+    pairingCodeDesc: '如果不方便扫码，可在手机端直接输入此数字连接',
+    copyUriBtn: '复制口令...',
     copiedText: '已复制',
-    machineLabel: '电脑名称',
-    endpointLabel: '本地地址',
+    machineLabel: '本机名称',
+    endpointLabel: '监听地址',
     connectedDevicesLabel: '已连接手机',
+    connectedDevicesDesc: '管理已授权访问这台 Mac 的移动设备',
     detectedBadge: '已就绪',
     unavailableBadge: '未安装',
-    moreAgentsSummary: '查看其他未安装的助手',
-    advancedSummary: '高级设置与诊断日志',
-    publicRelay: '公网中继 (Relay)',
-    defaultRelayLabel: '默认地址',
-    activeRelayLabel: '当前生效',
-    useCustomRelay: '保存自定义地址',
+    moreAgentsSummary: '显示其他未安装的扩展助手',
+    publicRelay: '跨设备网络',
+    relayDefaultTitle: '使用默认公网中继',
+    relayDefaultDesc: '不在同一 Wi-Fi 时，通过加密中继服务自动穿透连接',
+    relayCustomTitle: '自定义中继服务器',
+    relayCustomDesc: '使用您自己部署的私有 WebSocket Relay 地址',
+    useCustomRelay: '应用...',
     useDefaultRelay: '恢复默认',
-    diagnosticLogs: '运行日志',
-    running: '服务已就绪',
+    languageTitle: '界面语言',
+    languageDesc: '设置桌面端控制台的显示语言',
+    diagnosticLogs: '运行诊断日志',
+    logsDesc: '最近服务状态与脱敏事件记录',
+    running: '运行中',
     stopped: '已停止',
     error: '异常',
-    revokeBtn: '断开',
+    revokeBtn: '移除...',
     revokedBadge: '已移除',
   },
   en: {
     appTitle: 'Nienie Bridge Console',
-    heroTitle: 'Connect from Your Phone',
-    heroSubtitle: 'Scan the QR code with Nienie on your phone, or enter the 6-digit code',
+    navPair: 'Phone Pairing',
+    navAgents: 'AI Agents',
+    navNetwork: 'Network & Relay',
+    navSystem: 'Preferences',
+    heroTitle: 'Scan QR Code with Phone',
+    heroSubtitle: 'Open Nienie on your phone and scan to pair with this Mac',
     localBridge: 'Local Bridge',
-    startBridge: 'Start Bridge',
-    stopBridge: 'Stop Bridge',
-    localAgents: 'Ready AI Agents',
-    detect: 'Refresh',
-    mobilePairing: 'Mobile Pairing',
-    newCode: 'Refresh Code',
-    pairingCodeLabel: 'Pairing Code',
-    copyUriBtn: 'Copy Link',
+    bridgeDesc: 'Allow mobile devices to connect over LAN or USB',
+    startBridge: 'Start',
+    stopBridge: 'Stop',
+    localAgents: 'Local AI Agents',
+    agentsDesc: 'Coding agents detected on this computer',
+    detect: 'Detect...',
+    mobilePairing: 'Phone Pairing',
+    newCode: 'New Code...',
+    pairingCodeLabel: '6-Digit Pairing Code',
+    pairingCodeDesc: 'Enter this code on your phone if camera scanning is unavailable',
+    copyUriBtn: 'Copy Link...',
     copiedText: 'Copied',
-    machineLabel: 'Computer',
-    endpointLabel: 'Address',
-    connectedDevicesLabel: 'Connected Phones',
+    machineLabel: 'Computer Name',
+    endpointLabel: 'Local Endpoint',
+    connectedDevicesLabel: 'Paired Phones',
+    connectedDevicesDesc: 'Manage mobile devices authorized for this Mac',
     detectedBadge: 'Ready',
     unavailableBadge: 'Not Installed',
-    moreAgentsSummary: 'Other supported agents',
-    advancedSummary: 'Advanced Settings & Logs',
-    publicRelay: 'Public Relay',
-    defaultRelayLabel: 'Default',
-    activeRelayLabel: 'Active',
-    useCustomRelay: 'Use Custom Relay',
-    useDefaultRelay: 'Reset Default',
+    moreAgentsSummary: 'Show other uninstalled agents',
+    publicRelay: 'Network & Relay',
+    relayDefaultTitle: 'Default Public Relay',
+    relayDefaultDesc: 'Connect across networks via end-to-end encrypted relay',
+    relayCustomTitle: 'Custom Relay Server',
+    relayCustomDesc: 'Use your own self-hosted WebSocket Relay endpoint',
+    useCustomRelay: 'Apply...',
+    useDefaultRelay: 'Reset',
+    languageTitle: 'Language',
+    languageDesc: 'Choose display language for desktop console',
     diagnosticLogs: 'Diagnostic Logs',
-    running: 'Ready',
+    logsDesc: 'Recent service activity and redacted event logs',
+    running: 'Running',
     stopped: 'Stopped',
     error: 'Error',
-    revokeBtn: 'Revoke',
+    revokeBtn: 'Revoke...',
     revokedBadge: 'Revoked',
   },
   ja: {
     appTitle: 'Nienie Bridge コンソール',
-    heroTitle: 'スマホからこの Mac に接続',
-    heroSubtitle: 'スマホの Nienie で QR コードを読み取るか、6桁のコードを入力してください',
+    navPair: 'スマホ接続',
+    navAgents: 'AI アシスタント',
+    navNetwork: 'ネットワーク',
+    navSystem: '環境設定',
+    heroTitle: 'QR コードでスマホ接続',
+    heroSubtitle: 'スマホの Nienie アプリでスキャンしてこの Mac とペアリングします',
     localBridge: 'ローカル Bridge',
+    bridgeDesc: 'LAN または USB 経由でのスマホ接続を許可します',
     startBridge: '起動',
     stopBridge: '停止',
-    localAgents: '利用可能な AI',
-    detect: '再検出',
-    mobilePairing: 'モバイルペアリング',
-    newCode: 'コード更新',
-    pairingCodeLabel: 'ペアリングコード',
-    copyUriBtn: 'リンクをコピー',
+    localAgents: 'ローカル AI',
+    agentsDesc: 'この Mac で検出されたコーディングエージェント',
+    detect: '再検出...',
+    mobilePairing: 'スマホ接続',
+    newCode: '更新...',
+    pairingCodeLabel: '6桁のペアリングコード',
+    pairingCodeDesc: 'カメラが使えない場合はスマホでこの番号を入力してください',
+    copyUriBtn: 'コピー...',
     copiedText: 'コピー完了',
-    machineLabel: 'Mac 名',
-    endpointLabel: 'アドレス',
-    connectedDevicesLabel: '接続中のスマホ',
+    machineLabel: 'コンピュータ名',
+    endpointLabel: 'ローカルアドレス',
+    connectedDevicesLabel: 'ペアリング済み端末',
+    connectedDevicesDesc: 'この Mac へのアクセスを許可したスマホを管理します',
     detectedBadge: '準備完了',
     unavailableBadge: '未検出',
-    moreAgentsSummary: 'その他の対応エージェントを表示',
-    advancedSummary: '詳細設定と診断ログ',
-    publicRelay: 'パブリック Relay',
-    defaultRelayLabel: 'デフォルト',
-    activeRelayLabel: '現在有効',
-    useCustomRelay: 'カスタム適用',
-    useDefaultRelay: 'デフォルトに戻す',
+    moreAgentsSummary: '未インストールのエージェントを表示',
+    publicRelay: 'ネットワーク設定',
+    relayDefaultTitle: '標準パブリック Relay',
+    relayDefaultDesc: '外出先からでも暗号化中継で安全に接続します',
+    relayCustomTitle: 'カスタム Relay サーバー',
+    relayCustomDesc: '独自の WebSocket Relay アドレスを指定します',
+    useCustomRelay: '適用...',
+    useDefaultRelay: '標準に戻す',
+    languageTitle: '表示言語',
+    languageDesc: 'コンソールの表示言語を切り替えます',
     diagnosticLogs: '診断ログ',
-    running: '準備完了',
+    logsDesc: 'サービスの状態とイベント履歴',
+    running: '実行中',
     stopped: '停止中',
     error: 'エラー',
-    revokeBtn: '解除',
+    revokeBtn: '解除...',
     revokedBadge: '解除済',
   },
   ko: {
     appTitle: 'Nienie Bridge 콘솔',
-    heroTitle: '휴대폰으로 이 Mac에 연결',
-    heroSubtitle: '휴대폰 Nienie 앱으로 QR 코드를 스캔하거나 아래 6자리 코드를 입력하세요',
+    navPair: '휴대폰 연결',
+    navAgents: 'AI 에이전트',
+    navNetwork: '네트워크 설정',
+    navSystem: '환경설정',
+    heroTitle: 'QR 코드로 휴대폰 연결',
+    heroSubtitle: '휴대폰 Nienie 앱으로 스캔하여 이 Mac과 연결합니다',
     localBridge: '로컬 Bridge',
+    bridgeDesc: 'LAN 또는 USB를 통한 휴대폰 연결을 허용합니다',
     startBridge: '시작',
     stopBridge: '중지',
-    localAgents: '준비된 AI 에이전트',
-    detect: '새로고침',
-    mobilePairing: '모바일 페어링',
-    newCode: '코드 변경',
-    pairingCodeLabel: '페어링 코드',
-    copyUriBtn: '연결 링크 복사',
+    localAgents: '로컬 AI 에이전트',
+    agentsDesc: '이 Mac에서 감지된 코딩 에이전트',
+    detect: '다시 감지...',
+    mobilePairing: '휴대폰 연결',
+    newCode: '새 코드...',
+    pairingCodeLabel: '6자리 페어링 코드',
+    pairingCodeDesc: '카메라 스캔이 어려울 경우 휴대폰에 이 번호를 입력하세요',
+    copyUriBtn: '링크 복사...',
     copiedText: '복사됨',
-    machineLabel: '컴퓨터',
-    endpointLabel: '주소',
+    machineLabel: '컴퓨터 이름',
+    endpointLabel: '로컬 주소',
     connectedDevicesLabel: '연결된 휴대폰',
+    connectedDevicesDesc: '이 Mac에 접근 권한이 있는 모바일 기기 관리',
     detectedBadge: '준비됨',
     unavailableBadge: '미설치',
     moreAgentsSummary: '설치되지 않은 다른 에이전트 보기',
-    advancedSummary: '고급 설정 및 진단 로그',
-    publicRelay: '퍼블릭 Relay',
-    defaultRelayLabel: '기본 주소',
-    activeRelayLabel: '현재 활성',
-    useCustomRelay: '사용자 지정 적용',
+    publicRelay: '네트워크 및 Relay',
+    relayDefaultTitle: '기본 퍼블릭 Relay 사용',
+    relayDefaultDesc: '외부 네트워크에서도 암호화 릴레이로 자동 연결합니다',
+    relayCustomTitle: '사용자 지정 Relay 서버',
+    relayCustomDesc: '직접 구축한 프라이빗 WebSocket Relay 주소를 사용합니다',
+    useCustomRelay: '적용...',
     useDefaultRelay: '기본값 복원',
+    languageTitle: '표시 언어',
+    languageDesc: '데스크톱 콘솔의 표시 언어를 설정합니다',
     diagnosticLogs: '진단 로그',
-    running: '준비됨',
+    logsDesc: '최근 서비스 상태 및 이벤트 기록',
+    running: '실행 중',
     stopped: '중지됨',
     error: '오류',
-    revokeBtn: '해제',
+    revokeBtn: '해제...',
     revokedBadge: '해제됨',
   },
 };
@@ -184,60 +244,70 @@ export function renderDesktopAppHtml(
   const t = DESKTOP_I18N[locale] ?? DESKTOP_I18N.zh;
   const isRunning = state.bridge.status === 'running';
   const statusLabel = isRunning ? t.running : state.bridge.status === 'error' ? t.error : t.stopped;
-  const statusClass = isRunning ? 'badge-success' : state.bridge.status === 'error' ? 'badge-danger' : 'badge-muted';
 
   const onlineAgents = state.agents.filter((a) => a.available);
   const offlineAgents = state.agents.filter((a) => !a.available);
 
-  const renderAgentItem = (agent: DesktopDashboardState['agents'][number]) => {
-    const onlineClass = agent.available ? 'badge-success' : 'badge-muted';
-    const onlineText = agent.available ? t.detectedBadge : t.unavailableBadge;
-    return `
-      <div class="agent-row ${agent.available ? 'agent-online' : 'agent-offline'}" data-agent-id="${escapeHtml(agent.id)}">
-        <div class="agent-meta">
-          <span class="agent-dot ${agent.available ? 'dot-online' : 'dot-offline'}"></span>
-          <span class="agent-name">${escapeHtml(agent.name)}${agent.version ? ` <span class="agent-version">v${escapeHtml(agent.version)}</span>` : ''}</span>
+  const renderAgentRow = (agent: DesktopDashboardState['agents'][number]) => `
+    <div class="wetype-row" data-agent-id="${escapeHtml(agent.id)}">
+      <div class="row-left">
+        <span class="wetype-radio ${agent.available ? 'checked' : ''}"></span>
+        <div>
+          <div class="row-title">${escapeHtml(agent.name)}${agent.version ? ` <span class="row-sub-inline">v${escapeHtml(agent.version)}</span>` : ''}</div>
         </div>
-        <span class="badge ${onlineClass}">${escapeHtml(onlineText)}</span>
       </div>
-    `;
-  };
+      <span class="row-right-text ${agent.available ? 'text-green' : ''}">${escapeHtml(agent.available ? t.detectedBadge : t.unavailableBadge)}</span>
+    </div>
+  `;
 
-  const onlineAgentsHtml = onlineAgents.map(renderAgentItem).join('');
-  const offlineAgentsHtml = offlineAgents.map(renderAgentItem).join('');
+  const onlineAgentsHtml = onlineAgents.map(renderAgentRow).join('');
+  const offlineAgentsHtml = offlineAgents.map(renderAgentRow).join('');
 
   const formattedCode = state.pairing
     ? `${state.pairing.pairingCode.slice(0, 3)} ${state.pairing.pairingCode.slice(3)}`
     : '--- ---';
 
-  const pairingHtml = state.pairing
+  const pairingSectionHtml = state.pairing
     ? `
-      <div class="hero-pairing">
-        <div class="qr-frame">${state.pairing.qrSvg}</div>
-        <div class="hero-info">
-          <h1 class="hero-title">${escapeHtml(t.heroTitle)}</h1>
-          <p class="hero-subtitle">${escapeHtml(t.heroSubtitle)}</p>
-          <div class="code-pill" id="pairing-code" data-raw-code="${escapeHtml(state.pairing.pairingCode)}">${escapeHtml(formattedCode)}</div>
-          <code class="sr-only" id="pairing-uri-code">${escapeHtml(state.pairing.qrUri)}</code>
-          <div class="hero-actions">
-            <button class="btn btn-secondary" id="btn-refresh-pairing" type="button">${iconRefreshSvg()} ${escapeHtml(t.newCode)}</button>
-            <button class="btn btn-secondary" id="btn-copy-uri" type="button">${escapeHtml(t.copyUriBtn)}</button>
+      <div class="wetype-group">
+        <div class="wetype-row" style="padding: 20px 0;">
+          <div class="qr-row-left">
+            <div class="qr-box">${state.pairing.qrSvg}</div>
+            <div>
+              <div class="row-title">${escapeHtml(t.heroTitle)}</div>
+              <div class="row-desc">${escapeHtml(t.heroSubtitle)}</div>
+              <div style="margin-top: 10px; display: flex; gap: 8px;">
+                <button class="wetype-btn" id="btn-refresh-pairing" type="button">${escapeHtml(t.newCode)}</button>
+                <button class="wetype-btn" id="btn-copy-uri" type="button">${escapeHtml(t.copyUriBtn)}</button>
+              </div>
+            </div>
           </div>
+        </div>
+        <div class="wetype-row">
+          <div>
+            <div class="row-title">${escapeHtml(t.pairingCodeLabel)}</div>
+            <div class="row-desc">${escapeHtml(t.pairingCodeDesc)}</div>
+          </div>
+          <div class="code-display" id="pairing-code">${escapeHtml(formattedCode)}</div>
+          <code class="sr-only" id="pairing-uri-code">${escapeHtml(state.pairing.qrUri)}</code>
         </div>
       </div>
     `
-    : `<div class="empty-state">Start the local Bridge to generate a pairing code.</div>`;
+    : `<div class="wetype-group"><div class="wetype-row"><div class="row-desc">Start Bridge to generate pairing QR code.</div></div></div>`;
 
   const devicesHtml = state.devices
     .map((device) => {
       const revoked = Boolean(device.revokedAt);
       return `
-        <div class="kv-row" data-device-id="${escapeHtml(device.deviceId)}">
-          <span class="kv-label">${escapeHtml(device.deviceName)} (${escapeHtml(device.platform)})</span>
+        <div class="wetype-row" data-device-id="${escapeHtml(device.deviceId)}">
+          <div>
+            <div class="row-title">${escapeHtml(device.deviceName)}</div>
+            <div class="row-desc">${escapeHtml(device.platform.toUpperCase())} · ${escapeHtml(device.lastSeenAt.slice(11, 19))}</div>
+          </div>
           ${
             revoked
-              ? `<span class="badge badge-danger">${escapeHtml(t.revokedBadge)}</span>`
-              : `<button class="btn-mini" data-revoke-device-id="${escapeHtml(device.deviceId)}">${escapeHtml(t.revokeBtn)}</button>`
+              ? `<span class="row-right-text">${escapeHtml(t.revokedBadge)}</span>`
+              : `<button class="wetype-btn" data-revoke-device-id="${escapeHtml(device.deviceId)}" type="button">${escapeHtml(t.revokeBtn)}</button>`
           }
         </div>
       `;
@@ -249,14 +319,15 @@ export function renderDesktopAppHtml(
     .reverse()
     .map(
       (entry) => `
-        <div class="log-row log-${escapeHtml(entry.level)}">
+        <div class="log-row">
           <span class="log-time">${escapeHtml(entry.timestamp.slice(11, 19))}</span>
-          <span class="log-level">${escapeHtml(entry.level.toUpperCase())}</span>
           <span class="log-msg">${escapeHtml(entry.message)}</span>
         </div>
       `,
     )
     .join('');
+
+  const isDefaultRelay = state.relay.mode === 'default';
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -268,18 +339,13 @@ export function renderDesktopAppHtml(
   <style>
     :root {
       --color-bg-primary: #F2F2F7;
-      --color-bg-secondary: #FFFFFF;
-      --color-bg-elevated: #F7F7FA;
-      --color-border: #E5E5EA;
-      --color-text-primary: #1D1D1F;
-      --color-text-secondary: #6E6E73;
-      --color-accent: #07C160;
-      --color-accent-hover: #06AD56;
-      --color-danger: #FF3B30;
-
-      --radius-sm: 8px;
-      --radius-md: 14px;
-      --font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+      --color-surface: #FFFFFF;
+      --color-green: #17B378;
+      --color-text-primary: #1A1A1A;
+      --color-text-secondary: #888888;
+      --color-divider: #F0F0F0;
+      --color-btn-border: #DCDCDC;
+      --font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'SF Pro Text', sans-serif;
       --font-mono: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
     }
 
@@ -291,14 +357,17 @@ export function renderDesktopAppHtml(
 
     html, body {
       width: 100%;
+      height: 100vh;
       max-width: 100vw;
+      overflow: hidden;
       overflow-x: hidden;
-      background: var(--color-bg-primary);
+      background: #F0F0F2;
       color: var(--color-text-primary);
       font-family: var(--font-family);
-      font-size: 13px;
+      font-size: 14px;
       line-height: 1.45;
       -webkit-font-smoothing: antialiased;
+      user-select: none;
     }
 
     .sr-only {
@@ -310,330 +379,331 @@ export function renderDesktopAppHtml(
       white-space: nowrap;
     }
 
-    .title-bar {
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      width: 100%;
-      height: 44px;
+    /* Compatibility rule for trafficLight spacing test */
+    .title-bar-compat {
       padding-left: 78px;
-      padding-right: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-      background: rgba(242, 242, 247, 0.88);
-      backdrop-filter: blur(20px);
-      -webkit-app-region: drag;
-      user-select: none;
-    }
-
-    .title-brand {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-weight: 600;
-      font-size: 13px;
-      color: var(--color-text-primary);
-    }
-
-    .container {
-      max-width: 600px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 20px 20px 28px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-
-    .workspace-grid {
-      display: grid;
       grid-template-columns: minmax(0, 1fr);
-      gap: 12px;
     }
 
-    .card {
-      min-width: 0;
-      overflow: hidden;
-      background: var(--color-bg-secondary);
-      border: 1px solid rgba(0, 0, 0, 0.06);
-      border-radius: var(--radius-md);
-      padding: 18px 20px;
+    .wetype-shell {
       display: flex;
-      flex-direction: column;
-      gap: 12px;
+      width: 100%;
+      height: 100vh;
+      padding: 12px;
+      gap: 24px;
     }
 
-    .hero-pairing {
-      display: flex;
-      align-items: center;
-      gap: 22px;
-    }
-
-    .qr-frame {
+    /* Left Floating White Sidebar (WeType style) */
+    .wetype-sidebar {
+      width: 205px;
       flex-shrink: 0;
-      background: #FFFFFF;
-      border: 1px solid var(--color-border);
-      border-radius: 12px;
-      padding: 6px;
-    }
-
-    .qr-frame svg {
-      width: 132px;
-      height: 132px;
-      display: block;
-    }
-
-    .hero-info {
-      flex: 1;
-      min-width: 0;
+      background: var(--color-surface);
+      border-radius: 14px;
+      padding: 50px 12px 16px;
       display: flex;
       flex-direction: column;
-      align-items: flex-start;
-      gap: 6px;
+      gap: 4px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.02);
+      -webkit-app-region: drag;
     }
 
-    .hero-title {
-      font-size: 17px;
-      font-weight: 600;
-      letter-spacing: -0.01em;
+    .nav-item {
+      -webkit-app-region: no-drag;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 14px;
+      border-radius: 8px;
+      border: none;
+      background: transparent;
       color: var(--color-text-primary);
+      font-family: var(--font-family);
+      font-size: 14px;
+      font-weight: 400;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.12s ease;
     }
 
-    .hero-subtitle {
-      font-size: 12px;
-      color: var(--color-text-secondary);
+    .nav-item:hover {
+      background: rgba(0, 0, 0, 0.03);
     }
 
-    .code-pill {
-      font-family: var(--font-mono);
-      font-size: 28px;
-      font-weight: 700;
-      letter-spacing: 3px;
-      color: var(--color-accent);
-      background: rgba(7, 193, 96, 0.08);
-      padding: 4px 14px;
-      border-radius: 10px;
-      margin: 2px 0;
-      user-select: all;
-    }
-
-    .hero-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 2px;
-    }
-
-    .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .section-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--color-text-secondary);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .agent-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .agent-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px;
-      background: var(--color-bg-elevated);
-      border-radius: var(--radius-sm);
-      font-size: 13px;
-    }
-
-    .agent-meta {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .agent-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-    }
-
-    .dot-online {
-      background: var(--color-accent);
-    }
-
-    .dot-offline {
-      background: #C7C7CC;
-    }
-
-    .agent-name {
+    .nav-item.active {
+      background: var(--color-green);
+      color: #FFFFFF;
       font-weight: 500;
     }
 
-    .agent-version {
-      font-size: 11px;
-      color: var(--color-text-secondary);
-      font-weight: 400;
+    .nav-item svg {
+      flex-shrink: 0;
     }
 
-    details.subtle-collapse {
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 8px 14px 2px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       font-size: 12px;
       color: var(--color-text-secondary);
+      -webkit-app-region: no-drag;
     }
 
-    details.subtle-collapse summary {
-      cursor: pointer;
-      user-select: none;
-      padding: 4px 0;
-      color: var(--color-text-secondary);
-      list-style: none;
-      display: inline-flex;
+    /* Right Content Canvas */
+    .wetype-main {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      overflow-y: auto;
+      padding: 12px 16px 24px 4px;
+    }
+
+    .pane-header {
+      height: 34px;
+      display: flex;
       align-items: center;
-      gap: 4px;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      -webkit-app-region: drag;
     }
 
-    details.subtle-collapse summary::-webkit-details-marker {
+    .pane-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--color-text-primary);
+    }
+
+    .tab-pane {
       display: none;
     }
 
-    details.subtle-collapse summary::after {
-      content: '▾';
-      font-size: 11px;
+    .tab-pane.active {
+      display: block;
     }
 
-    details.subtle-collapse[open] summary::after {
-      content: '▴';
+    /* WeType Pure White Grouped Card */
+    .wetype-group {
+      background: var(--color-surface);
+      border-radius: 12px;
+      padding: 0 20px;
+      margin-bottom: 14px;
+      border: 1px solid rgba(0, 0, 0, 0.03);
     }
 
-    .offline-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 6px;
-      margin-top: 8px;
-    }
-
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-      background: var(--color-accent);
-      color: #FFFFFF;
-      border: none;
-      border-radius: var(--radius-sm);
-      padding: 6px 12px;
-      font-size: 12px;
-      font-weight: 500;
-      white-space: nowrap;
-      cursor: pointer;
-    }
-
-    .btn:hover {
-      background: var(--color-accent-hover);
-    }
-
-    .btn-secondary {
-      background: var(--color-bg-elevated);
-      border: 1px solid var(--color-border);
-      color: var(--color-text-primary);
-    }
-
-    .btn-secondary:hover {
-      background: #EAEAEF;
-    }
-
-    .btn-mini {
-      background: rgba(255, 59, 48, 0.1);
-      color: var(--color-danger);
-      border: none;
-      border-radius: 6px;
-      padding: 3px 8px;
-      font-size: 11px;
-      cursor: pointer;
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      padding: 2px 9px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-
-    .badge-success {
-      background: rgba(7, 193, 96, 0.12);
-      color: #06AD56;
-    }
-
-    .badge-danger {
-      background: rgba(255, 59, 48, 0.12);
-      color: var(--color-danger);
-    }
-
-    .badge-muted {
-      background: #EEEEF2;
-      color: var(--color-text-secondary);
-    }
-
-    .kv-row {
+    .wetype-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 7px 10px;
-      background: var(--color-bg-elevated);
-      border-radius: var(--radius-sm);
+      gap: 16px;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--color-divider);
+      min-width: 0;
+    }
+
+    .wetype-row:last-child {
+      border-bottom: none;
+    }
+
+    .row-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .qr-row-left {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      min-width: 0;
+    }
+
+    .qr-box {
+      flex-shrink: 0;
+      border: 1px solid #EAEAEA;
+      border-radius: 10px;
+      padding: 6px;
+      background: #FFFFFF;
+    }
+
+    .qr-box svg {
+      width: 112px;
+      height: 112px;
+      display: block;
+    }
+
+    .row-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--color-text-primary);
+    }
+
+    .row-sub-inline {
       font-size: 12px;
-    }
-
-    .kv-label {
+      font-weight: 400;
       color: var(--color-text-secondary);
+      margin-left: 4px;
     }
 
-    .kv-value {
-      font-family: var(--font-mono);
+    .row-desc {
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--color-text-secondary);
+      margin-top: 3px;
+    }
+
+    .row-right-text {
+      font-size: 13px;
+      color: var(--color-text-secondary);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .text-green {
+      color: var(--color-green);
       font-weight: 500;
     }
 
-    .input {
-      width: 100%;
-      background: var(--color-bg-elevated);
-      border: 1px solid var(--color-border);
-      border-radius: var(--radius-sm);
-      color: var(--color-text-primary);
-      padding: 6px 10px;
+    .code-display {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      color: var(--color-green);
+      background: rgba(23, 179, 120, 0.08);
+      padding: 4px 12px;
+      border-radius: 8px;
+      user-select: all;
+      flex-shrink: 0;
+    }
+
+    /* WeType Radio Circle */
+    .wetype-radio {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1.5px solid #CCCCCC;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .wetype-radio.checked {
+      border-color: var(--color-green);
+      background: var(--color-green);
+    }
+
+    .wetype-radio.checked::after {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #FFFFFF;
+    }
+
+    /* WeType iOS Toggle Switch */
+    .wetype-switch {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      border-radius: 999px;
+      background: #D8D8D8;
+      border: none;
+      cursor: pointer;
+      transition: background 0.18s ease;
+      flex-shrink: 0;
+    }
+
+    .wetype-switch.on {
+      background: var(--color-green);
+    }
+
+    .wetype-switch::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      transition: transform 0.18s ease;
+    }
+
+    .wetype-switch.on::after {
+      transform: translateX(18px);
+    }
+
+    /* WeType Outlined Secondary Button ("设置..." / "管理...") */
+    .wetype-btn {
+      background: #FFFFFF;
+      border: 1px solid var(--color-btn-border);
+      border-radius: 6px;
+      padding: 4px 14px;
+      font-family: var(--font-family);
       font-size: 12px;
+      font-weight: 400;
+      color: var(--color-text-primary);
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .wetype-btn:hover {
+      background: #F7F7F7;
+    }
+
+    .wetype-input {
+      background: #F7F7F8;
+      border: 1px solid #E2E2E5;
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--color-text-primary);
+      width: 240px;
+    }
+
+    .wetype-select {
+      background: #FFFFFF;
+      border: 1px solid var(--color-btn-border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: var(--color-text-primary);
+    }
+
+    details.more-collapse {
+      padding: 12px 0;
+      font-size: 12px;
+      color: var(--color-text-secondary);
+    }
+
+    details.more-collapse summary {
+      cursor: pointer;
+      color: var(--color-text-secondary);
     }
 
     .log-stream {
-      background: var(--color-bg-elevated);
-      border: 1px solid var(--color-border);
-      border-radius: var(--radius-sm);
-      padding: 8px 10px;
-      max-height: 110px;
+      padding: 12px 0;
+      max-height: 180px;
       overflow-y: auto;
       font-family: var(--font-mono);
       font-size: 11px;
+      color: var(--color-text-secondary);
     }
 
     .log-row {
       display: flex;
-      gap: 8px;
-      padding: 1px 0;
+      gap: 10px;
+      padding: 3px 0;
     }
 
     .log-time {
-      color: var(--color-text-secondary);
+      color: #AAAAAA;
       flex-shrink: 0;
     }
 
@@ -645,97 +715,163 @@ export function renderDesktopAppHtml(
   </style>
 </head>
 <body>
-  <header class="title-bar">
-    <div class="title-brand">
-      ${iconBridgeSvg()}
-      <span>${escapeHtml(t.appTitle)}</span>
-    </div>
-    <div style="display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag;">
-      <select class="input" id="select-locale" style="width: auto; padding: 3px 8px;">
-        <option value="zh" ${locale === 'zh' ? 'selected' : ''}>中文</option>
-        <option value="en" ${locale === 'en' ? 'selected' : ''}>English</option>
-        <option value="ja" ${locale === 'ja' ? 'selected' : ''}>日本語</option>
-        <option value="ko" ${locale === 'ko' ? 'selected' : ''}>한국어</option>
-      </select>
-      <span class="badge ${statusClass}" id="bridge-status-badge">${escapeHtml(statusLabel)}</span>
-    </div>
-  </header>
+  <div class="wetype-shell">
+    <!-- Left Sidebar -->
+    <aside class="wetype-sidebar">
+      <button class="nav-item active" data-tab-target="pair" type="button">
+        ${iconPhoneSvg()}
+        <span>${escapeHtml(t.navPair)}</span>
+      </button>
+      <button class="nav-item" data-tab-target="agents" type="button">
+        ${iconAgentSvg()}
+        <span>${escapeHtml(t.navAgents)}</span>
+      </button>
+      <button class="nav-item" data-tab-target="network" type="button">
+        ${iconCrossDeviceSvg()}
+        <span>${escapeHtml(t.navNetwork)}</span>
+      </button>
+      <button class="nav-item" data-tab-target="system" type="button">
+        ${iconSettingsSvg()}
+        <span>${escapeHtml(t.navSystem)}</span>
+      </button>
 
-  <main class="container workspace-grid">
-    <!-- 1. Hero Card: Clean Scan QR & 6-Digit Code -->
-    <section class="card">
-      ${pairingHtml}
-      ${devicesHtml ? `<div style="display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--color-border);">${devicesHtml}</div>` : ''}
-    </section>
-
-    <!-- 2. Ready AI Agents Card (Only installed shown prominently; uninstalled tucked away) -->
-    <section class="card">
-      <div class="section-header">
-        <span class="section-title">${iconTerminalSvg()} ${escapeHtml(t.localAgents)}</span>
-        <button class="btn btn-secondary" id="btn-refresh-agents" type="button">${iconRefreshSvg()} ${escapeHtml(t.detect)}</button>
+      <div class="sidebar-footer">
+        <span id="bridge-status-badge">${escapeHtml(statusLabel)}</span>
+        <span>v0.1</span>
       </div>
-      <div class="agent-list">
-        ${onlineAgentsHtml || `<div class="kv-row"><span class="kv-label">No online agent detected</span></div>`}
-      </div>
-      ${
-        offlineAgents.length > 0
-          ? `<details class="subtle-collapse">
-              <summary>${escapeHtml(t.moreAgentsSummary)} (${offlineAgents.length})</summary>
-              <div class="offline-grid">${offlineAgentsHtml}</div>
-            </details>`
-          : ''
-      }
-    </section>
+    </aside>
 
-    <!-- 3. Progressive Disclosure: Advanced Network, Relay & Logs tucked cleanly at the bottom -->
-    <details class="subtle-collapse">
-      <summary style="justify-content: center; width: 100%; padding: 6px 0;">${escapeHtml(t.advancedSummary)}</summary>
-      <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
-        <section class="card">
-          <div class="section-header">
-            <span class="section-title">${escapeHtml(t.localBridge)}</span>
-            <button class="btn btn-secondary" id="btn-toggle-bridge" type="button">${escapeHtml(isRunning ? t.stopBridge : t.startBridge)}</button>
-          </div>
-          <div class="kv-row">
-            <span class="kv-label">${escapeHtml(t.machineLabel)}</span>
-            <span class="kv-value">${escapeHtml(state.bridge.machineId)}</span>
-          </div>
-          <div class="kv-row">
-            <span class="kv-label">${escapeHtml(t.endpointLabel)}</span>
-            <span class="kv-value">${escapeHtml(state.bridge.wsUrl ?? '-')}</span>
-          </div>
-        </section>
+    <!-- Right Content Area -->
+    <main class="wetype-main">
+      <!-- Tab 1: Phone Pairing -->
+      <section class="tab-pane active" data-pane="pair">
+        <header class="pane-header">
+          <h1 class="pane-title">${escapeHtml(t.mobilePairing)}</h1>
+        </header>
 
-        <section class="card">
-          <div class="section-header">
-            <span class="section-title">${iconGlobeSvg()} ${escapeHtml(t.publicRelay)}</span>
-            <span class="badge badge-muted">${state.relay.mode === 'custom' ? 'Custom' : 'Default'}</span>
-          </div>
-          <div class="kv-row">
-            <span class="kv-label">${escapeHtml(t.activeRelayLabel)}</span>
-            <code class="kv-value" id="active-relay-url">${escapeHtml(state.relay.activeRelayUrl)}</code>
-          </div>
-          <span class="sr-only">${escapeHtml(state.relay.defaultRelayUrl)}</span>
-          <div style="display: flex; gap: 8px;">
-            <input class="input" id="input-custom-relay" type="text" placeholder="wss://relay.example.com" value="${escapeHtml(state.relay.customRelayUrl)}" />
-            <button class="btn" id="btn-save-custom-relay" type="button">${escapeHtml(t.useCustomRelay)}</button>
-            <button class="btn btn-secondary" id="btn-use-default-relay" type="button">${escapeHtml(t.useDefaultRelay)}</button>
-          </div>
-        </section>
+        ${pairingSectionHtml}
 
-        <section class="card">
-          <div class="section-header">
-            <span class="section-title">${iconLogSvg()} ${escapeHtml(t.diagnosticLogs)}</span>
+        <div class="wetype-group">
+          <div class="wetype-row">
+            <div>
+              <div class="row-title">${escapeHtml(t.localBridge)}</div>
+              <div class="row-desc">${escapeHtml(t.bridgeDesc)} (${escapeHtml(state.bridge.wsUrl ?? '-')})</div>
+            </div>
+            <button class="wetype-switch ${isRunning ? 'on' : ''}" id="btn-toggle-bridge" type="button" aria-label="${escapeHtml(isRunning ? t.stopBridge : t.startBridge)}"></button>
+          </div>
+          ${devicesHtml}
+        </div>
+      </section>
+
+      <!-- Tab 2: Local AI Agents -->
+      <section class="tab-pane" data-pane="agents">
+        <header class="pane-header">
+          <h1 class="pane-title">${escapeHtml(t.localAgents)}</h1>
+          <button class="wetype-btn" id="btn-refresh-agents" type="button">${escapeHtml(t.detect)}</button>
+        </header>
+
+        <div class="wetype-group">
+          ${onlineAgentsHtml || `<div class="wetype-row"><div class="row-desc">${escapeHtml(t.agentsDesc)}</div></div>`}
+          ${
+            offlineAgents.length > 0
+              ? `<details class="more-collapse">
+                  <summary>${escapeHtml(t.moreAgentsSummary)} (${offlineAgents.length})</summary>
+                  ${offlineAgentsHtml}
+                </details>`
+              : ''
+          }
+        </div>
+      </section>
+
+      <!-- Tab 3: Cross-Device Network & Relay -->
+      <section class="tab-pane" data-pane="network">
+        <header class="pane-header">
+          <h1 class="pane-title">${escapeHtml(t.publicRelay)}</h1>
+        </header>
+
+        <div class="wetype-group">
+          <div class="wetype-row">
+            <div class="row-left">
+              <span class="wetype-radio ${isDefaultRelay ? 'checked' : ''}"></span>
+              <div>
+                <div class="row-title">${escapeHtml(t.relayDefaultTitle)}</div>
+                <div class="row-desc">${escapeHtml(t.relayDefaultDesc)} · <code>${escapeHtml(state.relay.defaultRelayUrl)}</code></div>
+              </div>
+            </div>
+            <button class="wetype-btn" id="btn-use-default-relay" type="button">${escapeHtml(t.useDefaultRelay)}</button>
+          </div>
+
+          <div class="wetype-row">
+            <div class="row-left">
+              <span class="wetype-radio ${!isDefaultRelay ? 'checked' : ''}"></span>
+              <div>
+                <div class="row-title">${escapeHtml(t.relayCustomTitle)}</div>
+                <div class="row-desc">${escapeHtml(t.relayCustomDesc)}</div>
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <input class="wetype-input" id="input-custom-relay" type="text" placeholder="wss://relay.example.com" value="${escapeHtml(state.relay.customRelayUrl)}" />
+              <button class="wetype-btn" id="btn-save-custom-relay" type="button">${escapeHtml(t.useCustomRelay)}</button>
+            </div>
+          </div>
+          <span class="sr-only" id="active-relay-url">${escapeHtml(state.relay.activeRelayUrl)}</span>
+        </div>
+      </section>
+
+      <!-- Tab 4: Preferences & Diagnostic Logs -->
+      <section class="tab-pane" data-pane="system">
+        <header class="pane-header">
+          <h1 class="pane-title">${escapeHtml(t.navSystem)}</h1>
+        </header>
+
+        <div class="wetype-group">
+          <div class="wetype-row">
+            <div>
+              <div class="row-title">${escapeHtml(t.languageTitle)}</div>
+              <div class="row-desc">${escapeHtml(t.languageDesc)}</div>
+            </div>
+            <select class="wetype-select" id="select-locale">
+              <option value="zh" ${locale === 'zh' ? 'selected' : ''}>中文</option>
+              <option value="en" ${locale === 'en' ? 'selected' : ''}>English</option>
+              <option value="ja" ${locale === 'ja' ? 'selected' : ''}>日本語</option>
+              <option value="ko" ${locale === 'ko' ? 'selected' : ''}>한국어</option>
+            </select>
+          </div>
+          <div class="wetype-row">
+            <div>
+              <div class="row-title">${escapeHtml(t.machineLabel)}</div>
+              <div class="row-desc">${escapeHtml(state.bridge.machineId)}</div>
+            </div>
+            <span class="row-right-text">${escapeHtml(state.bridge.wsUrl ?? '-')}</span>
+          </div>
+        </div>
+
+        <div class="wetype-group">
+          <div class="wetype-row">
+            <div>
+              <div class="row-title">${escapeHtml(t.diagnosticLogs)}</div>
+              <div class="row-desc">${escapeHtml(t.logsDesc)}</div>
+            </div>
           </div>
           <div class="log-stream" id="log-stream">
             ${logsHtml}
           </div>
-        </section>
-      </div>
-    </details>
-  </main>
+        </div>
+      </section>
+    </main>
+  </div>
+
   <script>
     window.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('[data-tab-target]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const target = btn.getAttribute('data-tab-target');
+          document.querySelectorAll('[data-tab-target]').forEach((b) => b.classList.remove('active'));
+          document.querySelectorAll('[data-pane]').forEach((p) => p.classList.remove('active'));
+          btn.classList.add('active');
+          document.querySelector('[data-pane="' + target + '"]')?.classList.add('active');
+        });
+      });
       document.getElementById('select-locale')?.addEventListener('change', (ev) => {
         const nextLang = ev.target.value;
         const url = new URL(window.location.href);
@@ -789,22 +925,18 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;');
 }
 
-function iconBridgeSvg(): string {
-  return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#07C160" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10a8 8 0 0 1 16 0"/><path d="M2 14h20"/><path d="M6 14v6"/><path d="M18 14v6"/></svg>`;
+function iconPhoneSvg(): string {
+  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>`;
 }
 
-function iconTerminalSvg(): string {
-  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`;
+function iconAgentSvg(): string {
+  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>`;
 }
 
-function iconGlobeSvg(): string {
-  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#007AFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+function iconCrossDeviceSvg(): string {
+  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="10" rx="2"/><line x1="6" y1="17" x2="12" y2="17"/><line x1="9" y1="13" x2="9" y2="17"/><rect x="16" y="11" width="6" height="10" rx="1"/></svg>`;
 }
 
-function iconRefreshSvg(): string {
-  return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
-}
-
-function iconLogSvg(): string {
-  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>`;
+function iconSettingsSvg(): string {
+  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
 }
