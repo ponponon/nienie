@@ -202,7 +202,11 @@
 - 桌面端现代化 React 19 + Radix UI + Lucide Icons + Sonner 重构（`apps/desktop/src/ui/*`）：
   - 彻底替代早期原始 HTML 字符串拼接，采用 React 19 SSR（`renderToString`）+ 客户端无缝挂载（`/assets/desktop-client.js`）架构
   - 集成 `@radix-ui/react-tabs`、`@radix-ui/react-switch`、`@radix-ui/react-select`（毛玻璃弹出下拉菜单）、`@radix-ui/react-collapsible`、`@radix-ui/react-dialog`（用户协议与隐私政策弹窗）无障碍组件原语
-  - 统一采用 `lucide-react` 矢量图标库与 `sonner` 灵动 Toast 通知反馈，彻底消除点击按钮或切换语言时的 `window.location.reload()` 整页刷新闪烁
+  - 统一采用 `lucide-react` 矢量图标库、`@lobehub/icons-static-svg` 与 `opencode` 官方仓库的真实 Agent 品牌 SVG Logo，以及 `sonner` 灵动 Toast 通知反馈，彻底消除点击按钮或切换语言时的 `window.location.reload()` 整页刷新闪烁
+- 手机端现代化 UI 与真实 Agent 品牌 Logo 重构（`apps/mobile/lib/src/ui/*`）：
+  - 引入 `lucide_icons_flutter` 与 `flutter_svg`，全面替换默认 Material 图标，统一双端视觉语言
+  - 实现 `AgentBrandLogo` 组件，在手机端 Agent 切换芯片、会话标签与对话气泡中渲染 OpenCode、Codex、Claude Code、Pi、ACP、OpenClaw 等真实官方 SVG 品牌标志
+  - 升级 `PairingPanel`、`NienieMobileApp` 与 `SessionTimelineList` 为高定分组卡片（`1px` 细描边、柔和阴影、图标底座徽章与等宽代码容器），并在已 Root 的一加真机（`3B6F5KEAZ2KCEG3X`）完成构建、安装与拉起验证
 
 ## MVP 规划
 

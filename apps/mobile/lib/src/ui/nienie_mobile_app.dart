@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../i18n/app_strings.dart';
 import '../state/mobile_bridge_client.dart';
+import 'agent_brand_logo.dart';
 import 'pairing_panel.dart';
 import 'timeline_card_list.dart';
 
@@ -20,6 +23,19 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   final TextEditingController _qrUriController = TextEditingController();
   final TextEditingController _promptController = TextEditingController();
 
+  static const Color _weTypeGreen = Color(0xFF17B378);
+  static const Color _canvasBg = Color(0xFFF1F2F5);
+  static const Color _textPrimary = Color(0xFF141416);
+  static const Color _textSecondary = Color(0xFF6E7178);
+  static const Color _borderSubtle = Color(0x14000000);
+
+  static const String _nienieBrandMarkSvg = '''
+<svg viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="50" height="50" rx="13" fill="#17B378"/>
+  <path d="M17 33V17L33 33V17" stroke="#FFFFFF" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+''';
+
   @override
   void dispose() {
     _wsUrlController.dispose();
@@ -35,11 +51,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       title: 'Nienie Mobile',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.light(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: const Color(0xFFF0F0F2),
-        cardColor: const Color(0xFFFFFFFF),
+        scaffoldBackgroundColor: _canvasBg,
+        cardColor: Colors.white,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF17B378),
-          primary: const Color(0xFF17B378),
+          seedColor: _weTypeGreen,
+          primary: _weTypeGreen,
         ),
       ),
       home: AnimatedBuilder(
@@ -48,22 +64,31 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           final client = widget.client;
           return Scaffold(
             appBar: AppBar(
-              toolbarHeight: 44,
-              backgroundColor: const Color(0xFFF7F7F7),
-              foregroundColor: const Color(0xFF181818),
+              toolbarHeight: 48,
+              backgroundColor: Colors.white,
+              foregroundColor: _textPrimary,
               elevation: 0,
-              titleSpacing: 12,
+              scrolledUnderElevation: 0,
+              shape: const Border(
+                bottom: BorderSide(color: _borderSubtle, width: 1),
+              ),
+              titleSpacing: 14,
               title: Row(
                 children: [
-                  const Icon(Icons.keyboard_command_key_rounded, size: 18, color: Color(0xFF17B378)),
-                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: SvgPicture.string(_nienieBrandMarkSvg),
+                  ),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       client.strings.appTitle,
                       style: const TextStyle(
-                        fontSize: 15,
+                        fontSize: 15.5,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF181818),
+                        letterSpacing: -0.2,
+                        color: _textPrimary,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -72,27 +97,45 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     key: const Key('btn-switch-language'),
                     initialValue: client.language,
                     onSelected: client.setLanguage,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: _borderSubtle),
+                    ),
+                    color: Colors.white,
+                    elevation: 6,
                     itemBuilder: (context) => const [
-                      PopupMenuItem(value: AppLanguage.zh, child: Text('中文')),
+                      PopupMenuItem(value: AppLanguage.zh, child: Text('中文 (简体)')),
                       PopupMenuItem(value: AppLanguage.en, child: Text('English')),
                       PopupMenuItem(value: AppLanguage.ja, child: Text('日本語')),
                       PopupMenuItem(value: AppLanguage.ko, child: Text('한국어')),
                     ],
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF6F7F9),
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(color: _borderSubtle),
+                      ),
                       child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.language, size: 15, color: Color(0xFF181818)),
-                          const SizedBox(width: 3),
+                          const Icon(LucideIcons.globe, size: 13, color: _textSecondary),
+                          const SizedBox(width: 4),
                           Text(
                             client.strings.langShortLabel,
-                            style: const TextStyle(fontSize: 12, color: Color(0xFF181818)),
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w500,
+                              color: _textPrimary,
+                            ),
                           ),
+                          const SizedBox(width: 2),
+                          const Icon(LucideIcons.chevronDown, size: 12, color: _textSecondary),
                         ],
                       ),
                     ),
                   ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: 6),
                   _buildConnectionBadge(client),
                   if (client.connectionState == BridgeConnectionState.connected) ...[
                     const SizedBox(width: 4),
@@ -101,7 +144,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                       visualDensity: VisualDensity.compact,
                       tooltip: 'Disconnect',
                       onPressed: client.disconnect,
-                      icon: const Icon(Icons.link_off, size: 17, color: Color(0xFF8E8E93)),
+                      icon: const Icon(LucideIcons.unplug, size: 16, color: _textSecondary),
                     ),
                   ],
                 ],
@@ -133,20 +176,31 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       BridgeConnectionState.disconnected => s.statusDisconnected,
     };
     final color = switch (state) {
-      BridgeConnectionState.connected => const Color(0xFF07C160),
-      BridgeConnectionState.connecting => const Color(0xFFFF9500),
-      BridgeConnectionState.error => const Color(0xFFFA5151),
-      BridgeConnectionState.disconnected => const Color(0xFF8E8E93),
+      BridgeConnectionState.connected => _weTypeGreen,
+      BridgeConnectionState.connecting => const Color(0xFFF59E0B),
+      BridgeConnectionState.error => const Color(0xFFEF4444),
+      BridgeConnectionState.disconnected => const Color(0xFF8E929B),
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(
-        label,
-        style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+          ),
+        ],
       ),
     );
   }
@@ -155,10 +209,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     final active = client.activeSession;
     return Column(
       children: [
-        // Compact Top Agent + Session Header Bar
+        // Modern Agent + Model + Session Selector Bar
         Container(
-          color: const Color(0xFFF7F7F7),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          color: Colors.white,
+          padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
           child: Column(
             children: [
               SizedBox(
@@ -175,35 +229,55 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                           return ActionChip(
                             key: Key('chip-agent-${agent.id}'),
                             visualDensity: VisualDensity.compact,
-                            backgroundColor: const Color(0xFFFFFFFF),
-                            avatar: Icon(
-                              agent.available
-                                  ? Icons.check_circle
-                                  : Icons.remove_circle_outline,
-                              size: 14,
-                              color: agent.available
-                                  ? const Color(0xFF07C160)
-                                  : const Color(0xFF8E8E93),
+                            backgroundColor: const Color(0xFFF8F9FA),
+                            side: const BorderSide(color: _borderSubtle),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                            label: Text(
-                              agent.name,
-                              style: const TextStyle(fontSize: 12, color: Color(0xFF181818)),
+                            avatar: AgentBrandLogo(agentId: agent.id, size: 14),
+                            label: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  agent.name,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                    color: _textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(width: 5),
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    color: agent.available
+                                        ? _weTypeGreen
+                                        : const Color(0xFFC4C7CE),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                              ],
                             ),
                             onPressed: () => client.loadModels(agent.id),
                           );
                         },
                       ),
                     ),
+                    const SizedBox(width: 6),
                     SizedBox(
                       width: 32,
                       height: 32,
-                      child: IconButton.filledTonal(
+                      child: IconButton.filled(
                         key: const Key('btn-new-session'),
                         padding: EdgeInsets.zero,
                         tooltip: 'New Session',
                         style: IconButton.styleFrom(
-                          backgroundColor: const Color(0xFF07C160),
+                          backgroundColor: _weTypeGreen,
                           foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
                         onPressed: () {
                           final defaultAgent = client.agents
@@ -216,15 +290,16 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                             title: 'Mobile Session',
                           );
                         },
-                        icon: const Icon(Icons.add, size: 18),
+                        icon: const Icon(LucideIcons.plus, size: 16),
                       ),
                     ),
                   ],
                 ),
               ),
-              if (client.models.isNotEmpty)
+              if (client.models.isNotEmpty) ...[
+                const SizedBox(height: 4),
                 SizedBox(
-                  height: 34,
+                  height: 32,
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
                     itemCount: client.models.length,
@@ -241,79 +316,91 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     },
                   ),
                 ),
-              const SizedBox(height: 4),
-              SizedBox(
-                height: 44,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: client.sessions.length,
-                  itemBuilder: (context, index) {
-                    final session = client.sessions[index];
-                    final isSelected = active?.id == session.id;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: InkWell(
-                        onTap: () => client.openSession(session),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? const Color(0xFF07C160).withValues(alpha: 0.14)
-                                : const Color(0xFFFFFFFF),
-                            border: Border.all(
+              ],
+              if (client.sessions.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                SizedBox(
+                  height: 44,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: client.sessions.length,
+                    itemBuilder: (context, index) {
+                      final session = client.sessions[index];
+                      final isSelected = active?.id == session.id;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(9),
+                          onTap: () => client.openSession(session),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
                               color: isSelected
-                                  ? const Color(0xFF07C160)
-                                  : const Color(0xFFE5E5EA),
+                                  ? _weTypeGreen.withValues(alpha: 0.1)
+                                  : const Color(0xFFF8F9FA),
+                              border: Border.all(
+                                color: isSelected ? _weTypeGreen : _borderSubtle,
+                              ),
+                              borderRadius: BorderRadius.circular(9),
                             ),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                session.title,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF181818),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                AgentBrandLogo(agentId: session.agentId, size: 13),
+                                const SizedBox(width: 7),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      session.title,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: isSelected ? _weTypeGreen : _textPrimary,
+                                      ),
+                                    ),
+                                    Text(
+                                      session.projectPath,
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        color: _textSecondary,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                              Text(
-                                session.projectPath,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  color: Color(0xFF8E8E93),
-                                ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
-        const Divider(height: 1, color: Color(0xFFE5E5EA)),
+        const Divider(height: 1, color: _borderSubtle),
         // Active session detail timeline
         Expanded(
           child: active == null
               ? Center(
                   child: Text(
                     client.strings.selectSessionHint,
-                    style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 13),
+                    style: const TextStyle(color: _textSecondary, fontSize: 13),
                   ),
                 )
               : SessionTimelineList(client: client, session: active),
         ),
-        // WeChat-style bottom composer bar
+        // Modern Bottom Composer Bar
         if (active != null)
           Container(
-            color: const Color(0xFFF7F7F7),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              border: Border(top: BorderSide(color: _borderSubtle)),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
             child: Row(
               children: [
                 IconButton(
@@ -321,56 +408,58 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   visualDensity: VisualDensity.compact,
                   tooltip: 'Load Session Diffs',
                   onPressed: () => client.loadSessionDiffs(active.id),
-                  icon: const Icon(Icons.difference_outlined, size: 20, color: Color(0xFF181818)),
+                  icon: const Icon(LucideIcons.fileDiff, size: 18, color: _textSecondary),
                 ),
                 IconButton(
                   key: const Key('btn-capture-screen'),
                   visualDensity: VisualDensity.compact,
                   tooltip: 'Capture Desktop Screen',
                   onPressed: () => client.captureScreen('main'),
-                  icon: const Icon(Icons.desktop_windows_outlined, size: 20, color: Color(0xFF181818)),
+                  icon: const Icon(LucideIcons.monitor, size: 18, color: _textSecondary),
                 ),
                 IconButton(
                   key: const Key('btn-cancel-session'),
                   visualDensity: VisualDensity.compact,
                   tooltip: 'Cancel Session',
                   onPressed: client.cancelActiveSession,
-                  icon: const Icon(Icons.stop_circle_outlined, size: 20, color: Color(0xFFFA5151)),
+                  icon: const Icon(LucideIcons.circleStop, size: 18, color: Color(0xFFEF4444)),
                 ),
                 Expanded(
                   child: Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFFFFFF),
-                      borderRadius: BorderRadius.circular(8),
+                      color: const Color(0xFFF5F6F8),
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(color: _borderSubtle),
                     ),
                     child: TextField(
                       key: const Key('input-session-prompt'),
                       controller: _promptController,
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF181818)),
+                      style: const TextStyle(fontSize: 13.5, color: _textPrimary),
                       decoration: InputDecoration(
                         hintText: client.strings.promptHint,
+                        hintStyle: const TextStyle(fontSize: 13, color: _textSecondary),
                         border: InputBorder.none,
                         isDense: true,
                         contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
+                          horizontal: 11,
+                          vertical: 9,
                         ),
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 7),
                 SizedBox(
-                  height: 34,
-                  width: 34,
+                  height: 36,
+                  width: 36,
                   child: IconButton.filled(
                     key: const Key('btn-send-prompt'),
                     padding: EdgeInsets.zero,
                     style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFF07C160),
+                      backgroundColor: _weTypeGreen,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(9),
                       ),
                     ),
                     onPressed: () {
@@ -378,7 +467,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                       _promptController.clear();
                       client.sendMessage(text);
                     },
-                    icon: const Icon(Icons.send, size: 16),
+                    icon: const Icon(LucideIcons.arrowUp, size: 17),
                   ),
                 ),
               ],
