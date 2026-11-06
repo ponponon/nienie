@@ -10,10 +10,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Code2,
-  Command,
   Copy,
-  Cpu,
   Globe,
   Laptop,
   RefreshCw,
@@ -21,12 +18,12 @@ import {
   SlidersHorizontal,
   Smartphone,
   Sparkles,
-  Terminal,
   Trash2,
   X,
 } from 'lucide-react';
 import type { DesktopDashboardState, DesktopPreloadApi } from '../controller.js';
 import { DESKTOP_I18N, type DesktopLocale } from '../i18n.js';
+import { renderAgentBrandLogo } from './AgentBrandIcons.js';
 
 declare global {
   interface Window {
@@ -286,26 +283,11 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
     : '--- ---';
   const isDefaultRelay = state.relay.mode === 'default';
 
-  const renderAgentIcon = (id: string) => {
-    switch (id) {
-      case 'opencode':
-        return <Code2 size={16} strokeWidth={1.85} />;
-      case 'codex':
-        return <Terminal size={16} strokeWidth={1.85} />;
-      case 'claude-code':
-        return <Sparkles size={16} strokeWidth={1.85} />;
-      case 'acp':
-        return <Cpu size={16} strokeWidth={1.85} />;
-      default:
-        return <Command size={16} strokeWidth={1.85} />;
-    }
-  };
-
   const renderAgentRow = (agent: DesktopDashboardState['agents'][number]) => (
     <div className="wetype-row" key={agent.id} data-agent-id={agent.id}>
       <div className="row-left">
-        <div className={`agent-icon-box ${agent.available ? 'available' : ''}`}>
-          {renderAgentIcon(agent.id)}
+        <div className={`agent-brand-box ${agent.available ? 'available' : 'offline'}`}>
+          {renderAgentBrandLogo(agent.id)}
         </div>
         <div>
           <div className="row-title">

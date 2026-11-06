@@ -410,4 +410,34 @@ UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口�
 
 在使用 `calc(100vh - Xpx)` 计算子容器 `min-height` 时，必须精确累加所有祖先容器的上下 `padding` + `border` 总和并留出安全余量，严禁凭感觉估算扣除值导致产生几像素的幽灵滚动条。
 
+## 2026-11-06 使用通用符号图标（`>_`、`</>`、`⌘`）代替各 AI Agent 真实官方品牌 Logo
+
+### 问题
+
+在「本机 AI 助手」列表中，为 Codex、OpenCode、Claude Code、Pi、ACP、OpenClaw 等具体 AI 产品使用了 `lucide-react` 的通用符号图标（如 `Terminal`、`Code2`、`Command`），导致多个不同 Agent 显示相同的 `⌘` 符号，缺乏品牌辨识度与真实产品感。
+
+### 根因
+
+直接从通用 UI 图标库（Lucide）中找近义符号充当品牌 Logo，而未引入专门的 AI 品牌图标库（`@lobehub/icons-static-svg`）及本地开源仓库（`/Users/ponponon/Desktop/code/me/github/opencode`）中的官方品牌 SVG。
+
+### 影响
+
+用户一眼看出图标不是真实的 Agent 官方 Logo，显得山寨且难以快速区分不同 Agent。
+
+### 修复
+
+1. 引入 `@lobehub/icons-static-svg` 并提取官方品牌矢量图标：
+   - **Codex**：使用 `@lobehub/icons-static-svg/icons/codex-color.svg`（OpenAI Codex 官方蓝紫渐变云朵终端标志）
+   - **OpenCode**：使用 `/Users/ponponon/Desktop/code/me/github/opencode` 官方仓库中的双色几何方块 Logo（`opencode-logo-light-square.svg`）
+   - **Claude Code**：使用 `@lobehub/icons-static-svg/icons/claudecode-color.svg`（Anthropic Claude Code 官方陶土橙像素标志）
+   - **OpenClaw**：使用 `@lobehub/icons-static-svg/icons/openclaw-color.svg`（OpenClaw 官方红色龙虾标志）
+   - **Pi**：使用 `@lobehub/icons-static-svg/icons/pi.svg`（Pi 官方几何字母标志）
+   - **ACP Agent**：使用 `@lobehub/icons-static-svg/icons/mcp.svg`（协议互联标志）
+2. 将图标底框改为纯白圆角应用图标底座（`.agent-brand-box`），避免底色污染官方品牌本色。
+
+### 预防措施
+
+凡是展示具体第三方产品、AI 模型或编程 Agent（如 OpenCode、Codex、Claude Code、OpenClaw、Pi 等），必须使用 `@lobehub/icons-static-svg`、`simple-icons` 或官方仓库中的真实品牌 SVG Logo，严禁拿通用 UI 图标（如 `⌘`、`</>`、星星）敷衍代替。
+
+
 

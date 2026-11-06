@@ -379,7 +379,24 @@ export const DESKTOP_MODERN_CSS = `
     transform: scale(0.98);
   }
 
-  /* Agent Icon Badge & Status Pill */
+  /* Agent Brand Box & Status Pill */
+  .agent-brand-box {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: #FFFFFF;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .agent-brand-box.offline {
+    background: #FAFAFB;
+  }
+
   .agent-icon-box {
     width: 32px;
     height: 32px;

@@ -17,6 +17,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@lobehub/icons-static-svg':
+        specifier: ^1.102.0
+        version: 1.102.0
       '@nienie/adapter-acp':
         specifier: workspace:*
         version: link:../../packages/agent-adapters/acp
@@ -348,6 +351,9 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.6.0':
     resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
+
+  '@lobehub/icons-static-svg@1.102.0':
+    resolution: {integrity: sha512-3Na6S2kdslmsfnBjuL0PQWQClrmuWe/pWThRN/3J2VzPg5MhVghy8knVu7kd1/lqA9ydZBvwmnKLzuBo0Wm6Qw==}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
@@ -1347,6 +1353,8 @@ snapshots:
   '@floating-ui/utils@0.2.12': {}
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
+
+  '@lobehub/icons-static-svg@1.102.0': {}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true

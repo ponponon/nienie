@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lobehub/icons-static-svg": "^1.102.0",
     "@nienie/adapter-acp": "workspace:*",
     "@nienie/adapter-claude-code": "workspace:*",
     "@nienie/adapter-codex": "workspace:*",
