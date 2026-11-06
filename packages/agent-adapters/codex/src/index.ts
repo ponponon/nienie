@@ -1,5 +1,8 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { createAgentInfo, type AgentAdapter } from '@nienie/agent-events';
@@ -64,17 +67,23 @@ export class CodexAdapter implements AgentAdapter {
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sessions = new Map<string, CodexSessionRecord>();
   private readonly activeProcesses = new Map<string, CodexProcessHandle>();
+  private readonly discoverLocalHistory: boolean;
+  private historyLoaded = false;
 
   constructor(options: CodexAdapterOptions = {}) {
-    this.executablePath = options.executablePath ?? process.env.NIENIE_CODEX_BIN ?? 'codex';
+    this.executablePath = resolveCodexBinary(
+      options.executablePath ?? process.env.NIENIE_CODEX_BIN,
+    );
     this.defaultProjectPath = options.defaultProjectPath ?? process.cwd();
     this.normalizer = new CodexEventNormalizer(options);
+    this.discoverLocalHistory = !options.spawnProcess && !options.detectVersion;
 
     this.detectVersionImpl =
       options.detectVersion ??
       (async () => {
         const { stdout } = await execFileAsync(this.executablePath, ['--version'], {
           timeout: 3000,
+          env: buildCodexEnv(),
         });
         return stdout.trim();
       });
@@ -85,6 +94,7 @@ export class CodexAdapter implements AgentAdapter {
         const child = spawn(this.executablePath, args, {
           cwd: spawnOpts.cwd || this.defaultProjectPath,
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: buildCodexEnv(),
         });
         return {
           stdout: child.stdout,
@@ -117,7 +127,91 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async listSessions(): Promise<AgentSession[]> {
+    if (this.discoverLocalHistory && !this.historyLoaded) {
+      this.historyLoaded = true;
+      this.loadLocalCodexHistory();
+    }
     return [...this.sessions.values()].map((record) => this.toAgentSession(record));
+  }
+
+  private loadLocalCodexHistory(): void {
+    const home = homedir();
+    const sqlitePath = resolveLatestCodexStateDb(join(home, '.codex'));
+    if (sqlitePath) {
+      try {
+        const out = execFileSync(
+          'sqlite3',
+          [
+            '-json',
+            sqlitePath,
+            'SELECT id, substr(title, 1, 80) AS title, cwd, created_at, updated_at FROM threads WHERE archived = 0 ORDER BY updated_at DESC LIMIT 60;',
+          ],
+          { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] },
+        );
+        const rows = JSON.parse(out || '[]') as Array<{
+          id?: string;
+          title?: string;
+          cwd?: string;
+          created_at?: number;
+          updated_at?: number;
+        }>;
+        for (const row of rows) {
+          if (!row.id || this.sessions.has(row.id)) continue;
+          const cleanTitle = (row.title ?? '').replace(/\s+/g, ' ').trim();
+          if (cleanTitle === 'Guardian review') continue;
+          const createdIso = row.created_at
+            ? new Date(row.created_at * 1000).toISOString()
+            : new Date().toISOString();
+          const updatedIso = row.updated_at
+            ? new Date(row.updated_at * 1000).toISOString()
+            : createdIso;
+          this.sessions.set(row.id, {
+            id: row.id,
+            threadId: row.id,
+            agentId: 'codex',
+            title: cleanTitle || `Codex (${basename(row.cwd || this.defaultProjectPath)})`,
+            projectPath: row.cwd || this.defaultProjectPath,
+            status: 'idle',
+            createdAt: createdIso,
+            updatedAt: updatedIso,
+          });
+        }
+      } catch {
+        // Ignore sqlite read errors
+      }
+    }
+
+    const globalStatePath = join(home, '.codex/.codex-global-state.json');
+    if (existsSync(globalStatePath)) {
+      try {
+        const raw = JSON.parse(readFileSync(globalStatePath, 'utf8')) as {
+          'electron-saved-workspace-roots'?: string[];
+        };
+        const roots = raw['electron-saved-workspace-roots'] ?? [];
+        const existingPaths = new Set(
+          [...this.sessions.values()].map((s) => s.projectPath),
+        );
+        for (const root of roots) {
+          if (typeof root === 'string' && root.trim() && !existingPaths.has(root)) {
+            const wsId = `codex_ws_${basename(root)}`;
+            if (!this.sessions.has(wsId)) {
+              const nowIso = new Date().toISOString();
+              this.sessions.set(wsId, {
+                id: wsId,
+                agentId: 'codex',
+                title: `${basename(root)} 默认会话`,
+                projectPath: root,
+                status: 'idle',
+                createdAt: nowIso,
+                updatedAt: nowIso,
+              });
+            }
+          }
+        }
+      } catch {
+        // Ignore global state parse errors
+      }
+    }
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {
@@ -276,4 +370,101 @@ export class CodexAdapter implements AgentAdapter {
       updatedAt: record.updatedAt,
     };
   }
+}
+
+function resolveCodexBinary(explicit?: string): string {
+  if (explicit) return explicit;
+  const home = homedir();
+  const candidates = [
+    join(home, '.bun/bin/codex'),
+    join(home, '.local/bin/codex'),
+    '/opt/homebrew/bin/codex',
+    '/usr/local/bin/codex',
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return 'codex';
+}
+
+function resolveLatestCodexStateDb(codexDir: string): string | undefined {
+  if (!existsSync(codexDir)) return undefined;
+  try {
+    const candidates = readdirSync(codexDir)
+      .filter((name) => /^state(?:_\d+)?\.sqlite$/.test(name))
+      .map((name) => {
+        const fullPath = join(codexDir, name);
+        const verMatch = name.match(/^state_(\d+)\.sqlite$/);
+        const schemaVer = verMatch?.[1] ? Number(verMatch[1]) : 0;
+        let mtimeMs = 0;
+        try {
+          mtimeMs = statSync(fullPath).mtimeMs;
+        } catch {
+          // Ignore stat error
+        }
+        return { fullPath, schemaVer, mtimeMs };
+      })
+      .sort((a, b) => b.schemaVer - a.schemaVer || b.mtimeMs - a.mtimeMs);
+    return candidates[0]?.fullPath;
+  } catch {
+    return undefined;
+  }
+}
+
+let cachedMacProxy: string | null | undefined;
+
+function detectMacSystemProxyUrl(): string | undefined {
+  if (cachedMacProxy !== undefined) {
+    return cachedMacProxy ?? undefined;
+  }
+  if (process.platform !== 'darwin') {
+    cachedMacProxy = null;
+    return undefined;
+  }
+  try {
+    const out = execFileSync('scutil', ['--proxy'], {
+      encoding: 'utf8',
+      timeout: 800,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const enabled = /HTTPEnable\s*:\s*1/.test(out);
+    const hostMatch = out.match(/HTTPProxy\s*:\s*([^\s\n]+)/);
+    const portMatch = out.match(/HTTPPort\s*:\s*(\d+)/);
+    if (enabled && hostMatch?.[1] && portMatch?.[1]) {
+      cachedMacProxy = `http://${hostMatch[1]}:${portMatch[1]}`;
+      return cachedMacProxy;
+    }
+  } catch {
+    // Ignore scutil errors
+  }
+  cachedMacProxy = null;
+  return undefined;
+}
+
+function buildCodexEnv(): NodeJS.ProcessEnv {
+  const home = homedir();
+  const extraPaths = [
+    join(home, '.bun/bin'),
+    join(home, '.local/bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
+  const currentPath = process.env.PATH ?? '';
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: [...extraPaths, currentPath].filter(Boolean).join(':'),
+  };
+
+  if (!env.https_proxy && !env.HTTPS_PROXY && !env.http_proxy && !env.HTTP_PROXY) {
+    const sysProxy = detectMacSystemProxyUrl();
+    if (sysProxy) {
+      env.http_proxy = sysProxy;
+      env.https_proxy = sysProxy;
+      env.HTTP_PROXY = sysProxy;
+      env.HTTPS_PROXY = sysProxy;
+    }
+  }
+  return env;
 }

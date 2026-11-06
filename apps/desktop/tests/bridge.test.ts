@@ -38,7 +38,9 @@ describe('desktop bridge composition', () => {
       includeExtendedAgents: true,
       opencode: { baseUrl: 'http://127.0.0.1:1' },
       codex: { detectVersion: async () => 'codex-cli 0.166.0' },
-      claudeCode: { detectVersion: async () => '1.0.24' },
+      claudeCode: { detectVersion: async () => '2.1.169' },
+      mimo: { baseUrl: 'http://127.0.0.1:1' },
+      dsh: { detectVersion: async () => '0.2.1-rc.5' },
       pi: { detectVersion: async () => '0.8.1' },
       openclaw: { baseUrl: 'http://127.0.0.1:1' },
     });
@@ -48,10 +50,10 @@ describe('desktop bridge composition', () => {
       'opencode',
       'codex',
       'claude-code',
+      'mimo',
+      'dsh',
       'pi',
-      'acp',
       'openclaw',
-      'pty',
     ]);
   });
 
@@ -194,6 +196,15 @@ describe('desktop bridge composition', () => {
     expect(startedState.pairing?.pairingCode).toMatch(/^\d{6}$/);
     expect(startedState.pairing?.qrUri).toContain('nienie://pair?data=');
     expect(startedState.pairing?.qrSvg).toContain('<svg');
+
+    // Automatically rotates pairing code when expired without manual click
+    const firstCode = startedState.pairing!.pairingCode;
+    (startedState.pairing as { expiresAt: string }).expiresAt = new Date(
+      Date.now() - 1000,
+    ).toISOString();
+    const autoRotated = controller.getState();
+    expect(autoRotated.pairing?.pairingCode).toMatch(/^\d{6}$/);
+    expect(autoRotated.pairing?.pairingCode).not.toBe(firstCode);
 
     // Switch to custom Relay via IPC
     const customRelayState = (await handlers.get(NIENIE_IPC_CHANNELS.SET_RELAY)?.({}, {

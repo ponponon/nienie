@@ -11,7 +11,7 @@ import {
   type PairingQrPayload,
 } from '@nienie/protocol';
 
-const DEFAULT_PAIRING_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_PAIRING_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type PairingManagerOptions = {
   machineId?: string | undefined;
@@ -62,6 +62,7 @@ export class PairingManager {
   private readonly devices = new Map<string, StoredDeviceRecord>();
   private readonly tokenHashToDeviceId = new Map<string, string>();
   private readonly revokeListeners = new Set<(deviceId: string) => void>();
+  private readonly pairListeners = new Set<(device: PairedDevice) => void>();
 
   constructor(options: PairingManagerOptions = {}) {
     this.machineId = options.machineId ?? 'machine_local';
@@ -142,12 +143,17 @@ export class PairingManager {
     this.tokenHashToDeviceId.set(tokenHash, deviceId);
     this.savePersistedDevices();
 
+    const publicDevice = toPublicDevice(record);
+    for (const listener of this.pairListeners) {
+      listener(publicDevice);
+    }
+
     return {
       deviceId,
       deviceToken,
       machineId: this.machineId,
       pairedAt: nowIso,
-      device: toPublicDevice(record),
+      device: publicDevice,
     };
   }
 
@@ -196,6 +202,11 @@ export class PairingManager {
   onDeviceRevoked(listener: (deviceId: string) => void): () => void {
     this.revokeListeners.add(listener);
     return () => this.revokeListeners.delete(listener);
+  }
+
+  onDevicePaired(listener: (device: PairedDevice) => void): () => void {
+    this.pairListeners.add(listener);
+    return () => this.pairListeners.delete(listener);
   }
 
   private pruneExpiredCodes(): void {

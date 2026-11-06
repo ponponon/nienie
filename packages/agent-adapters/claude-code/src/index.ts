@@ -1,5 +1,8 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import {
@@ -254,17 +257,23 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sessions = new Map<string, ClaudeSessionRecord>();
   private readonly activeProcesses = new Map<string, ClaudeProcessHandle>();
+  private readonly discoverLocalHistory: boolean;
+  private historyLoaded = false;
 
   constructor(options: ClaudeCodeAdapterOptions = {}) {
-    this.executablePath = options.executablePath ?? process.env.NIENIE_CLAUDE_BIN ?? 'claude';
+    this.executablePath = resolveClaudeBinary(
+      options.executablePath ?? process.env.NIENIE_CLAUDE_BIN,
+    );
     this.defaultProjectPath = options.defaultProjectPath ?? process.cwd();
     this.normalizer = new ClaudeCodeEventNormalizer(options);
+    this.discoverLocalHistory = !options.spawnProcess && !options.detectVersion;
 
     this.detectVersionImpl =
       options.detectVersion ??
       (async () => {
         const { stdout } = await execFileAsync(this.executablePath, ['--version'], {
           timeout: 3000,
+          env: buildClaudeEnv(this.executablePath),
         });
         return stdout.trim();
       });
@@ -275,6 +284,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         const child = spawn(this.executablePath, args, {
           cwd: spawnOpts.cwd || this.defaultProjectPath,
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: buildClaudeEnv(this.executablePath),
         });
         return {
           stdout: child.stdout,
@@ -304,7 +314,66 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   }
 
   async listSessions(): Promise<AgentSession[]> {
+    if (this.discoverLocalHistory && !this.historyLoaded) {
+      this.historyLoaded = true;
+      this.loadLocalClaudeHistory();
+    }
     return [...this.sessions.values()];
+  }
+
+  private loadLocalClaudeHistory(): void {
+    const projectsDir = join(homedir(), '.claude/projects');
+    if (!existsSync(projectsDir)) return;
+    try {
+      for (const projEntry of readdirSync(projectsDir)) {
+        if (projEntry.startsWith('.')) continue;
+        const projPath = join(projectsDir, projEntry);
+        const decodedCwd = projEntry.startsWith('-')
+          ? projEntry.replaceAll('-', '/')
+          : this.defaultProjectPath;
+        let files: string[] = [];
+        try {
+          files = readdirSync(projPath).filter((f) => f.endsWith('.jsonl'));
+        } catch {
+          continue;
+        }
+        for (const file of files) {
+          const sessionId = file.replace(/\.jsonl$/, '');
+          if (this.sessions.has(sessionId)) continue;
+          let resolvedCwd = decodedCwd;
+          let resolvedTitle = `Claude (${projEntry.split('-').pop() || 'Session'})`;
+          try {
+            const firstChunk = readFileSync(join(projPath, file), 'utf8').slice(0, 4096);
+            for (const line of firstChunk.split('\n')) {
+              if (!line.trim()) continue;
+              const obj = JSON.parse(line) as { cwd?: string; message?: { content?: unknown } };
+              if (typeof obj.cwd === 'string' && obj.cwd.trim()) {
+                resolvedCwd = obj.cwd.trim();
+              }
+              if (typeof obj.message?.content === 'string' && obj.message.content.trim()) {
+                resolvedTitle = obj.message.content.trim().slice(0, 48);
+                break;
+              }
+            }
+          } catch {
+            // Ignore file read errors
+          }
+          const nowIso = new Date().toISOString();
+          this.sessions.set(sessionId, {
+            id: sessionId,
+            claudeSessionId: sessionId,
+            agentId: 'claude-code',
+            title: resolvedTitle,
+            projectPath: resolvedCwd,
+            status: 'idle',
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          });
+        }
+      }
+    } catch {
+      // Ignore directory scan errors
+    }
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {
@@ -418,10 +487,65 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   }
 }
 
+export {
+  DshAdapter,
+  DshEventNormalizer,
+  type DshAdapterOptions,
+  type DshNormalizerOptions,
+  type DshProcessHandle,
+} from './dsh.js';
+
 function isRecord(value: unknown): value is RawRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function resolveClaudeBinary(explicit?: string): string {
+  if (explicit) return explicit;
+  const home = homedir();
+  const directCandidates = [
+    join(home, '.bun/bin/claude'),
+    join(home, '.local/bin/claude'),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+  ];
+  for (const candidate of directCandidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  const nvmDir = join(home, '.nvm/versions/node');
+  if (existsSync(nvmDir)) {
+    try {
+      const versions = readdirSync(nvmDir).sort().reverse();
+      for (const ver of versions) {
+        const binPath = join(nvmDir, ver, 'bin/claude');
+        if (existsSync(binPath)) {
+          return binPath;
+        }
+      }
+    } catch {
+      // Ignore directory read errors
+    }
+  }
+  return 'claude';
+}
+
+function buildClaudeEnv(executablePath: string): NodeJS.ProcessEnv {
+  const home = homedir();
+  const extraPaths = [
+    executablePath.includes('/') ? dirname(executablePath) : '',
+    join(home, '.bun/bin'),
+    join(home, '.local/bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
+  const currentPath = process.env.PATH ?? '';
+  return {
+    ...process.env,
+    PATH: [...extraPaths, currentPath].filter(Boolean).join(':'),
+  };
 }

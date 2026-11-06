@@ -202,7 +202,38 @@
 - 桌面端现代化 React 19 + Radix UI + Lucide Icons + Sonner 重构（`apps/desktop/src/ui/*`）：
   - 彻底替代早期原始 HTML 字符串拼接，采用 React 19 SSR（`renderToString`）+ 客户端无缝挂载（`/assets/desktop-client.js`）架构
   - 集成 `@radix-ui/react-tabs`、`@radix-ui/react-switch`、`@radix-ui/react-select`（毛玻璃弹出下拉菜单）、`@radix-ui/react-collapsible`、`@radix-ui/react-dialog`（用户协议与隐私政策弹窗）无障碍组件原语
-  - 统一采用 `lucide-react` 矢量图标库与 `sonner` 灵动 Toast 通知反馈，彻底消除点击按钮或切换语言时的 `window.location.reload()` 整页刷新闪烁
+  - 统一采用 `lucide-react` 矢量图标库、`@lobehub/icons-static-svg` 与 `opencode` 官方仓库的真实 Agent 品牌 SVG Logo，以及 `sonner` 灵动 Toast 通知反馈，彻底消除点击按钮或切换语言时的 `window.location.reload()` 整页刷新闪烁
+- 手机端现代化 UI 与真实 Agent 品牌 Logo 重构（`apps/mobile/lib/src/ui/*`）：
+  - 引入 `lucide_icons_flutter` 与 `flutter_svg`，全面替换默认 Material 图标，统一双端视觉语言
+  - 实现 `AgentBrandLogo` 组件，在手机端 Agent 切换芯片、会话标签与对话气泡中渲染 OpenCode、Codex、Claude Code、Pi、ACP、OpenClaw 等真实官方 SVG 品牌标志
+  - 升级 `PairingPanel`、`NienieMobileApp` 与 `SessionTimelineList` 为高定分组卡片（`1px` 细描边、柔和阴影、图标底座徽章与等宽代码容器），并在已 Root 的一加真机（`3B6F5KEAZ2KCEG3X`）完成构建、安装与拉起验证
+- OpenCode 本地服务自动拉起、Codex macOS 系统代理自动注入与手机软键盘回车发送（`packages/agent-adapters/opencode`、`packages/agent-adapters/codex`、`apps/mobile`）：
+  - `OpenCodeAdapter` 自动探测 `~/.bun/bin/opencode` 等路径下的 CLI 二进制并在 `127.0.0.1:4096` 未监听时自动后台拉起 `opencode serve --pure --port 4096 --hostname 127.0.0.1`
+  - `CodexAdapter` 在 macOS 下自动通过 `scutil --proxy` 读取系统生效的 HTTP/HTTPS 代理（如 `127.0.0.1:10902`）注入 `codex exec` 子进程环境变量，解决中国大陆环境下连接 OpenAI Responses WebSocket 被重置（`os error 54`）无响应的问题
+  - 手机端会话输入框支持软键盘回车/发送键（`TextInputAction.send` / `onSubmitted`）直接发送消息，且点击顶部可用 Agent 芯片自动切换至对应 Agent 的工作区会话
+- 新增小米 MiMo Code（`mimo`）与 DeepSeek Harness（`dsh`）适配器、跨 NVM 版本自动发现 Claude Code，并隐藏底层协议兜底项（`packages/agent-adapters/*`、`apps/desktop`、`apps/mobile`）：
+  - 实现 `MiMoCodeAdapter`（`id: 'mimo'`，对接 `/opt/homebrew/bin/mimo` 并自动拉起 `mimo serve --pure --port 4097 --hostname 127.0.0.1`）
+  - 实现 `DshAdapter` & `DshEventNormalizer`（`id: 'dsh'`，自动发现 `/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh`，对接 `dsh --profile headless --json` 与 `--session-id` 恢复）
+  - 增强 `ClaudeCodeAdapter` 自动扫描 `~/.nvm/versions/node/*/bin/claude`（自动发现本机 `v2.1.169 (Claude Code)`）
+  - 在桌面端与手机端接入 `@lobehub/icons-static-svg` 的小米 MiMo（`xiaomimimo.svg`）与 DeepSeek（`deepseek-color.svg`）官方品牌矢量标志
+  - 从面向用户的「本机 AI 助手」产品列表中移除抽象底层协议项（`ACP Agent` 与 `PTY Terminal Fallback`），仅展示真实的 AI 编程 Agent 产品
+- 配对码消费后自动轮换、24 小时有效期与配对设备跨重启持久化（`PairingManager`、`DesktopBridgeController`、`MobileBridgeClient`）：
+  - 手机扫码消费一次性配对码后，桌面端通过 `onDevicePaired` 自动立即生成新配对码并实时同步至桌面 UI，避免二次扫码报 `Pairing code is invalid or expired`
+  - 将桌面端配对码默认有效期延长至 24 小时，并将已绑定手机凭据哈希持久化至 `.nienie/paired-devices.json`，使 `Ctrl+C` 重启 `pnpm start` 后已配对手机依然有效
+  - 修复移动端 `pairWithQrUri` 仅在 WebSocket 建连失败时回退 `127.0.0.1`，避免 `pair.confirm` 成功后因后续异常重复提交已被消费的一次性配对码
+- 手机端 Kelivo 2.0 极简视觉重构与「多电脑 × 多 Agent × 项目空间树」三级联动（`apps/mobile` & `packages/agent-adapters/*`）：
+  - **后端各 Agent 本地项目与历史会话真实发现**：
+    - `CodexAdapter` 自动读取本机 `~/.codex/state_5.sqlite`（`threads` 表）与 `~/.codex/.codex-global-state.json`（`electron-saved-workspace-roots`），还原全部本地工作区项目（如 `nienie`、`audio_cut`、`openctrlc`、`ideaboom` 等）与历史线程
+    - `OpenCodeAdapter` / `MiMoCodeAdapter` 同时聚合 `GET /project` 与 `GET /session`
+    - `ClaudeCodeAdapter` 与 `DshAdapter` 自动扫描 `~/.claude/projects` 与 `~/.dsh/sessions` 下的项目目录与历史会话文件
+  - **手机端 Kelivo 1:1 极简对话视图（`nienie_mobile_app.dart` & `timeline_card_list.dart`）**：
+    - 移除顶部三层拥挤横条，采用 Kelivo 同款长短双横线菜单按钮（`list.svg`）+ 双行无框顶栏（主标题显示会话名，副标题显示 `<项目名> · <Agent> (<电脑名>) ▾`）
+    - 底部采用 Kelivo 标志性的 `R22` 双层圆角悬浮输入舱（上层 100% 全宽无遮挡输入框，下层集成 Agent 真实彩色胶囊切换条、工具按钮与 `32px` 圆形发送钮）
+    - 对话流升级为无外框通栏 Agent 响应 + 紧凑单行工具调用胶条（`#F7F8FA`）+ 右侧浅灰圆角用户气泡
+  - **左侧滑出抽屉三级联动架构（`kelivo_workspace_drawer.dart`）**：
+    - 第一级：顶部电脑切换器（`MacBook Pro M5 ⌄`），支持多台电脑切换与一键扫码添加新电脑
+    - 第二级：当前电脑下的 Agent 选择条（`Codex` / `OpenCode` / `Claude Code` / `MiMo Code` / `DeepSeek Harness`）与全宽胶囊按钮「新建任务」
+    - 第三级：按项目文件夹分组的 `空间 (N) ⌄` 树形列表（`📁 nienie`、`📁 audio_cut`、`📁 openctrlc` 等），支持展开/折叠项目下的历史会话、点击「查看更多」以及点击文件夹右侧 `+` 号直接在该项目路径下新建会话
 
 ## MVP 规划
 

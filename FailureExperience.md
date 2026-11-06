@@ -439,5 +439,169 @@ UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口�
 
 凡是展示具体第三方产品、AI 模型或编程 Agent（如 OpenCode、Codex、Claude Code、OpenClaw、Pi 等），必须使用 `@lobehub/icons-static-svg`、`simple-icons` 或官方仓库中的真实品牌 SVG Logo，严禁拿通用 UI 图标（如 `⌘`、`</>`、星星）敷衍代替。
 
+## 2026-11-06 手机端「高级连接选项」中将长 URI 输入框与宽操作按钮塞在同一水平 `Row` 导致互相挤压遮挡
+
+### 问题
+
+在一加真机屏幕上，展开「高级连接选项」后，下方的 `TextField(input-qr-uri)`（占位符 `或粘贴配对二维码 URI (nienie://pair?data=...)`）与右侧 `OutlinedButton("使用二维码 URI 配对")` 被放在同一个水平 `Row` 内且无间距，由于按钮文字较长占去近一半宽度，导致左侧输入框文字被截断为 `或粘贴配对二维码 URI (n...` 并与右侧按钮边框紧贴遮盖。
+
+### 根因
+
+在宽度仅约 360dp 的移动端卡片内，违反了「长文本输入框严禁与宽按钮同行并排」以及 `design-taste-frontend` 规范中的「Label ABOVE input（标签在输入框上方、严禁用长 placeholder 充当唯一标签）」原则。
+
+### 影响
+
+移动端输入框可编辑区域只剩不到一半宽度，占位符与按钮视觉互相挤压遮盖。
+
+### 修复
+
+1. 将「高级连接选项」中的 `Bridge WebSocket 地址` 与 `或粘贴配对二维码 URI` 全部改为标准的上下堆叠结构：上方为 `12.5px` 独立标题标签，中间为带 `#F6F7F9` 浅灰圆角边框的 100% 全宽输入框（`nienie://pair?data=...`），下方为独占一整行的全宽按钮「使用二维码 URI 配对」。
+2. 精简首屏「扫码连接电脑」副标题文案为 `对准电脑二维码即可自动配对`，使其在手机屏宽度下完整单行展示不折行。
+
+### 预防措施
+
+在移动端（宽度 < 480dp）表单设计中：
+1. 必须遵循「Label ABOVE Input」原则，严禁把 20 字以上的长说明塞进 `hintText` / `placeholder`。
+2. 凡是 URL / URI / 路径输入框或文字超过 4 个字的按钮，必须采用纵向堆叠的全宽布局（Full-width Stacked），严禁把长输入框和宽按钮挤在同一水平 `Row` 中。
+
+## 2026-11-06 本机已安装 `opencode` 却显示「未安装」，且手机端向 `Codex` 发送对话后无响应
+
+### 问题
+
+1. 用户电脑已安装 `/Users/ponponon/.bun/bin/opencode`（`1.19.5`），但桌面端与手机端均显示 `OpenCode` 为「未安装」（不可用灰点）。
+2. 用户在手机端连接后向 `Codex Workspace` 发送对话，长时间收不到任何回复。
+
+### 根因
+
+1. **OpenCode 仅探测了 HTTP 端口而未自动拉起服务**：`OpenCodeAdapter.detect()` 仅请求了 `http://127.0.0.1:4096/global/health`，未检查 `~/.bun/bin/opencode` CLI 是否存在，也未在 `4096` 端口未启动时自动执行 `opencode serve --pure --port 4096 --hostname 127.0.0.1`。
+2. **Codex 子进程缺失 macOS 系统代理环境变量**：`codex exec` 使用 Rust `reqwest`/WebSocket 直连 OpenAI，不会自动读取 macOS 的 `scutil --proxy` 系统代理设置。当用户未在终端手动 `export https_proxy` 时，`codex exec` 因直连被墙报 `Connection reset by peer (os error 54)` 并陷入 5 次重连超时。
+3. **手机端输入框缺失 `onSubmitted` 回调**：Flutter `TextField(input-session-prompt)` 未配置 `textInputAction: TextInputAction.send` 与 `onSubmitted`，导致用户按手机输入法键盘右下角的「发送/回车」键时不会触发 `client.sendMessage()`。
+
+### 影响
+
+用户本机明明安装了 OpenCode 却无法使用，且在手机端发消息给 Codex 无响应。
+
+### 修复
+
+1. **`OpenCodeAdapter` 自动发现与自启动**：自动搜索 `~/.bun/bin/opencode`、`~/.local/bin/opencode`、`/opt/homebrew/bin/opencode`，当 `127.0.0.1:4096` 未监听时自动后台拉起 `opencode serve --pure --port 4096 --hostname 127.0.0.1` 并等待 `/global/health` 就绪。
+2. **`CodexAdapter` 自动注入 macOS 系统代理**：在 `darwin` 平台下通过 `scutil --proxy` 自动读取已启用的系统代理（如 `http://127.0.0.1:10902`）注入 `codex exec` 子进程的 `http_proxy` / `https_proxy` 环境变量。
+3. **手机端软键盘发送支持与 Agent 快速切换**：为 `input-session-prompt` 补齐 `TextInputAction.send` 与 `onSubmitted` 回调，并支持点击顶部 Agent 芯片直接切换到对应 Agent 的会话。
+
+### 预防措施
+
+1. 依赖本地 HTTP 守护进程的 CLI Agent（如 OpenCode），适配器必须在检测到 CLI 二进制存在但端口未监听时自动拉起后台 `serve` 进程，严禁要求用户手动去终端先跑一个守护进程。
+2. 在中国大陆开发环境下，桌面主进程 spawn 任何需访问外网 API 的 CLI 工具（如 `codex`、`claude`）时，若环境变量未显式配置代理，必须自动从 `scutil --proxy` 读取系统代理并注入子进程 `env`。
+3. 移动端所有聊天/指令输入框必须同时支持「右侧发送按钮点击」与「软键盘 `TextInputAction.send` + `onSubmitted` 回车发送」。
+
+## 2026-11-06 未扫描 `~/.nvm/versions/node/*/bin` 导致漏检已安装的 Claude Code，且将底层协议（`ACP Agent` / `PTY`）误当作独立 AI 产品展示
+
+### 问题
+
+1. 用户电脑已通过 npm 在 `~/.nvm/versions/node/v22.17.1/bin/claude` 安装了 `Claude Code v2.1.169`，但因当前默认 Node 版本为 `v22.23.1`，`ClaudeCodeAdapter` 仅按当前 `PATH` 查找 `claude`，误报 `Claude Code`「未安装」。
+2. 桌面端「本机 AI 助手」列表把架构底层的通用协议适配器 `ACP Agent` 和终端兜底器 `PTY Terminal Fallback` 与 OpenCode、Codex 等真实产品并列展示，导致用户困惑（“我都没听说过”）。
+
+### 根因
+
+1. macOS 开发者常使用 `nvm` 管理多个 Node 版本，全局 npm CLI 可能安装在非当前激活的 Node 版本 `bin` 目录下；仅依赖当前进程 `PATH` 会漏检其他 nvm 版本下的 CLI。
+2. 混淆了「面向用户的 AI 助手产品（OpenCode、Codex、Claude Code、MiMo Code、DeepSeek Harness）」与「内部底层通信协议/兜底机制（ACP、PTY）」。
+
+### 影响
+
+用户本机已安装的 Claude Code 无法被识别，且界面上出现了用户无法理解的内部协议名称。
+
+### 修复
+
+1. 在 `ClaudeCodeAdapter` 与 `DshAdapter` 中增加对 `~/.nvm/versions/node/*/bin` 及 `/Applications/*.app/Contents/Resources/runtime/cli/bin` 的自动扫描，自动发现本机已安装的 `Claude Code v2.1.169`、`MiMo Code v0.1.0` 与 `DeepSeek Harness v0.2.1-rc.5`。
+2. 默认不在面向用户的「本机 AI 助手」列表中注册 `ACP Agent` 与 `PTY Terminal Fallback`，仅展示真实的 AI 编程助手产品。
+
+### 预防措施
+
+1. 在 macOS/Linux 上探测 Node 生态 CLI 工具时，除常规 `PATH`、`~/.bun/bin`、`/opt/homebrew/bin` 外，必须遍历 `~/.nvm/versions/node/*/bin` 以兼容多 Node 版本环境。
+2. 面向用户的 UI 列表只允许展示真实可感知的软件产品名称与官方 Logo，严禁把内部抽象协议层（如 ACP、PTY Fallback、JSON-RPC）直接暴露在产品列表中。
+
+## 2026-11-06 一次性配对码被消费或满 5 分钟过期后桌面二维码未自动轮换，导致再次扫码报 `Pairing code is invalid or expired`
+
+### 问题
+
+用户在手机端扫码连接或重启 `pnpm start` 后再次扫码，出现 `Bad state: Pairing code is invalid or expired`（配对码 `693061` 失效）。
+
+### 根因
+
+1. **一次性配对码消费后桌面未自动刷新二维码**：`PairingManager.confirmPairing()` 采用严格的一次性消费策略（验证通过后立即 `this.pendingCodes.delete(code)`），但未通知 `DesktopBridgeController` 生成新配对码，导致桌面窗口上继续展示已经被用掉的旧二维码。
+2. **默认 5 分钟 TTL 过短**：`DEFAULT_PAIRING_TTL_MS` 仅设了 5 分钟（`693061` 在 `16:06:08` 生成、`16:11:08` 过期），桌面窗口常驻超过 5 分钟后二维码即静默失效。
+3. **`pairWithQrUri` 的 `catch (_)` 范围过大**：移动端 `pairWithQrUri` 将整个 `pairAndConnect` 包在 `try/catch` 中，若局域网建连并消费了配对码后后续步骤抛错，又去 `127.0.0.1` 用同一个一次性配对码发起第二次 `pair.confirm`，必然报配对码无效。
+4. **`DesktopBridgeController` 未向 `PairingManager` 传入 `persistenceFilePath`**：导致每次 `Ctrl+C` 重启 `pnpm start` 后，之前已配对手机的 `deviceToken` 记录丢失。
+
+### 影响
+
+用户只要扫过一次码，或者桌面窗口开着超过 5 分钟，再拿手机扫屏幕上的二维码就会报 `Pairing code is invalid or expired`。
+
+### 修复
+
+1. 在 `PairingManager` 中增加 `onDevicePaired` 事件回调，当配对码被消费时，`DesktopBridgeController` 自动立即调用 `refreshPairingCode()` 生成新二维码，且桌面端 React 组件每 2.5s 自动同步最新状态。
+2. 将 `DEFAULT_PAIRING_TTL_MS` 提升至 24 小时，并为 `DesktopBridgeController` 的 `PairingManager` 传入 `.nienie/paired-devices.json` 持久化路径。
+3. 缩小移动端 `pairWithQrUri` 的回退捕获范围：仅当 `transport.connect(wsUrl)` 网络连接本身失败时才回退尝试 `127.0.0.1`，绝不在 `pair.confirm` 之后重复提交一次性配对码。
+
+### 预防措施
+
+凡是采用「一次性消费（One-time Token/Code）」机制的二维码界面，服务端在 Token 被消费或过期的瞬间必须自动生成新 Token 并推送给 UI 刷新二维码，严禁在屏幕上继续展示已核销作废的旧二维码。
+
+## 2026-11-06 手机端主屏顶部堆砌三层横条导致界面拥挤不专业，且未按「电脑 → Agent → 项目空间 → 会话」层级组织
+
+### 问题
+
+1. 早期手机端在主对话页顶部同时堆叠了「AppBar + Agent 芯片横条 + Session 卡片横条」三层带边框容器，占去近 150px 高度，底部输入栏又被左侧三个大图标挤压，整体显得杂乱、业余。
+2. 所有会话扁平混排，未按用户电脑上各 Agent 真实打开的项目文件夹（`空间 / Workspaces`）分组展示，也未读取 `~/.codex/state_5.sqlite`、`~/.claude/projects`、`GET /project` 中的本地历史项目与会话。
+
+### 根因
+
+1. 把原本属于侧滑抽屉（Drawer）和底部双层胶囊输入栏（Composer Capsule）的导航与切换控件全部平铺塞进了主屏顶栏。
+2. 适配器 `listSessions()` 仅返回当前内存新建的会话，未对接各 Agent 本地持久化存储（如 Codex 的 `state_5.sqlite`、OpenCode 的 `/project` + `/session`）。
+
+### 影响
+
+手机端视觉粗糙拥挤，且用户连接电脑后看不到各 Agent 已经打开过的项目工作区和历史会话。
+
+### 修复
+
+1. 参考 `/Users/ponponon/Desktop/code/me/github/kelivo` 源码（`home_mobile_layout.dart`、`chat_input_bar.dart`、`side_drawer.dart`），先绘制 3 屏高保真原型图经用户确认后实施：
+   - 顶栏改为 Kelivo 同款长短双横线按钮 + 双行无框标题（会话名 + `项目 · Agent (电脑名) ▾`）。
+   - 底部改为 `R22` 双层圆角胶囊输入舱（上层全宽输入，下层左放 Agent 彩色图标胶囊与工具按钮、右放圆形发送按钮）。
+   - 对话流改为无外框通栏正文 + `#F7F8FA` 紧凑工具胶条。
+2. 实现 `KelivoWorkspaceDrawer` 三级侧滑抽屉（`电脑切换` → `Agent 切换` → `空间 (N)` 项目文件夹树 + 项目下历史会话 + 文件夹右侧 `+` 新建该项目会话），并在 `CodexAdapter`、`OpenCodeAdapter`、`MiMoCodeAdapter`、`ClaudeCodeAdapter`、`DshAdapter` 中接入本机真实项目与历史会话读取。
+
+### 预防措施
+
+1. 移动端对话主界面必须保持极简：顶栏最多一层（双行标题），底部输入区采用上下双层圆角胶囊（文字输入层与工具图标层分离），绝不允许在主界面顶部堆砌多层横向滚动的筛选条。
+2. 进行大幅度 UI 重构前，必须先参考标杆开源项目（如 Kelivo）的组件结构绘制高保真原型图与用户对齐，确认后再动手写代码。
+
+## 2026-11-06 硬编码 `~/.codex/state_5.sqlite` 忽略了 Codex 按主 Schema 版本号递增数据库文件名的机制
+
+### 问题
+
+用户指出 `~/.codex/state_5.sqlite` 文件名末尾带有 `_5`（同理还有 `logs_2.sqlite`、`goals_1.sqlite`），询问未来 Codex 升级后是否会变成 `state_6.sqlite`、`state_7.sqlite`...，而 `CodexAdapter` 最初直接硬编码了 `'state_5.sqlite'`。
+
+### 根因
+
+Codex 客户端在遇到破坏性 SQLite Schema 演进时，会将主 Schema 版本号拼接到文件名中（`state_<version>.sqlite`）。硬编码固定数字 `_5` 会导致未来 Codex 升级到 `_6`、`_7` 后只读到旧库甚至漏读新会话。
+
+### 影响
+
+当用户升级 Codex 后，新产生的项目和会话写入了 `state_6.sqlite`，硬编码 `state_5.sqlite` 会导致历史列表停留在旧版本数据。
+
+### 修复
+
+在 `CodexAdapter` 中实现 `resolveLatestCodexStateDb(codexDir)`：自动扫描 `~/.codex` 目录下所有匹配 `/^state(?:_\d+)?\.sqlite$/` 的数据库文件，按提取出的数字版本号 `schemaVer` 降序（如 `10 > 6 > 5`）及文件最新修改时间 `mtimeMs` 排序，动态选取最新版本的 `state_*.sqlite`。
+
+### 预防措施
+
+凡是对接第三方工具本地数据库或缓存文件，若文件名包含数字后缀（如 `state_5.sqlite`、`v2.db`），严禁硬编码具体数字，必须通过正则匹配并按数值版本号（注意用 `Number()` 而非字典序，确保 `10 > 9`）与 `mtimeMs` 动态选取最新文件。
+
+
+
+
+
+
+
 
 
