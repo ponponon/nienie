@@ -161,8 +161,6 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     MobileBridgeClient client,
   ) {
     final active = client.activeSession;
-    final hasMessages =
-        active != null && client.timelineFor(active.id).isNotEmpty;
     final folderName = active != null && active.projectPath.trim().isNotEmpty
         ? active.projectPath
             .split(RegExp(r'[/\\]'))
@@ -194,7 +192,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       titleSpacing: 2,
       title: InkWell(
         borderRadius: BorderRadius.circular(8),
-        onTap: () => _openComputerSheet(context, client),
+        onTap: () {
+          if (active != null) {
+            client.openSession(active);
+          }
+        },
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
           child: Column(
@@ -202,7 +204,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                hasMessages ? active.title : client.strings.appTitle,
+                active?.title ?? '新对话',
                 style: const TextStyle(
                   fontSize: 15.5,
                   fontWeight: FontWeight.w600,
@@ -369,8 +371,6 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     MobileBridgeClient client,
   ) {
     final active = client.activeSession;
-    final hasMessages =
-        active != null && client.timelineFor(active.id).isNotEmpty;
 
     return Column(
       children: [
@@ -396,13 +396,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             ),
           ),
 
-        // Main Chat Canvas (or Kelivo Workspace Explorer when session is empty)
+        // Pure Kelivo Chat Canvas (100% clean white space when no messages yet)
         Expanded(
           child: active == null
-              ? _buildEmptyWorkspaceTree(client)
-              : hasMessages
-                  ? SessionTimelineList(client: client, session: active)
-                  : _buildEmptyWorkspaceTree(client),
+              ? const SizedBox.shrink()
+              : SessionTimelineList(client: client, session: active),
         ),
 
         // Kelivo 1:1 Floating Two-Deck Rounded Composer Capsule (R22)
@@ -577,132 +575,6 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             ),
           ),
       ],
-    );
-  }
-
-  // Clean Project Folder -> Session Tree shown in empty state (and in Left Drawer)
-  Widget _buildEmptyWorkspaceTree(MobileBridgeClient client) {
-    final groups = client.projectsForAgent(client.selectedAgentId);
-    final selectedAgent = client.selectedAgentInfo;
-    if (groups.isEmpty) {
-      final isUnavailable = selectedAgent != null && !selectedAgent.available;
-      return Center(
-        child: Text(
-          isUnavailable
-              ? '这台电脑尚未安装 ${selectedAgent.name}'
-              : client.strings.selectSessionHint,
-          style: const TextStyle(color: _textSecondary, fontSize: 13.5),
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
-      itemCount: groups.length + 1,
-      itemBuilder: (context, index) {
-        if (index == 0) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Row(
-              children: [
-                Text(
-                  '空间 (${groups.length})',
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    color: _textSecondary,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                const Icon(
-                  LucideIcons.chevronDown,
-                  size: 13,
-                  color: _textSecondary,
-                ),
-              ],
-            ),
-          );
-        }
-
-        final group = groups[index - 1];
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  const Icon(LucideIcons.folder, size: 17, color: _textPrimary),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      group.projectName,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: _textPrimary,
-                      ),
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: () => client.createSession(
-                      agentId: client.selectedAgentId,
-                      title: '${group.projectName} 新对话',
-                      projectPath: group.projectPath,
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(4),
-                      child: Icon(
-                        LucideIcons.plus,
-                        size: 16,
-                        color: _textSecondary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Padding(
-                padding: const EdgeInsets.only(left: 25),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (final session in group.sessions.take(6))
-                      InkWell(
-                        borderRadius: BorderRadius.circular(8),
-                        onTap: () => client.openSession(session),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 7,
-                          ),
-                          decoration: BoxDecoration(
-                            color: client.activeSession?.id == session.id
-                                ? const Color(0xFFF3F4F6)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            session.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 13.8,
-                              fontWeight: client.activeSession?.id == session.id
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                              color: _textPrimary,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

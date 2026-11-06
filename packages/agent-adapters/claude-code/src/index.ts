@@ -358,6 +358,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
           } catch {
             // Ignore file read errors
           }
+          if (
+            resolvedCwd.includes('/.claude/worktrees/') ||
+            !existsSync(resolvedCwd)
+          ) {
+            continue;
+          }
           const nowIso = new Date().toISOString();
           this.sessions.set(sessionId, {
             id: sessionId,

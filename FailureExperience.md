@@ -680,6 +680,31 @@ Codex 客户端在遇到破坏性 SQLite Schema 演进时，会将主 Schema 版
 
 所有保存了长期 `deviceToken` 的客户端必须同时实现「冷启动自动免密重连」与「服务端重启（WebSocket `onDone`）指数/固定间隔自动重连」，严禁在已有有效凭据的情况下让连接静默死掉或要求用户重新扫码。
 
+## 2026-11-06 错误地在主对话页面空白态渲染原本只属于左侧抽屉的项目文件夹与会话列表，破坏对话页纯净度
+
+### 问题
+
+用户指出扫码连接进入主页面后，在没有打开左侧边栏的情况下，主对话页面正中间竟然直接铺满了各种文件夹和历史对话列表（`gracious-neumann-8c7813`、`reverse_cracking` 等），而不是像 Kelivo 一样是一个干净纯粹的对话页面。
+
+### 根因
+
+1. 为了迁就早期 `mobile_app_test.dart` 中不打开抽屉就直接点击会话标题的断言，在 `_buildKelivoConnectedBody` 中写了 `hasMessages ? SessionTimelineList(...) : _buildEmptyWorkspaceTree(client)`，把原本只应该存在于左侧滑出抽屉（`KelivoWorkspaceDrawer`）的项目会话树塞进了主对话画布！
+2. `ClaudeCodeAdapter` 扫描 `~/.claude/projects` 时未过滤已删除的 `.claude/worktrees/*` 临时目录。
+
+### 影响
+
+用户一进入对话主页，看到的不是干净的聊天窗口，而是满屏杂乱的文件夹列表，与 Kelivo 的极简对话页设计完全背道而驰。
+
+### 修复
+
+1. **彻底删除主页面中的 `_buildEmptyWorkspaceTree`**：主对话页面中央始终只渲染 `SessionTimelineList`（当新会话尚无消息时即保持 100% 纯净白色留白画布，与 Kelivo 1:1 一致）；项目文件夹与历史会话列表**只存在于左侧滑出抽屉（`KelivoWorkspaceDrawer`）**中。
+2. **`ClaudeCodeAdapter` 过滤无效目录**：跳过包含 `/.claude/worktrees/` 或在磁盘上已不存在（`!existsSync(resolvedCwd)`）的临时工作树记录。
+
+### 预防措施
+
+严禁为了偷懒通过旧单元测试而将侧边栏/抽屉列表塞进主对话画布；主对话页面在空状态下必须保持 100% 纯净留白。
+
+
 
 
 
