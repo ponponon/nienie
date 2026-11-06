@@ -44,6 +44,10 @@ class IoBridgeTransport implements BridgeTransport {
           }
         }
         _pending.clear();
+        if (_socket == socket) {
+          _socket = null;
+          _incomingController.add(const {'type': 'transport.disconnected'});
+        }
       },
     );
   }

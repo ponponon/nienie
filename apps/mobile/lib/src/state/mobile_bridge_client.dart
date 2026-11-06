@@ -59,13 +59,22 @@ class MobileBridgeClient extends ChangeNotifier {
     await credentialStore.saveLanguage(nextLanguage);
   }
 
-  Future<void> loadSavedPreferences() async {
+  Future<void> loadSavedPreferences({bool autoReconnect = false}) async {
     final savedLang = await credentialStore.loadLanguage();
     if (savedLang != null) {
       language = savedLang;
     }
     savedMachines = await credentialStore.listMachines();
     notifyListeners();
+    if (autoReconnect &&
+        savedMachines.isNotEmpty &&
+        connectionState == BridgeConnectionState.disconnected) {
+      try {
+        await reconnectWithSavedCredential(savedMachines.first.machineId);
+      } catch (_) {
+        // Stay on pairing screen if computer is currently offline
+      }
+    }
   }
 
   List<SessionTimelineItem> timelineFor(String sessionId) {
@@ -205,7 +214,24 @@ class MobileBridgeClient extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
 
-    await transport.connect(saved.wsUrl);
+    String effectiveWsUrl = saved.wsUrl;
+    try {
+      await transport.connect(saved.wsUrl);
+    } catch (_) {
+      final parsedUri = Uri.tryParse(saved.wsUrl);
+      if (parsedUri != null &&
+          parsedUri.host != '127.0.0.1' &&
+          parsedUri.host != 'localhost' &&
+          parsedUri.hasPort) {
+        effectiveWsUrl = 'ws://127.0.0.1:${parsedUri.port}';
+        await transport.connect(effectiveWsUrl);
+      } else {
+        connectionState = BridgeConnectionState.disconnected;
+        notifyListeners();
+        rethrow;
+      }
+    }
+
     final res = await transport.sendRequest({
       'type': 'hello',
       'requestId': _nextRequestId(),
@@ -219,6 +245,18 @@ class MobileBridgeClient extends ChangeNotifier {
       errorMessage = err?['message'] as String? ?? 'Reconnect failed';
       notifyListeners();
       throw StateError(errorMessage!);
+    }
+
+    if (effectiveWsUrl != saved.wsUrl) {
+      await credentialStore.save(
+        SavedDeviceCredential(
+          machineId: saved.machineId,
+          wsUrl: effectiveWsUrl,
+          deviceId: saved.deviceId,
+          deviceToken: saved.deviceToken,
+        ),
+      );
+      savedMachines = await credentialStore.listMachines();
     }
 
     activeMachineId = saved.machineId;
@@ -525,6 +563,22 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   void _handleServerMessage(Map<String, dynamic> raw) {
+    if (raw['type'] == 'transport.disconnected') {
+      if (connectionState == BridgeConnectionState.connected) {
+        final targetMachine = activeMachineId;
+        Future<void>.delayed(const Duration(milliseconds: 1200), () async {
+          for (int attempt = 0; attempt < 4; attempt++) {
+            try {
+              await reconnectWithSavedCredential(targetMachine);
+              return;
+            } catch (_) {
+              await Future<void>.delayed(const Duration(milliseconds: 1500));
+            }
+          }
+        });
+      }
+      return;
+    }
     if (raw['type'] != 'session.event') return;
     final eventMap = raw['event'] as Map?;
     if (eventMap == null) return;

@@ -26,6 +26,6 @@ void main() {
     ),
     language: AppLanguage.zh,
   );
-  client.loadSavedPreferences();
+  client.loadSavedPreferences(autoReconnect: true);
   runApp(NienieMobileApp(client: client));
 }

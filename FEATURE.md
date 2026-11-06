@@ -234,6 +234,9 @@
     - 第一级：顶部电脑切换器（`MacBook Pro M5 ⌄`），支持多台电脑切换与一键扫码添加新电脑
     - 第二级：当前电脑下的 Agent 选择条（`Codex` / `OpenCode` / `Claude Code` / `MiMo Code` / `DeepSeek Harness`）与全宽胶囊按钮「新建任务」
     - 第三级：按项目文件夹分组的 `空间 (N) ⌄` 树形列表（`📁 nienie`、`📁 audio_cut`、`📁 openctrlc` 等），支持展开/折叠项目下的历史会话、点击「查看更多」以及点击文件夹右侧 `+` 号直接在该项目路径下新建会话
+- 移动端启动自动重连与 Bridge 重启断线自动恢复（`loadSavedPreferences(autoReconnect: true)` & `transport.disconnected` in `apps/mobile`）：
+  - App 启动时若本地存在已保存电脑凭据（`deviceToken`），自动静默发起 `hello` 免扫码重连（并在局域网 IP 变化时自动回退尝试 `127.0.0.1` USB 通道）
+  - 当电脑端重启 `pnpm start` 导致 WebSocket 断开时，`IoBridgeTransport` 触发 `transport.disconnected` 并自动后台重试 `reconnectWithSavedCredential` 恢复连接，无需用户重新扫码
 
 ## MVP 规划
 

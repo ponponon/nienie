@@ -653,6 +653,34 @@ Codex 客户端在遇到破坏性 SQLite Schema 演进时，会将主 Schema 版
 1. **严禁写 `filtered.isNotEmpty ? filtered : allItems` 这类掩耳盗铃的回退**——选了什么维度就严格展示该维度的数据，没有数据就是空状态（Empty State）。
 2. **严禁写 `if (next != null) current = next` 或 `selected ??= ...`**——切换父级上下文时必须无条件覆盖子级状态（包括将子级置为 `null` 或 `[]`），防止残留上一个上下文的幽灵数据。
 
+## 2026-11-06 电脑端重启 `pnpm start` 或手机 App 重开时未自动调用 `deviceToken` 重连，且 `reconnectWithSavedCredential` 缺少 `127.0.0.1` 回退导致用户误以为需要重新扫码
+
+### 问题
+
+用户询问为什么每次电脑执行 `pnpm start` 重启后，手机端都要重新扫码，是不是没有保存身份凭证或凭证会变。
+
+### 根因
+
+电脑端 `.nienie/paired-devices.json` 和手机端 `FileCredentialStore` 实际上都已经持久化了 `deviceToken`，凭证并没有变；但手机端存在 3 个断线恢复缺口：
+1. **启动未自动重连**：`loadSavedPreferences()` 只把 `savedMachines` 读进了列表，没有在 App 启动时自动调用 `reconnectWithSavedCredential()`。
+2. **WebSocket `onDone` 未触发自动重连**：当电脑端 `Ctrl+C` 重启 `pnpm start` 时，旧 TCP 连接断开触发 `IoBridgeTransport.onDone`，但未通知 `MobileBridgeClient` 在后台自动凭 `deviceToken` 重新握手。
+3. **`reconnectWithSavedCredential()` 缺少局域网 IP 变更回退**：当电脑从手机热点（`172.20.10.5`）切到路由器 Wi-Fi（`192.168.31.141`）时，保存的旧 IP 连不上，而 `reconnectWithSavedCredential` 未像 `pairAndConnect` 那样自动回退尝试 `ws://127.0.0.1:4100`（USB 通道）。
+
+### 影响
+
+每次重启 `pnpm start` 或切换网络后，手机端连接断开且不会自动重连，迫使用户手动重新扫码。
+
+### 修复
+
+1. **`loadSavedPreferences(autoReconnect: true)`**：手机 App 启动加载出已保存电脑后，自动静默调用 `reconnectWithSavedCredential()` 直接进入工作区。
+2. **WebSocket 断开自动后台重连**：`IoBridgeTransport.onDone` 发出 `transport.disconnected` 事件，`MobileBridgeClient` 捕获后自动轮询 4 次（间隔 1.5s）调用 `reconnectWithSavedCredential()`，电脑重启 `pnpm start` 后手机端 1~2 秒内自动无感恢复连接。
+3. **`reconnectWithSavedCredential` 补齐 `127.0.0.1` 自动回退**：当旧局域网 IP 不可达时自动回退至 `ws://127.0.0.1:4100` 并更新保存的地址。
+
+### 预防措施
+
+所有保存了长期 `deviceToken` 的客户端必须同时实现「冷启动自动免密重连」与「服务端重启（WebSocket `onDone`）指数/固定间隔自动重连」，严禁在已有有效凭据的情况下让连接静默死掉或要求用户重新扫码。
+
+
 
 
 
