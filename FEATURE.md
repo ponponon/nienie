@@ -199,6 +199,10 @@
   - 居中应用圆角图标徽章、`Nienie` 标题与 `0.1.0(100)` 版本号
   - 支持「有新版本时自动更新」开关切换与持久化（`setAutoUpdate`）、「我要反馈」一键复制脱敏诊断包、「赞赏与支持作者」展开微信赞赏码（`/assets/wechat-appreciate.jpg`）及沉底版权与协议声明
 - 桌面端 UI 毫秒级无感热更新（Hot Reload in `scripts/start-mac.mjs` & `DesktopPreviewServer`）：监听 `apps/desktop/src/*.ts` 变更并自动通过 `esbuild` 重编译 `renderer-live.mjs`，经由 `/api/hot-reload` SSE 触发 Electron 窗口原地无闪烁自动刷新（保持 Bridge 连接与当前选中 Tab 不中断）
+- 桌面端现代化 React 19 + Radix UI + Lucide Icons + Sonner 重构（`apps/desktop/src/ui/*`）：
+  - 彻底替代早期原始 HTML 字符串拼接，采用 React 19 SSR（`renderToString`）+ 客户端无缝挂载（`/assets/desktop-client.js`）架构
+  - 集成 `@radix-ui/react-tabs`、`@radix-ui/react-switch`、`@radix-ui/react-select`（毛玻璃弹出下拉菜单）、`@radix-ui/react-collapsible`、`@radix-ui/react-dialog`（用户协议与隐私政策弹窗）无障碍组件原语
+  - 统一采用 `lucide-react` 矢量图标库与 `sonner` 灵动 Toast 通知反馈，彻底消除点击按钮或切换语言时的 `window.location.reload()` 整页刷新闪烁
 
 ## MVP 规划
 

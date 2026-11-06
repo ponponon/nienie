@@ -444,6 +444,7 @@ export type DesktopPreloadApi = {
   refreshAgents(): Promise<DesktopDashboardState>;
   refreshPairing(): Promise<DesktopDashboardState>;
   setRelay(input: SetRelayInput): Promise<DesktopDashboardState>;
+  setLocale(locale: DesktopLocale): Promise<DesktopDashboardState>;
   setMachineName(name: string): Promise<DesktopDashboardState>;
   setAutoUpdate(enabled: boolean): Promise<DesktopDashboardState>;
   revokeDevice(deviceId: string): Promise<DesktopDashboardState>;
@@ -463,6 +464,8 @@ export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPr
       ipcRenderer.invoke(NIENIE_IPC_CHANNELS.REFRESH_PAIRING) as Promise<DesktopDashboardState>,
     setRelay: (input: SetRelayInput) =>
       ipcRenderer.invoke(NIENIE_IPC_CHANNELS.SET_RELAY, input) as Promise<DesktopDashboardState>,
+    setLocale: (locale: DesktopLocale) =>
+      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.SET_LOCALE, locale) as Promise<DesktopDashboardState>,
     setMachineName: (name: string) =>
       ipcRenderer.invoke(
         NIENIE_IPC_CHANNELS.SET_MACHINE_NAME,

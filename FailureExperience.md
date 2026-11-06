@@ -361,3 +361,28 @@ UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口�
 ### 预防措施
 
 所有 GUI 开发启动命令（如 `pnpm start`）必须默认开启文件监听与 UI 热更新（Hot Reload / Live Reload），避免要求用户在开发调试阶段反复手动重启进程。
+
+## 2026-11-06 桌面端使用原始 HTML 字符串拼接与整页刷新导致界面呈现廉价感
+
+### 问题
+
+早期桌面端（`apps/desktop/src/renderer.ts`）未按照架构设计使用 React 与现代组件原语，而是直接手写 HTML 字符串拼接、简陋的原生 `<select>` / `<button>`，并在每次 IPC 调用后执行 `window.location.reload()` 整页刷新，导致视觉粗糙、交互生硬且伴随整页白屏闪烁。
+
+### 根因
+
+为图原型省事跳过了 React 19 组件化与成熟的无头 UI 组件库（Radix UI / shadcn 风格 + Lucide 图标库 + Sonner Toast），用静态模板字符串代替了响应式状态树。
+
+### 影响
+
+用户直观感受到桌面端 UI 粗糙劣质，下拉菜单、开关、弹窗与状态反馈缺乏现代 macOS 桌面应用应有的细腻质感。
+
+### 修复
+
+1. 在 `apps/desktop` 中引入 `react` 19、`react-dom`、`lucide-react`、`sonner` 及 `@radix-ui/react-tabs`、`@radix-ui/react-switch`、`@radix-ui/react-select`、`@radix-ui/react-collapsible`、`@radix-ui/react-dialog`。
+2. 重构为 `DesktopApp.tsx` 响应式组件树，结合 `renderToString` SSR 首屏直出与 `/assets/desktop-client.js` 客户端激活。
+3. 移除 `preview-server.ts` 中 IPC 调用后的 `window.location.reload()`，所有开关、语言切换、配对码刷新、Relay 配置与本机重命名均通过 React 状态在 0ms 内原地无感更新并触发 `sonner` Toast 反馈。
+
+### 预防措施
+
+桌面端与前端界面严禁使用原始 HTML 字符串拼接和 `window.location.reload()` 充当状态更新；必须使用 React + Radix UI / shadcn 原语 + 统一矢量图标库（Lucide / Phosphor）构建真正的响应式组件树。
+

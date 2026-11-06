@@ -28,8 +28,27 @@ if (!process.argv.includes('--smoke')) {
 
 const rendererEntry = resolve(rootDir, 'apps/desktop/src/renderer.ts');
 const rendererLiveOut = resolve(rootDir, 'apps/desktop/dist/renderer-live.mjs');
+const clientEntry = resolve(rootDir, 'apps/desktop/src/ui/client.tsx');
+const clientBundleOut = resolve(rootDir, 'apps/desktop/dist/desktop-client.js');
+
+const esmRequireBanner =
+  "--banner:js=import { createRequire as __nienieCreateRequire } from 'node:module'; const require = __nienieCreateRequire(import.meta.url);";
 
 function bundleLiveRenderer() {
+  execFileSync(
+    esbuildBin,
+    [
+      clientEntry,
+      '--bundle',
+      '--platform=browser',
+      '--format=esm',
+      '--target=es2022',
+      '--define:process.env.NODE_ENV="production"',
+      `--outfile=${clientBundleOut}`,
+      '--log-level=silent',
+    ],
+    { cwd: rootDir, stdio: 'ignore' },
+  );
   execFileSync(
     esbuildBin,
     [
@@ -38,6 +57,7 @@ function bundleLiveRenderer() {
       '--platform=node',
       '--format=esm',
       '--target=node22',
+      esmRequireBanner,
       `--outfile=${rendererLiveOut}`,
       '--log-level=silent',
     ],
@@ -46,6 +66,7 @@ function bundleLiveRenderer() {
 }
 
 if (isSmokeOrHeadless) {
+  bundleLiveRenderer();
   const entryFile = resolve(rootDir, 'apps/desktop/src/cli.ts');
   const outFile = resolve(rootDir, 'apps/desktop/dist/nienie-desktop.mjs');
 
@@ -57,6 +78,7 @@ if (isSmokeOrHeadless) {
       '--platform=node',
       '--format=esm',
       '--target=node22',
+      esmRequireBanner,
       `--outfile=${outFile}`,
     ],
     { cwd: rootDir, stdio: 'inherit' },
@@ -90,7 +112,7 @@ if (isSmokeOrHeadless) {
   const srcDir = resolve(rootDir, 'apps/desktop/src');
   let debounceTimer;
   const watcher = watch(srcDir, { recursive: true }, (_eventType, filename) => {
-    if (!filename || !filename.endsWith('.ts')) return;
+    if (!filename || (!filename.endsWith('.ts') && !filename.endsWith('.tsx'))) return;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       try {
