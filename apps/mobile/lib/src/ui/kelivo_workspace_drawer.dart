@@ -38,6 +38,8 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
             ? client.savedMachines.first.machineId
             : 'MacBook Pro M5');
     final projectGroups = client.projectsForAgent(client.selectedAgentId);
+    final selectedAgent = client.selectedAgentInfo;
+    final isSelectedAgentAvailable = selectedAgent?.available ?? true;
     final onlineComputersCount = client.connectedMachineIds.isEmpty
         ? 1
         : client.connectedMachineIds.length;
@@ -217,22 +219,29 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                     side: const BorderSide(color: Color(0x18000000)),
                     shape: const StadiumBorder(),
                   ),
-                  onPressed: () async {
-                    final targetAgent = client.selectedAgentId;
-                    final defaultPath = projectGroups.isNotEmpty
-                        ? projectGroups.first.projectPath
-                        : null;
-                    await client.createSession(
-                      agentId: targetAgent,
-                      title: '新对话',
-                      projectPath: defaultPath,
-                    );
-                    widget.onCloseDrawer();
-                  },
+                  onPressed: !isSelectedAgentAvailable
+                      ? null
+                      : () async {
+                          final targetAgent = client.selectedAgentId;
+                          final defaultPath = projectGroups.isNotEmpty
+                              ? projectGroups.first.projectPath
+                              : null;
+                          await client.createSession(
+                            agentId: targetAgent,
+                            title: '新对话',
+                            projectPath: defaultPath,
+                          );
+                          widget.onCloseDrawer();
+                        },
                   icon: const Icon(LucideIcons.messageSquarePlus, size: 16),
-                  label: const Text(
-                    '新建任务',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  label: Text(
+                    isSelectedAgentAvailable
+                        ? '新建任务'
+                        : '${selectedAgent?.name ?? "该助手"} 未安装',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
@@ -267,10 +276,26 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
 
             // Project Folder Tree + Sessions List
             Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.fromLTRB(12, 2, 12, 16),
-                itemCount: projectGroups.length,
-                itemBuilder: (context, idx) {
+              child: projectGroups.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Text(
+                          isSelectedAgentAvailable
+                              ? '暂无历史项目会话'
+                              : '这台电脑尚未安装 ${selectedAgent?.name ?? client.selectedAgentId}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: _textMuted,
+                          ),
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 2, 12, 16),
+                      itemCount: projectGroups.length,
+                      itemBuilder: (context, idx) {
                   final group = projectGroups[idx];
                   final isCollapsed = _collapsedProjects.contains(group.projectPath);
                   final showAll = _expandedMoreProjects.contains(group.projectPath);

@@ -91,6 +91,12 @@ class MobileBridgeClient extends ChangeNotifier {
   Future<void> disconnect() async {
     await transport.close();
     connectionState = BridgeConnectionState.disconnected;
+    activeMachineId = null;
+    connectedMachineIds.clear();
+    agents = const [];
+    sessions = const [];
+    models = const [];
+    selectedModelId = null;
     activeSession = null;
     await refreshSavedMachines();
   }
@@ -355,20 +361,22 @@ class MobileBridgeClient extends ChangeNotifier {
 
   Future<void> selectAgent(String agentId) async {
     selectedAgentId = agentId;
-    final matching = sessions.where((s) => s.agentId == agentId).firstOrNull;
-    if (matching != null) {
-      activeSession = matching;
-    }
+    activeSession = sessions.where((s) => s.agentId == agentId).firstOrNull;
+    models = const [];
+    selectedModelId = null;
     notifyListeners();
     await loadModels(agentId);
+  }
+
+  AgentInfo? get selectedAgentInfo {
+    return agents.where((a) => a.id == selectedAgentId).firstOrNull;
   }
 
   List<ProjectWorkspaceGroup> projectsForAgent([String? agentId]) {
     final targetAgent = agentId ?? selectedAgentId;
     final filtered = sessions.where((s) => s.agentId == targetAgent).toList();
-    final source = filtered.isNotEmpty ? filtered : sessions;
     final grouped = <String, List<AgentSession>>{};
-    for (final session in source) {
+    for (final session in filtered) {
       final path = session.projectPath.trim().isNotEmpty
           ? session.projectPath.trim()
           : '/workspace';
@@ -399,9 +407,15 @@ class MobileBridgeClient extends ChangeNotifier {
       models = list
           .map((item) => ModelInfo.fromJson(Map<String, dynamic>.from(item as Map)))
           .toList();
-      selectedModelId ??= models.where((m) => m.isDefault).firstOrNull?.id ?? models.firstOrNull?.id;
-      notifyListeners();
+      if (selectedModelId == null || !models.any((m) => m.id == selectedModelId)) {
+        selectedModelId =
+            models.where((m) => m.isDefault).firstOrNull?.id ?? models.firstOrNull?.id;
+      }
+    } else {
+      models = const [];
+      selectedModelId = null;
     }
+    notifyListeners();
   }
 
   void selectModel(String modelId) {
@@ -444,12 +458,14 @@ class MobileBridgeClient extends ChangeNotifier {
     final sessionMap = (res['data'] as Map<String, dynamic>)['session'] as Map;
     final created = AgentSession.fromJson(Map<String, dynamic>.from(sessionMap));
     sessions = [created, ...sessions.where((s) => s.id != created.id)];
+    selectedAgentId = created.agentId;
     activeSession = created;
     notifyListeners();
     return created;
   }
 
   Future<void> openSession(AgentSession session) async {
+    selectedAgentId = session.agentId;
     final res = await transport.sendRequest({
       'type': 'session.load',
       'requestId': _nextRequestId(),

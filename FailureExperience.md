@@ -623,6 +623,37 @@ Codex 客户端在遇到破坏性 SQLite Schema 演进时，会将主 Schema 版
 
 严禁在任何适配器中伪造「xxx 默认会话」等假数据掩盖数据读取不全的问题；当发现某个项目下没有真实会话标题时，必须排查底层 SQLite 数据库（如 `opencode.db`、`mimocode.db`、`session_projcache`）是否因 `directory` 过滤参数而漏读。
 
+## 2026-11-06 切换 Agent 筛选时误写「为空则回退全量列表 / 不清空旧状态」导致未安装的 Pi / OpenClaw 显示上一个 Agent 的项目列表
+
+### 问题
+
+用户本机未安装 `Pi` 和 `OpenClaw`，但在手机端抽屉切换到 `Pi` 或 `OpenClaw` 时，下方依然显示了 `OpenCode` 的 `空间 (20)`（`openctrlc`、`ideaboom` 等会话列表），而不是空白列表。
+
+### 根因
+
+1. `projectsForAgent()` 中错误地写了 `final source = filtered.isNotEmpty ? filtered : sessions;`——当按 `targetAgent` 过滤出的 `filtered` 为空时，竟然回退去取了全量 `sessions`（即其他 Agent 的会话）！
+2. `selectAgent()` 中写了 `if (matching != null) { activeSession = matching; }`——当新切换的 Agent 没有任何会话（`matching == null`）时，没有将 `activeSession` 置空，导致 `activeSession` 残留着上一个 Agent 的会话。
+3. `loadModels()` 中使用了 `selectedModelId ??= ...`——当从有模型的 Agent 切换到另一个 Agent 时，因为 `selectedModelId` 非空而保留了旧 Agent 的模型 ID。
+4. `disconnect()` 时未清空 `agents`、`sessions`、`models`、`selectedModelId` 等内存集合。
+
+### 影响
+
+用户切换到未安装或无会话的 Agent 时，看到的是上一个 Agent 的脏数据，造成严重的认知混淆。
+
+### 修复
+
+1. **删除 `filtered.isNotEmpty ? filtered : sessions` 错误回退**：`projectsForAgent(targetAgent)` 严格只返回 `s.agentId == targetAgent` 的会话；若为空则直接返回空列表 `[]`，抽屉展示 `空间 (0)` 与 `这台电脑尚未安装 Pi / OpenClaw`（并将「新建任务」按钮置灰禁用）。
+2. **`selectAgent` 无条件重置关联状态**：切换 Agent 时直接执行 `activeSession = matching`（若无匹配则为 `null`），并立即清空 `models = const []` 与 `selectedModelId = null`。
+3. **`loadModels` 校验模型归属**：若当前 `selectedModelId` 不在新加载的 `models` 列表中（或请求失败），立即重置为新列表默认模型或 `null`。
+4. **`disconnect` 彻底清空状态树**：断开连接时一并清空 `agents`、`sessions`、`models`、`selectedModelId`、`activeSession` 与 `activeMachineId`。
+
+### 预防措施
+
+在编写任何按维度切换/筛选（如切换电脑、切换 Agent、切换项目、切换 Tab）的状态逻辑时：
+1. **严禁写 `filtered.isNotEmpty ? filtered : allItems` 这类掩耳盗铃的回退**——选了什么维度就严格展示该维度的数据，没有数据就是空状态（Empty State）。
+2. **严禁写 `if (next != null) current = next` 或 `selected ??= ...`**——切换父级上下文时必须无条件覆盖子级状态（包括将子级置为 `null` 或 `[]`），防止残留上一个上下文的幽灵数据。
+
+
 
 
 

@@ -583,10 +583,14 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   // Clean Project Folder -> Session Tree shown in empty state (and in Left Drawer)
   Widget _buildEmptyWorkspaceTree(MobileBridgeClient client) {
     final groups = client.projectsForAgent(client.selectedAgentId);
+    final selectedAgent = client.selectedAgentInfo;
     if (groups.isEmpty) {
+      final isUnavailable = selectedAgent != null && !selectedAgent.available;
       return Center(
         child: Text(
-          client.strings.selectSessionHint,
+          isUnavailable
+              ? '这台电脑尚未安装 ${selectedAgent.name}'
+              : client.strings.selectSessionHint,
           style: const TextStyle(color: _textSecondary, fontSize: 13.5),
         ),
       );

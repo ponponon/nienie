@@ -381,6 +381,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('chip-model-anthropic/claude-sonnet-4')), findsOneWidget);
 
+    // Switching to an agent with 0 sessions must clear projects/activeSession instead of leaking previous agent's sessions
+    await client.selectAgent('codex');
+    expect(client.projectsForAgent('codex'), isEmpty);
+    expect(client.activeSession, isNull);
+
     await tester.tap(find.byKey(const Key('btn-disconnect')));
     await tester.pumpAndSettle();
     expect(client.connectionState, BridgeConnectionState.disconnected);
