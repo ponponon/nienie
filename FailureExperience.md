@@ -597,6 +597,33 @@ Codex 客户端在遇到破坏性 SQLite Schema 演进时，会将主 Schema 版
 
 凡是对接第三方工具本地数据库或缓存文件，若文件名包含数字后缀（如 `state_5.sqlite`、`v2.db`），严禁硬编码具体数字，必须通过正则匹配并按数值版本号（注意用 `Number()` 而非字典序，确保 `10 > 9`）与 `mtimeMs` 动态选取最新文件。
 
+## 2026-11-06 误用仅按当前目录过滤的 `GET /session` 接口并伪造「xxx 默认会话」占位符，导致 OpenCode 与 MiMo Code 漏读跨项目真实历史对话
+
+### 问题
+
+用户指出手机端在切换到 `OpenCode` 和 `MiMo Code` 时，项目列表下显示的都是 `Test`、`MiMo Code Workspace` 或 `openctrlc 默认会话`、`ideaboom 默认会话` 等假名字，而在小米 MiMo 桌面客户端里明明有 `Code Review 提交 b445d68d`、`查看并修复这个问题`、`检查resume.md错别字与逻辑问题并给出改进意见`、`孤悬进程排查：是什么？谁启动的？`、`查询我持有的域名` 等真实对话标题。
+
+### 根因
+
+1. **OpenCode 与 MiMo Code 的 `GET /session` HTTP 接口默认按当前 `directory`（即 `nienie` 目录）过滤**：当服务在 `nienie` 目录下启动时，`GET /session` 只返回了 `nienie` 目录下的测试会话（`Test`），而把 `openctrlc`、`resume`、`ideaboom`、`taisan_console` 等其他项目下的真实历史会话全部过滤掉了。
+2. **错误地用 `${folder} 默认会话` 兜底填充**：因为 `GET /session` 没返回其他项目的会话，代码错误地为 `GET /project` 中的每个项目伪造了一条 `${folder} 默认会话` 占位记录。
+3. **DeepSeek Harness (`dsh`) 未读取 `session_projcache`**：`dsh` 的真实对话标题保存在 `~/.dsh/storages/session_projcache/sessions/<sessionId>.json` 的 `record.rows.title.val` 字段中，而非文件夹名。
+
+### 影响
+
+用户在手机端看不到 OpenCode、MiMo Code 与 DeepSeek Harness 各项目下真实的过往对话标题，取而代之的是无意义的「默认会话」占位符。
+
+### 修复
+
+1. **`OpenCodeAdapter` 与 `MiMoCodeAdapter` 直接读取全量 SQLite `session` 表**：通过 `sqlite3 -json` 查询 `~/.local/share/opencode/opencode.db` 与 `~/.local/share/mimocode/mimocode.db` 的 `SELECT id, title, directory, time_created, time_updated FROM session WHERE parent_id IS NULL AND time_archived IS NULL ORDER BY time_updated DESC LIMIT 120`（排除 `parent_id IS NOT NULL` 的子代理内部调用），并在 `loadSession` / `sendMessage` 时携带对应会话真实的 `directory` 参数。
+2. **`DshAdapter` 对接 `~/.dsh/storages/session_projcache/sessions/*.json`**：读取真实的 `record.rows.title.val` 与 `record.identity.cwd`。
+3. **彻底删除所有 `${folder} 默认会话` 伪造逻辑**，并清理调试期间写入数据库的 `Test` 垃圾会话。
+
+### 预防措施
+
+严禁在任何适配器中伪造「xxx 默认会话」等假数据掩盖数据读取不全的问题；当发现某个项目下没有真实会话标题时，必须排查底层 SQLite 数据库（如 `opencode.db`、`mimocode.db`、`session_projcache`）是否因 `directory` 过滤参数而漏读。
+
+
 
 
 

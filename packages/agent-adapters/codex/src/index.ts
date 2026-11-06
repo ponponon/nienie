@@ -180,38 +180,6 @@ export class CodexAdapter implements AgentAdapter {
         // Ignore sqlite read errors
       }
     }
-
-    const globalStatePath = join(home, '.codex/.codex-global-state.json');
-    if (existsSync(globalStatePath)) {
-      try {
-        const raw = JSON.parse(readFileSync(globalStatePath, 'utf8')) as {
-          'electron-saved-workspace-roots'?: string[];
-        };
-        const roots = raw['electron-saved-workspace-roots'] ?? [];
-        const existingPaths = new Set(
-          [...this.sessions.values()].map((s) => s.projectPath),
-        );
-        for (const root of roots) {
-          if (typeof root === 'string' && root.trim() && !existingPaths.has(root)) {
-            const wsId = `codex_ws_${basename(root)}`;
-            if (!this.sessions.has(wsId)) {
-              const nowIso = new Date().toISOString();
-              this.sessions.set(wsId, {
-                id: wsId,
-                agentId: 'codex',
-                title: `${basename(root)} 默认会话`,
-                projectPath: root,
-                status: 'idle',
-                createdAt: nowIso,
-                updatedAt: nowIso,
-              });
-            }
-          }
-        }
-      } catch {
-        // Ignore global state parse errors
-      }
-    }
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {

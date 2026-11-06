@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -81,6 +81,7 @@ export class OpenCodeAdapter implements AgentAdapter {
   private sseAbortController: AbortController | undefined;
   private sseLoopPromise: Promise<void> | undefined;
   private managedServerProcess: ChildProcess | undefined;
+  private readonly sessionDirectories = new Map<string, string>();
 
   constructor(
     options: OpenCodeAdapterOptions & {
@@ -216,37 +217,63 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   async listSessions(): Promise<AgentSession[]> {
     if (this.autoStartServer) {
+      const dbSessions = this.readLocalSqliteSessions();
+      if (dbSessions.length > 0) {
+        return dbSessions;
+      }
       await this.ensureManagedServerRunning();
     }
-    const [sessionsRes, statusMap, projectsRes] = await Promise.all([
+    const [sessionsRes, statusMap] = await Promise.all([
       this.requestJson<OpenCodeRawSession[]>('/session', { method: 'GET' }),
       this.fetchStatusMap(),
-      this.requestJson<Array<{ id?: string; worktree?: string }>>('/project', {
-        method: 'GET',
-      }).catch(() => []),
     ]);
 
-    const mapped = sessionsRes.map((raw) => this.mapSession(raw, statusMap[raw.id]));
-    const coveredDirs = new Set(mapped.map((s) => s.projectPath).filter(Boolean));
+    return sessionsRes.map((raw) => this.mapSession(raw, statusMap[raw.id]));
+  }
 
-    for (const proj of projectsRes) {
-      const dir = proj.worktree?.trim();
-      if (!dir || dir === '/' || coveredDirs.has(dir)) continue;
-      coveredDirs.add(dir);
-      const folder = dir.split('/').filter(Boolean).pop() ?? 'workspace';
-      const nowIso = new Date().toISOString();
-      mapped.push({
-        id: `${this.id}_proj_${proj.id ?? folder}`,
-        agentId: this.id,
-        title: `${folder} 默认会话`,
-        projectPath: dir,
-        status: 'idle',
-        createdAt: nowIso,
-        updatedAt: nowIso,
-      });
+  private readLocalSqliteSessions(): AgentSession[] {
+    const dbFolder = this.id === 'mimo' ? 'mimocode' : 'opencode';
+    const dbName = this.id === 'mimo' ? 'mimocode.db' : 'opencode.db';
+    const dbPath = join(homedir(), '.local/share', dbFolder, dbName);
+    if (!existsSync(dbPath)) return [];
+
+    try {
+      const out = execFileSync(
+        'sqlite3',
+        [
+          '-json',
+          dbPath,
+          'SELECT id, title, directory, time_created, time_updated FROM session WHERE parent_id IS NULL AND time_archived IS NULL ORDER BY time_updated DESC LIMIT 120;',
+        ],
+        { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      const rows = JSON.parse(out || '[]') as Array<{
+        id?: string;
+        title?: string;
+        directory?: string;
+        time_created?: number;
+        time_updated?: number;
+      }>;
+      const results: AgentSession[] = [];
+      for (const row of rows) {
+        if (!row.id) continue;
+        const dir = row.directory?.trim() || this.directory || '';
+        this.sessionDirectories.set(row.id, dir);
+        const cachedStatus = this.normalizer.getSessionStatus(row.id) ?? 'idle';
+        results.push({
+          id: row.id,
+          agentId: this.id,
+          title: row.title?.trim() || 'Untitled session',
+          projectPath: dir,
+          status: cachedStatus,
+          createdAt: toIsoTimestamp(row.time_created),
+          updatedAt: toIsoTimestamp(row.time_updated ?? row.time_created),
+        });
+      }
+      return results;
+    } catch {
+      return [];
     }
-
-    return mapped;
   }
 
   async listModels(): Promise<ModelInfo[]> {
@@ -301,13 +328,21 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async loadSession(sessionId: string): Promise<AgentSession> {
+    if (this.autoStartServer) {
+      await this.ensureManagedServerRunning();
+    }
     const encodedId = encodeURIComponent(sessionId);
+    const knownDir = this.sessionDirectories.get(sessionId);
+    const query = knownDir ? { directory: knownDir } : undefined;
     const [raw, statusMap] = await Promise.all([
-      this.requestJson<OpenCodeRawSession>(`/session/${encodedId}`, { method: 'GET' }),
+      this.requestJson<OpenCodeRawSession>(`/session/${encodedId}`, {
+        method: 'GET',
+        query,
+      }),
       this.fetchStatusMap(),
     ]);
 
-    return this.mapSession(raw, statusMap[sessionId]);
+    return this.mapSession(raw, statusMap[sessionId], knownDir);
   }
 
   async getSessionDiff(sessionId: string): Promise<SessionFileDiff[]> {
@@ -326,18 +361,26 @@ export class OpenCodeAdapter implements AgentAdapter {
     }
 
     const encodedId = encodeURIComponent(sessionId);
-    const response = await this.fetchImpl(this.buildUrl(`/session/${encodedId}/prompt_async`), {
-      method: 'POST',
-      headers: this.buildHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({
-        parts: [
-          {
-            type: 'text',
-            text: message,
-          },
-        ],
-      }),
-    });
+    const knownDir = this.sessionDirectories.get(sessionId);
+    const query = knownDir ? { directory: knownDir } : undefined;
+    const response = await this.fetchImpl(
+      this.buildUrl(`/session/${encodedId}/prompt_async`, query),
+      {
+        method: 'POST',
+        headers: this.buildHeaders({
+          'content-type': 'application/json',
+          ...(knownDir ? { 'x-opencode-directory': knownDir } : {}),
+        }),
+        body: JSON.stringify({
+          parts: [
+            {
+              type: 'text',
+              text: message,
+            },
+          ],
+        }),
+      },
+    );
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');

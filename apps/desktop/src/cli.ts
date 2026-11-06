@@ -30,20 +30,14 @@ const controller = new DesktopBridgeController({
 const state = await controller.startBridge();
 const registry = controller.getRegistry();
 const existingSessions = await registry.listSessions();
-for (const agentInfo of state.agents.filter((a) => a.available)) {
-  const hasSession = existingSessions.some((s) => s.agentId === agentInfo.id);
-  if (!hasSession) {
-    const adapter = registry.get(agentInfo.id);
-    if (adapter?.createSession) {
-      try {
-        await adapter.createSession({
-          title: `${adapter.name} Workspace`,
-          projectPath: process.cwd(),
-        });
-      } catch {
-        // Ignore single adapter session init failure
-      }
-    }
+if (existingSessions.length === 0) {
+  const onlineAgent = state.agents.find((a) => a.available);
+  const adapter = onlineAgent ? registry.get(onlineAgent.id) : registry.get('codex');
+  if (adapter?.createSession) {
+    await adapter.createSession({
+      title: `${adapter.name} Workspace`,
+      projectPath: process.cwd(),
+    });
   }
 }
 

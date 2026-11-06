@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -312,38 +312,44 @@ export class DshAdapter implements AgentAdapter {
   }
 
   private loadLocalDshHistory(): void {
-    const dshSessionsDir = join(homedir(), '.dsh/sessions');
-    if (!existsSync(dshSessionsDir)) return;
-    try {
-      for (const projDir of readdirSync(dshSessionsDir)) {
-        if (projDir.startsWith('.')) continue;
-        const fullProjDir = join(dshSessionsDir, projDir);
-        const stripped = projDir.replace(/^--|--$/g, '');
-        const decodedPath = stripped ? `/${stripped.replaceAll('-', '/')}` : this.defaultProjectPath;
-        const projName = decodedPath.split('/').filter(Boolean).pop() ?? 'workspace';
-        let subDirs: string[] = [];
-        try {
-          subDirs = readdirSync(fullProjDir).filter((d) => d.startsWith('session-'));
-        } catch {
-          continue;
-        }
-        for (const sesId of subDirs) {
+    const cacheDir = join(homedir(), '.dsh/storages/session_projcache/sessions');
+    if (existsSync(cacheDir)) {
+      try {
+        for (const file of readdirSync(cacheDir)) {
+          if (!file.endsWith('.json')) continue;
+          const sesId = file.replace(/\.json$/, '');
           if (this.sessions.has(sesId)) continue;
-          const nowIso = new Date().toISOString();
-          this.sessions.set(sesId, {
-            id: sesId,
-            dshSessionId: sesId,
-            agentId: 'dsh',
-            title: `${projName} (${sesId.slice(8, 14)})`,
-            projectPath: decodedPath,
-            status: 'idle',
-            createdAt: nowIso,
-            updatedAt: nowIso,
-          });
+          try {
+            const raw = JSON.parse(readFileSync(join(cacheDir, file), 'utf8')) as {
+              record?: {
+                identity?: { createdAt?: number; cwd?: string };
+                rows?: { title?: { val?: string | null } };
+              };
+            };
+            const title = raw.record?.rows?.title?.val?.trim();
+            const cwd = raw.record?.identity?.cwd?.trim() || this.defaultProjectPath;
+            if (!title) continue;
+            const createdAt = raw.record?.identity?.createdAt
+              ? new Date(raw.record.identity.createdAt).toISOString()
+              : new Date().toISOString();
+            this.sessions.set(sesId, {
+              id: sesId,
+              dshSessionId: sesId,
+              agentId: 'dsh',
+              title,
+              projectPath: cwd,
+              status: 'idle',
+              createdAt,
+              updatedAt: createdAt,
+            });
+          } catch {
+            // Ignore malformed cache file
+          }
         }
+        return;
+      } catch {
+        // Fall through
       }
-    } catch {
-      // Ignore scan errors
     }
   }
 
