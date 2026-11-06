@@ -63,8 +63,8 @@ type OpenCodeRawStatusMap = Record<
 >;
 
 export class OpenCodeAdapter implements AgentAdapter {
-  readonly id = 'opencode' as const;
-  readonly name = 'OpenCode';
+  readonly id: 'opencode' | 'mimo';
+  readonly name: string;
   readonly capabilities = { ...capabilities };
 
   private readonly baseUrl: string;
@@ -82,29 +82,39 @@ export class OpenCodeAdapter implements AgentAdapter {
   private sseLoopPromise: Promise<void> | undefined;
   private managedServerProcess: ChildProcess | undefined;
 
-  constructor(options: OpenCodeAdapterOptions = {}) {
-    this.baseUrl = (
-      options.baseUrl ??
-      process.env.NIENIE_OPENCODE_URL ??
-      DEFAULT_OPENCODE_URL
-    ).replace(/\/+$/, '');
+  constructor(
+    options: OpenCodeAdapterOptions & {
+      agentId?: 'opencode' | 'mimo' | undefined;
+      agentName?: string | undefined;
+      defaultUrl?: string | undefined;
+      defaultBinaryName?: string | undefined;
+    } = {},
+  ) {
+    this.id = options.agentId ?? 'opencode';
+    this.name = options.agentName ?? 'OpenCode';
+    const envUrl =
+      this.id === 'mimo' ? process.env.NIENIE_MIMO_URL : process.env.NIENIE_OPENCODE_URL;
+    const envBin =
+      this.id === 'mimo' ? process.env.NIENIE_MIMO_BIN : process.env.NIENIE_OPENCODE_BIN;
+    const fallbackUrl = options.defaultUrl ?? DEFAULT_OPENCODE_URL;
+    this.baseUrl = (options.baseUrl ?? envUrl ?? fallbackUrl).replace(/\/+$/, '');
     this.executablePath = resolveOpenCodeBinary(
-      options.executablePath ?? process.env.NIENIE_OPENCODE_BIN,
+      options.executablePath ?? envBin,
+      options.defaultBinaryName ?? (this.id === 'mimo' ? 'mimo' : 'opencode'),
     );
     this.autoStartServer =
-      options.autoStartServer ??
-      (!options.baseUrl && !options.fetch && !process.env.NIENIE_OPENCODE_URL);
+      options.autoStartServer ?? (!options.baseUrl && !options.fetch && !envUrl);
     this.username =
       options.username ??
       process.env.NIENIE_OPENCODE_USERNAME ??
-      'opencode';
+      this.id;
     this.password =
       options.password ??
       process.env.NIENIE_OPENCODE_PASSWORD;
     this.directory = options.directory;
     this.detectTimeoutMs = options.detectTimeoutMs ?? DEFAULT_DETECT_TIMEOUT_MS;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.normalizer = new OpenCodeEventNormalizer(options);
+    this.normalizer = new OpenCodeEventNormalizer({ ...options, agentId: this.id });
   }
 
   async detect() {
@@ -443,7 +453,7 @@ export class OpenCodeAdapter implements AgentAdapter {
 
     return {
       id: raw.id,
-      agentId: 'opencode',
+      agentId: this.id,
       title: raw.title?.trim() || 'Untitled session',
       projectPath: raw.directory ?? fallbackDirectory ?? this.directory ?? '',
       status,
@@ -533,21 +543,35 @@ function toIsoTimestamp(value?: number | string): string {
   return new Date(0).toISOString();
 }
 
-function resolveOpenCodeBinary(explicit?: string): string {
+export type MiMoCodeAdapterOptions = OpenCodeAdapterOptions;
+
+export class MiMoCodeAdapter extends OpenCodeAdapter {
+  constructor(options: MiMoCodeAdapterOptions = {}) {
+    super({
+      ...options,
+      agentId: 'mimo',
+      agentName: 'MiMo Code',
+      defaultUrl: 'http://127.0.0.1:4097',
+      defaultBinaryName: 'mimo',
+    });
+  }
+}
+
+function resolveOpenCodeBinary(explicit?: string, binaryName = 'opencode'): string {
   if (explicit) return explicit;
   const home = homedir();
   const candidates = [
-    join(home, '.bun/bin/opencode'),
-    join(home, '.local/bin/opencode'),
-    '/opt/homebrew/bin/opencode',
-    '/usr/local/bin/opencode',
+    join(home, `.bun/bin/${binaryName}`),
+    join(home, `.local/bin/${binaryName}`),
+    `/opt/homebrew/bin/${binaryName}`,
+    `/usr/local/bin/${binaryName}`,
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
       return candidate;
     }
   }
-  return 'opencode';
+  return binaryName;
 }
 
 function buildAugmentedEnv(): NodeJS.ProcessEnv {

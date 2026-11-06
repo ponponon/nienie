@@ -493,6 +493,33 @@ UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口�
 2. 在中国大陆开发环境下，桌面主进程 spawn 任何需访问外网 API 的 CLI 工具（如 `codex`、`claude`）时，若环境变量未显式配置代理，必须自动从 `scutil --proxy` 读取系统代理并注入子进程 `env`。
 3. 移动端所有聊天/指令输入框必须同时支持「右侧发送按钮点击」与「软键盘 `TextInputAction.send` + `onSubmitted` 回车发送」。
 
+## 2026-11-06 未扫描 `~/.nvm/versions/node/*/bin` 导致漏检已安装的 Claude Code，且将底层协议（`ACP Agent` / `PTY`）误当作独立 AI 产品展示
+
+### 问题
+
+1. 用户电脑已通过 npm 在 `~/.nvm/versions/node/v22.17.1/bin/claude` 安装了 `Claude Code v2.1.169`，但因当前默认 Node 版本为 `v22.23.1`，`ClaudeCodeAdapter` 仅按当前 `PATH` 查找 `claude`，误报 `Claude Code`「未安装」。
+2. 桌面端「本机 AI 助手」列表把架构底层的通用协议适配器 `ACP Agent` 和终端兜底器 `PTY Terminal Fallback` 与 OpenCode、Codex 等真实产品并列展示，导致用户困惑（“我都没听说过”）。
+
+### 根因
+
+1. macOS 开发者常使用 `nvm` 管理多个 Node 版本，全局 npm CLI 可能安装在非当前激活的 Node 版本 `bin` 目录下；仅依赖当前进程 `PATH` 会漏检其他 nvm 版本下的 CLI。
+2. 混淆了「面向用户的 AI 助手产品（OpenCode、Codex、Claude Code、MiMo Code、DeepSeek Harness）」与「内部底层通信协议/兜底机制（ACP、PTY）」。
+
+### 影响
+
+用户本机已安装的 Claude Code 无法被识别，且界面上出现了用户无法理解的内部协议名称。
+
+### 修复
+
+1. 在 `ClaudeCodeAdapter` 与 `DshAdapter` 中增加对 `~/.nvm/versions/node/*/bin` 及 `/Applications/*.app/Contents/Resources/runtime/cli/bin` 的自动扫描，自动发现本机已安装的 `Claude Code v2.1.169`、`MiMo Code v0.1.0` 与 `DeepSeek Harness v0.2.1-rc.5`。
+2. 默认不在面向用户的「本机 AI 助手」列表中注册 `ACP Agent` 与 `PTY Terminal Fallback`，仅展示真实的 AI 编程助手产品。
+
+### 预防措施
+
+1. 在 macOS/Linux 上探测 Node 生态 CLI 工具时，除常规 `PATH`、`~/.bun/bin`、`/opt/homebrew/bin` 外，必须遍历 `~/.nvm/versions/node/*/bin` 以兼容多 Node 版本环境。
+2. 面向用户的 UI 列表只允许展示真实可感知的软件产品名称与官方 Logo，严禁把内部抽象协议层（如 ACP、PTY Fallback、JSON-RPC）直接暴露在产品列表中。
+
+
 
 
 

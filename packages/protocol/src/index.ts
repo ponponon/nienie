@@ -57,6 +57,8 @@ export type AgentId =
   | 'opencode'
   | 'codex'
   | 'claude-code'
+  | 'mimo'
+  | 'dsh'
   | 'pi'
   | 'acp'
   | 'openclaw'
@@ -647,6 +649,8 @@ const VALID_AGENT_IDS = new Set<AgentId>([
   'opencode',
   'codex',
   'claude-code',
+  'mimo',
+  'dsh',
   'pi',
   'acp',
   'openclaw',

@@ -8,6 +8,7 @@ import {
 import type { AgentStatus, CanonicalAgentEvent, CanonicalAgentEventType } from '@nienie/protocol';
 
 export type OpenCodeNormalizerOptions = {
+  agentId?: 'opencode' | 'mimo' | undefined;
   machineId?: string | undefined;
   maxToolOutputLength?: number | undefined;
   now?: (() => Date) | undefined;
@@ -17,6 +18,7 @@ export type OpenCodeNormalizerOptions = {
 type RawRecord = Record<string, unknown>;
 
 export class OpenCodeEventNormalizer {
+  private readonly agentId: 'opencode' | 'mimo';
   private readonly machineId: string | undefined;
   private readonly maxToolOutputLength: number;
   private readonly now: () => Date;
@@ -31,6 +33,7 @@ export class OpenCodeEventNormalizer {
   private readonly sessionStatuses = new Map<string, AgentStatus>();
 
   constructor(options: OpenCodeNormalizerOptions = {}) {
+    this.agentId = options.agentId ?? 'opencode';
     this.machineId = options.machineId;
     this.maxToolOutputLength = options.maxToolOutputLength ?? DEFAULT_MAX_TOOL_OUTPUT_LENGTH;
     this.now = options.now ?? (() => new Date());
@@ -425,7 +428,7 @@ export class OpenCodeEventNormalizer {
     return createCanonicalEvent({
       eventId: this.idGenerator(),
       machineId: this.machineId,
-      agentId: 'opencode',
+      agentId: this.agentId,
       sessionId,
       sequence: nextSeq,
       timestamp: this.now().toISOString(),

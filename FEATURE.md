@@ -211,6 +211,12 @@
   - `OpenCodeAdapter` 自动探测 `~/.bun/bin/opencode` 等路径下的 CLI 二进制并在 `127.0.0.1:4096` 未监听时自动后台拉起 `opencode serve --pure --port 4096 --hostname 127.0.0.1`
   - `CodexAdapter` 在 macOS 下自动通过 `scutil --proxy` 读取系统生效的 HTTP/HTTPS 代理（如 `127.0.0.1:10902`）注入 `codex exec` 子进程环境变量，解决中国大陆环境下连接 OpenAI Responses WebSocket 被重置（`os error 54`）无响应的问题
   - 手机端会话输入框支持软键盘回车/发送键（`TextInputAction.send` / `onSubmitted`）直接发送消息，且点击顶部可用 Agent 芯片自动切换至对应 Agent 的工作区会话
+- 新增小米 MiMo Code（`mimo`）与 DeepSeek Harness（`dsh`）适配器、跨 NVM 版本自动发现 Claude Code，并隐藏底层协议兜底项（`packages/agent-adapters/*`、`apps/desktop`、`apps/mobile`）：
+  - 实现 `MiMoCodeAdapter`（`id: 'mimo'`，对接 `/opt/homebrew/bin/mimo` 并自动拉起 `mimo serve --pure --port 4097 --hostname 127.0.0.1`）
+  - 实现 `DshAdapter` & `DshEventNormalizer`（`id: 'dsh'`，自动发现 `/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh`，对接 `dsh --profile headless --json` 与 `--session-id` 恢复）
+  - 增强 `ClaudeCodeAdapter` 自动扫描 `~/.nvm/versions/node/*/bin/claude`（自动发现本机 `v2.1.169 (Claude Code)`）
+  - 在桌面端与手机端接入 `@lobehub/icons-static-svg` 的小米 MiMo（`xiaomimimo.svg`）与 DeepSeek（`deepseek-color.svg`）官方品牌矢量标志
+  - 从面向用户的「本机 AI 助手」产品列表中移除抽象底层协议项（`ACP Agent` 与 `PTY Terminal Fallback`），仅展示真实的 AI 编程 Agent 产品
 
 ## MVP 规划
 

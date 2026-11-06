@@ -38,7 +38,9 @@ describe('desktop bridge composition', () => {
       includeExtendedAgents: true,
       opencode: { baseUrl: 'http://127.0.0.1:1' },
       codex: { detectVersion: async () => 'codex-cli 0.166.0' },
-      claudeCode: { detectVersion: async () => '1.0.24' },
+      claudeCode: { detectVersion: async () => '2.1.169' },
+      mimo: { baseUrl: 'http://127.0.0.1:1' },
+      dsh: { detectVersion: async () => '0.2.1-rc.5' },
       pi: { detectVersion: async () => '0.8.1' },
       openclaw: { baseUrl: 'http://127.0.0.1:1' },
     });
@@ -48,10 +50,10 @@ describe('desktop bridge composition', () => {
       'opencode',
       'codex',
       'claude-code',
+      'mimo',
+      'dsh',
       'pi',
-      'acp',
       'openclaw',
-      'pty',
     ]);
   });
 
