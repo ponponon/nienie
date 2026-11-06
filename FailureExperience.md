@@ -575,6 +575,29 @@ UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口�
 1. 移动端对话主界面必须保持极简：顶栏最多一层（双行标题），底部输入区采用上下双层圆角胶囊（文字输入层与工具图标层分离），绝不允许在主界面顶部堆砌多层横向滚动的筛选条。
 2. 进行大幅度 UI 重构前，必须先参考标杆开源项目（如 Kelivo）的组件结构绘制高保真原型图与用户对齐，确认后再动手写代码。
 
+## 2026-11-06 硬编码 `~/.codex/state_5.sqlite` 忽略了 Codex 按主 Schema 版本号递增数据库文件名的机制
+
+### 问题
+
+用户指出 `~/.codex/state_5.sqlite` 文件名末尾带有 `_5`（同理还有 `logs_2.sqlite`、`goals_1.sqlite`），询问未来 Codex 升级后是否会变成 `state_6.sqlite`、`state_7.sqlite`...，而 `CodexAdapter` 最初直接硬编码了 `'state_5.sqlite'`。
+
+### 根因
+
+Codex 客户端在遇到破坏性 SQLite Schema 演进时，会将主 Schema 版本号拼接到文件名中（`state_<version>.sqlite`）。硬编码固定数字 `_5` 会导致未来 Codex 升级到 `_6`、`_7` 后只读到旧库甚至漏读新会话。
+
+### 影响
+
+当用户升级 Codex 后，新产生的项目和会话写入了 `state_6.sqlite`，硬编码 `state_5.sqlite` 会导致历史列表停留在旧版本数据。
+
+### 修复
+
+在 `CodexAdapter` 中实现 `resolveLatestCodexStateDb(codexDir)`：自动扫描 `~/.codex` 目录下所有匹配 `/^state(?:_\d+)?\.sqlite$/` 的数据库文件，按提取出的数字版本号 `schemaVer` 降序（如 `10 > 6 > 5`）及文件最新修改时间 `mtimeMs` 排序，动态选取最新版本的 `state_*.sqlite`。
+
+### 预防措施
+
+凡是对接第三方工具本地数据库或缓存文件，若文件名包含数字后缀（如 `state_5.sqlite`、`v2.db`），严禁硬编码具体数字，必须通过正则匹配并按数值版本号（注意用 `Number()` 而非字典序，确保 `10 > 9`）与 `mtimeMs` 动态选取最新文件。
+
+
 
 
 

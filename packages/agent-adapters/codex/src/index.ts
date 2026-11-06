@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -136,8 +136,8 @@ export class CodexAdapter implements AgentAdapter {
 
   private loadLocalCodexHistory(): void {
     const home = homedir();
-    const sqlitePath = join(home, '.codex/state_5.sqlite');
-    if (existsSync(sqlitePath)) {
+    const sqlitePath = resolveLatestCodexStateDb(join(home, '.codex'));
+    if (sqlitePath) {
       try {
         const out = execFileSync(
           'sqlite3',
@@ -387,6 +387,30 @@ function resolveCodexBinary(explicit?: string): string {
     }
   }
   return 'codex';
+}
+
+function resolveLatestCodexStateDb(codexDir: string): string | undefined {
+  if (!existsSync(codexDir)) return undefined;
+  try {
+    const candidates = readdirSync(codexDir)
+      .filter((name) => /^state(?:_\d+)?\.sqlite$/.test(name))
+      .map((name) => {
+        const fullPath = join(codexDir, name);
+        const verMatch = name.match(/^state_(\d+)\.sqlite$/);
+        const schemaVer = verMatch?.[1] ? Number(verMatch[1]) : 0;
+        let mtimeMs = 0;
+        try {
+          mtimeMs = statSync(fullPath).mtimeMs;
+        } catch {
+          // Ignore stat error
+        }
+        return { fullPath, schemaVer, mtimeMs };
+      })
+      .sort((a, b) => b.schemaVer - a.schemaVer || b.mtimeMs - a.mtimeMs);
+    return candidates[0]?.fullPath;
+  } catch {
+    return undefined;
+  }
 }
 
 let cachedMacProxy: string | null | undefined;
