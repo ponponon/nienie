@@ -932,7 +932,7 @@ function renderBrandMarkSvg() {
   return (
     <svg width="44" height="44" viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path
-        d="M15 33V17L25 29.5L35 17V33"
+        d="M17 33V17L33 33V17"
         stroke="#FFFFFF"
         strokeWidth="4.2"
         strokeLinecap="round"

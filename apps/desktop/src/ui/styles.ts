@@ -760,7 +760,7 @@ export const DESKTOP_MODERN_CSS = `
 
   /* WeType Upgrade & Feedback Page */
   .about-pane-inner {
-    min-height: calc(100vh - 48px);
+    min-height: calc(100vh - 64px);
     display: flex;
     flex-direction: column;
   }
