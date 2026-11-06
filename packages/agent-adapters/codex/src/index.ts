@@ -1,8 +1,8 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { createAgentInfo, type AgentAdapter } from '@nienie/agent-events';
@@ -67,6 +67,8 @@ export class CodexAdapter implements AgentAdapter {
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sessions = new Map<string, CodexSessionRecord>();
   private readonly activeProcesses = new Map<string, CodexProcessHandle>();
+  private readonly discoverLocalHistory: boolean;
+  private historyLoaded = false;
 
   constructor(options: CodexAdapterOptions = {}) {
     this.executablePath = resolveCodexBinary(
@@ -74,6 +76,7 @@ export class CodexAdapter implements AgentAdapter {
     );
     this.defaultProjectPath = options.defaultProjectPath ?? process.cwd();
     this.normalizer = new CodexEventNormalizer(options);
+    this.discoverLocalHistory = !options.spawnProcess && !options.detectVersion;
 
     this.detectVersionImpl =
       options.detectVersion ??
@@ -124,7 +127,91 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async listSessions(): Promise<AgentSession[]> {
+    if (this.discoverLocalHistory && !this.historyLoaded) {
+      this.historyLoaded = true;
+      this.loadLocalCodexHistory();
+    }
     return [...this.sessions.values()].map((record) => this.toAgentSession(record));
+  }
+
+  private loadLocalCodexHistory(): void {
+    const home = homedir();
+    const sqlitePath = join(home, '.codex/state_5.sqlite');
+    if (existsSync(sqlitePath)) {
+      try {
+        const out = execFileSync(
+          'sqlite3',
+          [
+            '-json',
+            sqlitePath,
+            'SELECT id, substr(title, 1, 80) AS title, cwd, created_at, updated_at FROM threads WHERE archived = 0 ORDER BY updated_at DESC LIMIT 60;',
+          ],
+          { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] },
+        );
+        const rows = JSON.parse(out || '[]') as Array<{
+          id?: string;
+          title?: string;
+          cwd?: string;
+          created_at?: number;
+          updated_at?: number;
+        }>;
+        for (const row of rows) {
+          if (!row.id || this.sessions.has(row.id)) continue;
+          const cleanTitle = (row.title ?? '').replace(/\s+/g, ' ').trim();
+          if (cleanTitle === 'Guardian review') continue;
+          const createdIso = row.created_at
+            ? new Date(row.created_at * 1000).toISOString()
+            : new Date().toISOString();
+          const updatedIso = row.updated_at
+            ? new Date(row.updated_at * 1000).toISOString()
+            : createdIso;
+          this.sessions.set(row.id, {
+            id: row.id,
+            threadId: row.id,
+            agentId: 'codex',
+            title: cleanTitle || `Codex (${basename(row.cwd || this.defaultProjectPath)})`,
+            projectPath: row.cwd || this.defaultProjectPath,
+            status: 'idle',
+            createdAt: createdIso,
+            updatedAt: updatedIso,
+          });
+        }
+      } catch {
+        // Ignore sqlite read errors
+      }
+    }
+
+    const globalStatePath = join(home, '.codex/.codex-global-state.json');
+    if (existsSync(globalStatePath)) {
+      try {
+        const raw = JSON.parse(readFileSync(globalStatePath, 'utf8')) as {
+          'electron-saved-workspace-roots'?: string[];
+        };
+        const roots = raw['electron-saved-workspace-roots'] ?? [];
+        const existingPaths = new Set(
+          [...this.sessions.values()].map((s) => s.projectPath),
+        );
+        for (const root of roots) {
+          if (typeof root === 'string' && root.trim() && !existingPaths.has(root)) {
+            const wsId = `codex_ws_${basename(root)}`;
+            if (!this.sessions.has(wsId)) {
+              const nowIso = new Date().toISOString();
+              this.sessions.set(wsId, {
+                id: wsId,
+                agentId: 'codex',
+                title: `${basename(root)} 默认会话`,
+                projectPath: root,
+                status: 'idle',
+                createdAt: nowIso,
+                updatedAt: nowIso,
+              });
+            }
+          }
+        }
+      } catch {
+        // Ignore global state parse errors
+      }
+    }
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {

@@ -546,6 +546,36 @@ UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口�
 
 凡是采用「一次性消费（One-time Token/Code）」机制的二维码界面，服务端在 Token 被消费或过期的瞬间必须自动生成新 Token 并推送给 UI 刷新二维码，严禁在屏幕上继续展示已核销作废的旧二维码。
 
+## 2026-11-06 手机端主屏顶部堆砌三层横条导致界面拥挤不专业，且未按「电脑 → Agent → 项目空间 → 会话」层级组织
+
+### 问题
+
+1. 早期手机端在主对话页顶部同时堆叠了「AppBar + Agent 芯片横条 + Session 卡片横条」三层带边框容器，占去近 150px 高度，底部输入栏又被左侧三个大图标挤压，整体显得杂乱、业余。
+2. 所有会话扁平混排，未按用户电脑上各 Agent 真实打开的项目文件夹（`空间 / Workspaces`）分组展示，也未读取 `~/.codex/state_5.sqlite`、`~/.claude/projects`、`GET /project` 中的本地历史项目与会话。
+
+### 根因
+
+1. 把原本属于侧滑抽屉（Drawer）和底部双层胶囊输入栏（Composer Capsule）的导航与切换控件全部平铺塞进了主屏顶栏。
+2. 适配器 `listSessions()` 仅返回当前内存新建的会话，未对接各 Agent 本地持久化存储（如 Codex 的 `state_5.sqlite`、OpenCode 的 `/project` + `/session`）。
+
+### 影响
+
+手机端视觉粗糙拥挤，且用户连接电脑后看不到各 Agent 已经打开过的项目工作区和历史会话。
+
+### 修复
+
+1. 参考 `/Users/ponponon/Desktop/code/me/github/kelivo` 源码（`home_mobile_layout.dart`、`chat_input_bar.dart`、`side_drawer.dart`），先绘制 3 屏高保真原型图经用户确认后实施：
+   - 顶栏改为 Kelivo 同款长短双横线按钮 + 双行无框标题（会话名 + `项目 · Agent (电脑名) ▾`）。
+   - 底部改为 `R22` 双层圆角胶囊输入舱（上层全宽输入，下层左放 Agent 彩色图标胶囊与工具按钮、右放圆形发送按钮）。
+   - 对话流改为无外框通栏正文 + `#F7F8FA` 紧凑工具胶条。
+2. 实现 `KelivoWorkspaceDrawer` 三级侧滑抽屉（`电脑切换` → `Agent 切换` → `空间 (N)` 项目文件夹树 + 项目下历史会话 + 文件夹右侧 `+` 新建该项目会话），并在 `CodexAdapter`、`OpenCodeAdapter`、`MiMoCodeAdapter`、`ClaudeCodeAdapter`、`DshAdapter` 中接入本机真实项目与历史会话读取。
+
+### 预防措施
+
+1. 移动端对话主界面必须保持极简：顶栏最多一层（双行标题），底部输入区采用上下双层圆角胶囊（文字输入层与工具图标层分离），绝不允许在主界面顶部堆砌多层横向滚动的筛选条。
+2. 进行大幅度 UI 重构前，必须先参考标杆开源项目（如 Kelivo）的组件结构绘制高保真原型图与用户对齐，确认后再动手写代码。
+
+
 
 
 

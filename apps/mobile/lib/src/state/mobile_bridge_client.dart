@@ -8,6 +8,18 @@ import '../transport/bridge_transport.dart';
 
 enum BridgeConnectionState { disconnected, connecting, connected, error }
 
+class ProjectWorkspaceGroup {
+  final String projectName;
+  final String projectPath;
+  final List<AgentSession> sessions;
+
+  const ProjectWorkspaceGroup({
+    required this.projectName,
+    required this.projectPath,
+    required this.sessions,
+  });
+}
+
 class MobileBridgeClient extends ChangeNotifier {
   final BridgeTransport transport;
   final DeviceCredentialStore credentialStore;
@@ -15,8 +27,11 @@ class MobileBridgeClient extends ChangeNotifier {
 
   BridgeConnectionState connectionState = BridgeConnectionState.disconnected;
   String? errorMessage;
+  String? activeMachineId;
+  final Set<String> connectedMachineIds = {};
   List<SavedDeviceCredential> savedMachines = const [];
   List<AgentInfo> agents = const [];
+  String selectedAgentId = 'opencode';
   List<ModelInfo> models = const [];
   String? selectedModelId;
   List<AgentSession> sessions = const [];
@@ -145,14 +160,17 @@ class MobileBridgeClient extends ChangeNotifier {
       }
 
       final data = res['data'] as Map<String, dynamic>;
+      final machineId = data['machineId'] as String;
       await credentialStore.save(
         SavedDeviceCredential(
-          machineId: data['machineId'] as String,
+          machineId: machineId,
           wsUrl: effectiveWsUrl,
           deviceId: data['deviceId'] as String,
           deviceToken: data['deviceToken'] as String,
         ),
       );
+      activeMachineId = machineId;
+      connectedMachineIds.add(machineId);
       savedMachines = await credentialStore.listMachines();
 
       connectionState = BridgeConnectionState.connected;
@@ -160,6 +178,7 @@ class MobileBridgeClient extends ChangeNotifier {
       await refreshSessions();
       if (activeSession == null && sessions.isNotEmpty) {
         activeSession = sessions.first;
+        selectedAgentId = activeSession!.agentId;
       }
       notifyListeners();
     } catch (e) {
@@ -196,11 +215,16 @@ class MobileBridgeClient extends ChangeNotifier {
       throw StateError(errorMessage!);
     }
 
+    activeMachineId = saved.machineId;
+    connectedMachineIds.add(saved.machineId);
     connectionState = BridgeConnectionState.connected;
     await refreshAgents();
     await refreshSessions();
     if (activeSession != null) {
       await replayMissedEvents(activeSession!.id);
+    } else if (sessions.isNotEmpty) {
+      activeSession = sessions.first;
+      selectedAgentId = activeSession!.agentId;
     }
     notifyListeners();
   }
@@ -321,8 +345,47 @@ class MobileBridgeClient extends ChangeNotifier {
       agents = list
           .map((item) => AgentInfo.fromJson(Map<String, dynamic>.from(item as Map)))
           .toList();
+      if (agents.isNotEmpty && !agents.any((a) => a.id == selectedAgentId)) {
+        selectedAgentId =
+            agents.where((a) => a.available).firstOrNull?.id ?? agents.first.id;
+      }
       notifyListeners();
     }
+  }
+
+  Future<void> selectAgent(String agentId) async {
+    selectedAgentId = agentId;
+    final matching = sessions.where((s) => s.agentId == agentId).firstOrNull;
+    if (matching != null) {
+      activeSession = matching;
+    }
+    notifyListeners();
+    await loadModels(agentId);
+  }
+
+  List<ProjectWorkspaceGroup> projectsForAgent([String? agentId]) {
+    final targetAgent = agentId ?? selectedAgentId;
+    final filtered = sessions.where((s) => s.agentId == targetAgent).toList();
+    final source = filtered.isNotEmpty ? filtered : sessions;
+    final grouped = <String, List<AgentSession>>{};
+    for (final session in source) {
+      final path = session.projectPath.trim().isNotEmpty
+          ? session.projectPath.trim()
+          : '/workspace';
+      grouped.putIfAbsent(path, () => []).add(session);
+    }
+    return grouped.entries.map((entry) {
+      final segments = entry.key
+          .split(RegExp(r'[/\\]'))
+          .where((seg) => seg.trim().isNotEmpty)
+          .toList();
+      final folderName = segments.isNotEmpty ? segments.last : entry.key;
+      return ProjectWorkspaceGroup(
+        projectName: folderName,
+        projectPath: entry.key,
+        sessions: entry.value,
+      );
+    }).toList();
   }
 
   Future<void> loadModels(String agentId) async {

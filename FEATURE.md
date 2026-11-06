@@ -221,6 +221,19 @@
   - 手机扫码消费一次性配对码后，桌面端通过 `onDevicePaired` 自动立即生成新配对码并实时同步至桌面 UI，避免二次扫码报 `Pairing code is invalid or expired`
   - 将桌面端配对码默认有效期延长至 24 小时，并将已绑定手机凭据哈希持久化至 `.nienie/paired-devices.json`，使 `Ctrl+C` 重启 `pnpm start` 后已配对手机依然有效
   - 修复移动端 `pairWithQrUri` 仅在 WebSocket 建连失败时回退 `127.0.0.1`，避免 `pair.confirm` 成功后因后续异常重复提交已被消费的一次性配对码
+- 手机端 Kelivo 2.0 极简视觉重构与「多电脑 × 多 Agent × 项目空间树」三级联动（`apps/mobile` & `packages/agent-adapters/*`）：
+  - **后端各 Agent 本地项目与历史会话真实发现**：
+    - `CodexAdapter` 自动读取本机 `~/.codex/state_5.sqlite`（`threads` 表）与 `~/.codex/.codex-global-state.json`（`electron-saved-workspace-roots`），还原全部本地工作区项目（如 `nienie`、`audio_cut`、`openctrlc`、`ideaboom` 等）与历史线程
+    - `OpenCodeAdapter` / `MiMoCodeAdapter` 同时聚合 `GET /project` 与 `GET /session`
+    - `ClaudeCodeAdapter` 与 `DshAdapter` 自动扫描 `~/.claude/projects` 与 `~/.dsh/sessions` 下的项目目录与历史会话文件
+  - **手机端 Kelivo 1:1 极简对话视图（`nienie_mobile_app.dart` & `timeline_card_list.dart`）**：
+    - 移除顶部三层拥挤横条，采用 Kelivo 同款长短双横线菜单按钮（`list.svg`）+ 双行无框顶栏（主标题显示会话名，副标题显示 `<项目名> · <Agent> (<电脑名>) ▾`）
+    - 底部采用 Kelivo 标志性的 `R22` 双层圆角悬浮输入舱（上层 100% 全宽无遮挡输入框，下层集成 Agent 真实彩色胶囊切换条、工具按钮与 `32px` 圆形发送钮）
+    - 对话流升级为无外框通栏 Agent 响应 + 紧凑单行工具调用胶条（`#F7F8FA`）+ 右侧浅灰圆角用户气泡
+  - **左侧滑出抽屉三级联动架构（`kelivo_workspace_drawer.dart`）**：
+    - 第一级：顶部电脑切换器（`MacBook Pro M5 ⌄`），支持多台电脑切换与一键扫码添加新电脑
+    - 第二级：当前电脑下的 Agent 选择条（`Codex` / `OpenCode` / `Claude Code` / `MiMo Code` / `DeepSeek Harness`）与全宽胶囊按钮「新建任务」
+    - 第三级：按项目文件夹分组的 `空间 (N) ⌄` 树形列表（`📁 nienie`、`📁 audio_cut`、`📁 openctrlc` 等），支持展开/折叠项目下的历史会话、点击「查看更多」以及点击文件夹右侧 `+` 号直接在该项目路径下新建会话
 
 ## MVP 规划
 

@@ -215,12 +215,38 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async listSessions(): Promise<AgentSession[]> {
-    const [sessionsRes, statusMap] = await Promise.all([
+    if (this.autoStartServer) {
+      await this.ensureManagedServerRunning();
+    }
+    const [sessionsRes, statusMap, projectsRes] = await Promise.all([
       this.requestJson<OpenCodeRawSession[]>('/session', { method: 'GET' }),
       this.fetchStatusMap(),
+      this.requestJson<Array<{ id?: string; worktree?: string }>>('/project', {
+        method: 'GET',
+      }).catch(() => []),
     ]);
 
-    return sessionsRes.map((raw) => this.mapSession(raw, statusMap[raw.id]));
+    const mapped = sessionsRes.map((raw) => this.mapSession(raw, statusMap[raw.id]));
+    const coveredDirs = new Set(mapped.map((s) => s.projectPath).filter(Boolean));
+
+    for (const proj of projectsRes) {
+      const dir = proj.worktree?.trim();
+      if (!dir || dir === '/' || coveredDirs.has(dir)) continue;
+      coveredDirs.add(dir);
+      const folder = dir.split('/').filter(Boolean).pop() ?? 'workspace';
+      const nowIso = new Date().toISOString();
+      mapped.push({
+        id: `${this.id}_proj_${proj.id ?? folder}`,
+        agentId: this.id,
+        title: `${folder} 默认会话`,
+        projectPath: dir,
+        status: 'idle',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
+    }
+
+    return mapped;
   }
 
   async listModels(): Promise<ModelInfo[]> {

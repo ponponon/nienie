@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../i18n/app_strings.dart';
 import '../state/mobile_bridge_client.dart';
 import 'agent_brand_logo.dart';
+import 'kelivo_workspace_drawer.dart';
 import 'pairing_panel.dart';
 import 'timeline_card_list.dart';
 
@@ -17,6 +18,7 @@ class NienieMobileApp extends StatefulWidget {
 }
 
 class _NienieMobileAppState extends State<NienieMobileApp> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final TextEditingController _wsUrlController =
       TextEditingController(text: 'ws://127.0.0.1:4100');
   final TextEditingController _pairingCodeController = TextEditingController();
@@ -24,10 +26,17 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   final TextEditingController _promptController = TextEditingController();
 
   static const Color _weTypeGreen = Color(0xFF17B378);
-  static const Color _canvasBg = Color(0xFFF1F2F5);
   static const Color _textPrimary = Color(0xFF141416);
-  static const Color _textSecondary = Color(0xFF6E7178);
+  static const Color _textSecondary = Color(0xFF686C75);
   static const Color _borderSubtle = Color(0x14000000);
+
+  // Kelivo's exact 2-bar staggered menu icon (assets/icons/list.svg)
+  static const String _kelivoMenuListSvg = '''
+<svg width="20" height="16" viewBox="0 0 20 16" fill="#141416" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="2.4" width="20" height="2.2" rx="1.1" />
+  <rect x="0" y="11.4" width="13" height="2.2" rx="1.1" />
+</svg>
+''';
 
   static const String _nienieBrandMarkSvg = '''
 <svg viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -45,13 +54,23 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     super.dispose();
   }
 
+  void _openComputerSheet(BuildContext context, MobileBridgeClient client) {
+    showMultiComputerSheet(
+      context: context,
+      client: client,
+      wsUrlController: _wsUrlController,
+      pairingCodeController: _pairingCodeController,
+      qrUriController: _qrUriController,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Nienie Mobile',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.light(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: _canvasBg,
+        scaffoldBackgroundColor: Colors.white,
         cardColor: Colors.white,
         colorScheme: ColorScheme.fromSeed(
           seedColor: _weTypeGreen,
@@ -62,106 +81,242 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         animation: widget.client,
         builder: (context, _) {
           final client = widget.client;
+          final isConnected =
+              client.connectionState == BridgeConnectionState.connected;
+
           return Scaffold(
-            appBar: AppBar(
-              toolbarHeight: 48,
-              backgroundColor: Colors.white,
-              foregroundColor: _textPrimary,
-              elevation: 0,
-              scrolledUnderElevation: 0,
-              shape: const Border(
-                bottom: BorderSide(color: _borderSubtle, width: 1),
-              ),
-              titleSpacing: 14,
-              title: Row(
-                children: [
-                  SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: SvgPicture.string(_nienieBrandMarkSvg),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      client.strings.appTitle,
-                      style: const TextStyle(
-                        fontSize: 15.5,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: -0.2,
-                        color: _textPrimary,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  PopupMenuButton<AppLanguage>(
-                    key: const Key('btn-switch-language'),
-                    initialValue: client.language,
-                    onSelected: client.setLanguage,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: const BorderSide(color: _borderSubtle),
-                    ),
-                    color: Colors.white,
-                    elevation: 6,
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(value: AppLanguage.zh, child: Text('中文 (简体)')),
-                      PopupMenuItem(value: AppLanguage.en, child: Text('English')),
-                      PopupMenuItem(value: AppLanguage.ja, child: Text('日本語')),
-                      PopupMenuItem(value: AppLanguage.ko, child: Text('한국어')),
-                    ],
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF6F7F9),
-                        borderRadius: BorderRadius.circular(7),
-                        border: Border.all(color: _borderSubtle),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(LucideIcons.globe, size: 13, color: _textSecondary),
-                          const SizedBox(width: 4),
-                          Text(
-                            client.strings.langShortLabel,
-                            style: const TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w500,
-                              color: _textPrimary,
-                            ),
-                          ),
-                          const SizedBox(width: 2),
-                          const Icon(LucideIcons.chevronDown, size: 12, color: _textSecondary),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  _buildConnectionBadge(client),
-                  if (client.connectionState == BridgeConnectionState.connected) ...[
-                    const SizedBox(width: 4),
-                    IconButton(
-                      key: const Key('btn-disconnect'),
-                      visualDensity: VisualDensity.compact,
-                      tooltip: 'Disconnect',
-                      onPressed: client.disconnect,
-                      icon: const Icon(LucideIcons.unplug, size: 16, color: _textSecondary),
-                    ),
-                  ],
-                ],
-              ),
-            ),
+            key: _scaffoldKey,
+            backgroundColor:
+                isConnected ? Colors.white : const Color(0xFFF3F4F6),
+            drawer: isConnected
+                ? KelivoWorkspaceDrawer(
+                    client: client,
+                    onCloseDrawer: () =>
+                        _scaffoldKey.currentState?.closeDrawer(),
+                    onOpenComputerSheet: () =>
+                        _openComputerSheet(context, client),
+                  )
+                : null,
+            appBar: isConnected
+                ? _buildKelivoConnectedAppBar(context, client)
+                : _buildDisconnectedAppBar(context, client),
             body: SafeArea(
-              child: client.connectionState != BridgeConnectionState.connected
+              child: !isConnected
                   ? PairingPanel(
                       client: client,
                       wsUrlController: _wsUrlController,
                       pairingCodeController: _pairingCodeController,
                       qrUriController: _qrUriController,
                     )
-                  : _buildConnectedWorkspace(client),
+                  : _buildKelivoConnectedBody(context, client),
             ),
           );
         },
+      ),
+    );
+  }
+
+  PreferredSizeWidget _buildDisconnectedAppBar(
+    BuildContext context,
+    MobileBridgeClient client,
+  ) {
+    return AppBar(
+      toolbarHeight: 50,
+      backgroundColor: Colors.white,
+      foregroundColor: _textPrimary,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      titleSpacing: 16,
+      title: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: SvgPicture.string(_nienieBrandMarkSvg),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              client.strings.appTitle,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.2,
+                color: _textPrimary,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          _buildLanguageButton(client),
+          const SizedBox(width: 6),
+          _buildConnectionBadge(client),
+        ],
+      ),
+    );
+  }
+
+  // Kelivo 1:1 Minimalist Two-Line AppBar
+  PreferredSizeWidget _buildKelivoConnectedAppBar(
+    BuildContext context,
+    MobileBridgeClient client,
+  ) {
+    final active = client.activeSession;
+    final hasMessages =
+        active != null && client.timelineFor(active.id).isNotEmpty;
+    final folderName = active != null && active.projectPath.trim().isNotEmpty
+        ? active.projectPath
+            .split(RegExp(r'[/\\]'))
+            .where((s) => s.isNotEmpty)
+            .lastOrNull ??
+            active.projectPath
+        : 'workspace';
+    final agentName = client.agents
+            .where((a) => a.id == (active?.agentId ?? client.selectedAgentId))
+            .firstOrNull
+            ?.name ??
+        (active?.agentId ?? client.selectedAgentId);
+    final machineName = client.activeMachineId ?? 'MacBook-Pro-M5';
+
+    return AppBar(
+      toolbarHeight: 54,
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
+      foregroundColor: _textPrimary,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      leadingWidth: 46,
+      leading: IconButton(
+        key: const Key('btn-open-drawer'),
+        tooltip: 'Open Workspace Drawer',
+        onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        icon: SvgPicture.string(_kelivoMenuListSvg, width: 18, height: 15),
+      ),
+      titleSpacing: 2,
+      title: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _openComputerSheet(context, client),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                hasMessages ? active.title : client.strings.appTitle,
+                style: const TextStyle(
+                  fontSize: 15.5,
+                  fontWeight: FontWeight.w600,
+                  color: _textPrimary,
+                  height: 1.2,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      '$folderName · $agentName ($machineName)',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: _textSecondary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  const Icon(
+                    LucideIcons.chevronDown,
+                    size: 11,
+                    color: _textSecondary,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        _buildLanguageButton(client),
+        if (active != null)
+          IconButton(
+            key: const Key('btn-load-diffs'),
+            visualDensity: VisualDensity.compact,
+            tooltip: 'Load Session Diffs',
+            onPressed: () => client.loadSessionDiffs(active.id),
+            icon: const Icon(LucideIcons.map, size: 19, color: _textPrimary),
+          ),
+        IconButton(
+          key: const Key('btn-new-session'),
+          visualDensity: VisualDensity.compact,
+          tooltip: 'New Session',
+          onPressed: () {
+            final defaultAgent = client.selectedAgentId.isNotEmpty
+                ? client.selectedAgentId
+                : (client.agents.where((a) => a.available).firstOrNull?.id ??
+                    'opencode');
+            client.createSession(
+              agentId: defaultAgent,
+              title: 'Mobile Session',
+              projectPath: active?.projectPath,
+            );
+          },
+          icon: const Icon(
+            LucideIcons.messageCircleDashed,
+            size: 20,
+            color: _textPrimary,
+          ),
+        ),
+        IconButton(
+          key: const Key('btn-disconnect'),
+          visualDensity: VisualDensity.compact,
+          tooltip: 'Disconnect',
+          onPressed: client.disconnect,
+          icon: const Icon(LucideIcons.unplug, size: 17, color: _textSecondary),
+        ),
+        const SizedBox(width: 4),
+      ],
+    );
+  }
+
+  Widget _buildLanguageButton(MobileBridgeClient client) {
+    return PopupMenuButton<AppLanguage>(
+      key: const Key('btn-switch-language'),
+      initialValue: client.language,
+      onSelected: client.setLanguage,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: _borderSubtle),
+      ),
+      color: Colors.white,
+      elevation: 6,
+      itemBuilder: (context) => const [
+        PopupMenuItem(value: AppLanguage.zh, child: Text('中文 (简体)')),
+        PopupMenuItem(value: AppLanguage.en, child: Text('English')),
+        PopupMenuItem(value: AppLanguage.ja, child: Text('日本語')),
+        PopupMenuItem(value: AppLanguage.ko, child: Text('한국어')),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(LucideIcons.globe, size: 14, color: _textSecondary),
+            const SizedBox(width: 3),
+            Text(
+              client.strings.langShortLabel,
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w500,
+                color: _textPrimary,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -198,297 +353,352 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           const SizedBox(width: 5),
           Text(
             label,
-            style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildConnectedWorkspace(MobileBridgeClient client) {
+  Widget _buildKelivoConnectedBody(
+    BuildContext context,
+    MobileBridgeClient client,
+  ) {
     final active = client.activeSession;
+    final hasMessages =
+        active != null && client.timelineFor(active.id).isNotEmpty;
+
     return Column(
       children: [
-        // Modern Agent + Model + Session Selector Bar
-        Container(
-          color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
-          child: Column(
-            children: [
-              SizedBox(
-                height: 36,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: client.agents.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 6),
-                        itemBuilder: (context, index) {
-                          final agent = client.agents[index];
-                          return ActionChip(
-                            key: Key('chip-agent-${agent.id}'),
-                            visualDensity: VisualDensity.compact,
-                            backgroundColor: const Color(0xFFF8F9FA),
-                            side: const BorderSide(color: _borderSubtle),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            avatar: AgentBrandLogo(agentId: agent.id, size: 14),
-                            label: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  agent.name,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                    color: _textPrimary,
-                                  ),
-                                ),
-                                const SizedBox(width: 5),
-                                Container(
-                                  width: 6,
-                                  height: 6,
-                                  decoration: BoxDecoration(
-                                    color: agent.available
-                                        ? _weTypeGreen
-                                        : const Color(0xFFC4C7CE),
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            onPressed: () {
-                              client.loadModels(agent.id);
-                              final match = client.sessions
-                                  .where((s) => s.agentId == agent.id)
-                                  .firstOrNull;
-                              if (match != null && client.activeSession?.id != match.id) {
-                                client.openSession(match);
-                              }
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: IconButton.filled(
-                        key: const Key('btn-new-session'),
-                        padding: EdgeInsets.zero,
-                        tooltip: 'New Session',
-                        style: IconButton.styleFrom(
-                          backgroundColor: _weTypeGreen,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        onPressed: () {
-                          final defaultAgent = client.agents
-                                  .where((a) => a.available)
-                                  .firstOrNull
-                                  ?.id ??
-                              'opencode';
-                          client.createSession(
-                            agentId: defaultAgent,
-                            title: 'Mobile Session',
-                          );
-                        },
-                        icon: const Icon(LucideIcons.plus, size: 16),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (client.models.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                SizedBox(
-                  height: 32,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: client.models.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 6),
-                    itemBuilder: (context, index) {
-                      final model = client.models[index];
-                      return ChoiceChip(
-                        key: Key('chip-model-${model.id}'),
-                        visualDensity: VisualDensity.compact,
-                        label: Text(model.name, style: const TextStyle(fontSize: 11)),
-                        selected: client.selectedModelId == model.id,
-                        onSelected: (_) => client.selectModel(model.id),
-                      );
-                    },
-                  ),
-                ),
-              ],
-              if (client.sessions.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                SizedBox(
-                  height: 44,
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: client.sessions.length,
-                    itemBuilder: (context, index) {
-                      final session = client.sessions[index];
-                      final isSelected = active?.id == session.id;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(9),
-                          onTap: () => client.openSession(session),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? _weTypeGreen.withValues(alpha: 0.1)
-                                  : const Color(0xFFF8F9FA),
-                              border: Border.all(
-                                color: isSelected ? _weTypeGreen : _borderSubtle,
-                              ),
-                              borderRadius: BorderRadius.circular(9),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                AgentBrandLogo(agentId: session.agentId, size: 13),
-                                const SizedBox(width: 7),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      session.title,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: isSelected ? _weTypeGreen : _textPrimary,
-                                      ),
-                                    ),
-                                    Text(
-                                      session.projectPath,
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        color: _textSecondary,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ],
+        // Optional Model Picker Chip Strip (when models are loaded)
+        if (client.models.isNotEmpty)
+          Container(
+            height: 32,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: client.models.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 6),
+              itemBuilder: (context, index) {
+                final model = client.models[index];
+                return ChoiceChip(
+                  key: Key('chip-model-${model.id}'),
+                  visualDensity: VisualDensity.compact,
+                  label: Text(model.name, style: const TextStyle(fontSize: 11)),
+                  selected: client.selectedModelId == model.id,
+                  onSelected: (_) => client.selectModel(model.id),
+                );
+              },
+            ),
           ),
-        ),
-        const Divider(height: 1, color: _borderSubtle),
-        // Active session detail timeline
+
+        // Main Chat Canvas (or Kelivo Workspace Explorer when session is empty)
         Expanded(
           child: active == null
-              ? Center(
-                  child: Text(
-                    client.strings.selectSessionHint,
-                    style: const TextStyle(color: _textSecondary, fontSize: 13),
-                  ),
-                )
-              : SessionTimelineList(client: client, session: active),
+              ? _buildEmptyWorkspaceTree(client)
+              : hasMessages
+                  ? SessionTimelineList(client: client, session: active)
+                  : _buildEmptyWorkspaceTree(client),
         ),
-        // Modern Bottom Composer Bar
+
+        // Kelivo 1:1 Floating Two-Deck Rounded Composer Capsule (R22)
         if (active != null)
-          Container(
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              border: Border(top: BorderSide(color: _borderSubtle)),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-            child: Row(
-              children: [
-                IconButton(
-                  key: const Key('btn-load-diffs'),
-                  visualDensity: VisualDensity.compact,
-                  tooltip: 'Load Session Diffs',
-                  onPressed: () => client.loadSessionDiffs(active.id),
-                  icon: const Icon(LucideIcons.fileDiff, size: 18, color: _textSecondary),
-                ),
-                IconButton(
-                  key: const Key('btn-capture-screen'),
-                  visualDensity: VisualDensity.compact,
-                  tooltip: 'Capture Desktop Screen',
-                  onPressed: () => client.captureScreen('main'),
-                  icon: const Icon(LucideIcons.monitor, size: 18, color: _textSecondary),
-                ),
-                IconButton(
-                  key: const Key('btn-cancel-session'),
-                  visualDensity: VisualDensity.compact,
-                  tooltip: 'Cancel Session',
-                  onPressed: client.cancelActiveSession,
-                  icon: const Icon(LucideIcons.circleStop, size: 18, color: Color(0xFFEF4444)),
-                ),
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF5F6F8),
-                      borderRadius: BorderRadius.circular(9),
-                      border: Border.all(color: _borderSubtle),
-                    ),
-                    child: TextField(
-                      key: const Key('input-session-prompt'),
-                      controller: _promptController,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (value) {
-                        final text = value.trim();
-                        if (text.isEmpty) return;
-                        _promptController.clear();
-                        client.sendMessage(text);
-                      },
-                      style: const TextStyle(fontSize: 13.5, color: _textPrimary),
-                      decoration: InputDecoration(
-                        hintText: client.strings.promptHint,
-                        hintStyle: const TextStyle(fontSize: 13, color: _textSecondary),
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 11,
-                          vertical: 9,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 7),
-                SizedBox(
-                  height: 36,
-                  width: 36,
-                  child: IconButton.filled(
-                    key: const Key('btn-send-prompt'),
-                    padding: EdgeInsets.zero,
-                    style: IconButton.styleFrom(
-                      backgroundColor: _weTypeGreen,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                    ),
-                    onPressed: () {
-                      final text = _promptController.text;
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F4F6),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: const Color(0x16000000), width: 0.8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Upper Deck: Full-width borderless input field
+                  TextField(
+                    key: const Key('input-session-prompt'),
+                    controller: _promptController,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (value) {
+                      final text = value.trim();
+                      if (text.isEmpty) return;
                       _promptController.clear();
                       client.sendMessage(text);
                     },
-                    icon: const Icon(LucideIcons.arrowUp, size: 17),
+                    style: const TextStyle(
+                      fontSize: 15,
+                      color: _textPrimary,
+                      height: 1.35,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: client.strings.promptHint,
+                      hintStyle: TextStyle(
+                        fontSize: 14.5,
+                        color: _textPrimary.withValues(alpha: 0.42),
+                      ),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                    ),
                   ),
-                ),
-              ],
+
+                  const SizedBox(height: 8),
+
+                  // Lower Deck: Agent Pills + Workspace Actions + Send Circle
+                  SizedBox(
+                    height: 32,
+                    child: Row(
+                      children: [
+                        // Left scrollable Agent switcher pills + tools
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: [
+                                for (final agent in client.agents)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 6),
+                                    child: InkWell(
+                                      key: Key('chip-agent-${agent.id}'),
+                                      borderRadius: BorderRadius.circular(999),
+                                      onTap: () => client.selectAgent(agent.id),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: client.selectedAgentId ==
+                                                  agent.id
+                                              ? Colors.white
+                                              : Colors.transparent,
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                          border: Border.all(
+                                            color: client.selectedAgentId ==
+                                                    agent.id
+                                                ? const Color(0x18000000)
+                                                : Colors.transparent,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            AgentBrandLogo(
+                                              agentId: agent.id,
+                                              size: 13,
+                                            ),
+                                            const SizedBox(width: 5),
+                                            Text(
+                                              agent.name,
+                                              style: TextStyle(
+                                                fontSize: 11.5,
+                                                fontWeight:
+                                                    client.selectedAgentId ==
+                                                            agent.id
+                                                        ? FontWeight.w600
+                                                        : FontWeight.w500,
+                                                color: _textPrimary,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                IconButton(
+                                  key: const Key('btn-capture-screen'),
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                  ),
+                                  constraints: const BoxConstraints(),
+                                  tooltip: 'Capture Desktop Screen',
+                                  onPressed: () => client.captureScreen('main'),
+                                  icon: const Icon(
+                                    LucideIcons.monitor,
+                                    size: 17,
+                                    color: _textSecondary,
+                                  ),
+                                ),
+                                IconButton(
+                                  key: const Key('btn-cancel-session'),
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                  ),
+                                  constraints: const BoxConstraints(),
+                                  tooltip: 'Cancel Session',
+                                  onPressed: client.cancelActiveSession,
+                                  icon: const Icon(
+                                    LucideIcons.circleStop,
+                                    size: 17,
+                                    color: _textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(width: 6),
+
+                        // Circular Send Button (Kelivo R32 Circle)
+                        SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: IconButton.filled(
+                            key: const Key('btn-send-prompt'),
+                            padding: EdgeInsets.zero,
+                            style: IconButton.styleFrom(
+                              backgroundColor: _textPrimary,
+                              foregroundColor: Colors.white,
+                              shape: const CircleBorder(),
+                            ),
+                            onPressed: () {
+                              final text = _promptController.text;
+                              _promptController.clear();
+                              client.sendMessage(text);
+                            },
+                            icon: const Icon(LucideIcons.arrowUp, size: 16),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
       ],
+    );
+  }
+
+  // Clean Project Folder -> Session Tree shown in empty state (and in Left Drawer)
+  Widget _buildEmptyWorkspaceTree(MobileBridgeClient client) {
+    final groups = client.projectsForAgent(client.selectedAgentId);
+    if (groups.isEmpty) {
+      return Center(
+        child: Text(
+          client.strings.selectSessionHint,
+          style: const TextStyle(color: _textSecondary, fontSize: 13.5),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
+      itemCount: groups.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              children: [
+                Text(
+                  '空间 (${groups.length})',
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: _textSecondary,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                const Icon(
+                  LucideIcons.chevronDown,
+                  size: 13,
+                  color: _textSecondary,
+                ),
+              ],
+            ),
+          );
+        }
+
+        final group = groups[index - 1];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Icon(LucideIcons.folder, size: 17, color: _textPrimary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      group.projectName,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: _textPrimary,
+                      ),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => client.createSession(
+                      agentId: client.selectedAgentId,
+                      title: '${group.projectName} 新对话',
+                      projectPath: group.projectPath,
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(
+                        LucideIcons.plus,
+                        size: 16,
+                        color: _textSecondary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Padding(
+                padding: const EdgeInsets.only(left: 25),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final session in group.sessions.take(6))
+                      InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => client.openSession(session),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: client.activeSession?.id == session.id
+                                ? const Color(0xFFF3F4F6)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            session.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13.8,
+                              fontWeight: client.activeSession?.id == session.id
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                              color: _textPrimary,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

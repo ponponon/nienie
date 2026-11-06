@@ -18,157 +18,168 @@ class SessionTimelineList extends StatelessWidget {
 
   static const Color _weTypeGreen = Color(0xFF17B378);
   static const Color _textPrimary = Color(0xFF141416);
-  static const Color _textSecondary = Color(0xFF6E7178);
-  static const Color _borderSubtle = Color(0x14000000);
+  static const Color _textSecondary = Color(0xFF686C75);
+  static const Color _borderSubtle = Color(0x12000000);
 
   @override
   Widget build(BuildContext context) {
     final items = client.timelineFor(session.id);
     return ListView.separated(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
         final item = items[index];
         return switch (item) {
-          // Right-aligned user prompt bubble
+          // Kelivo Soft Gray User Prompt Bubble (borderless R18 pill)
           UserPromptItem() => Align(
               alignment: Alignment.centerRight,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-                decoration: BoxDecoration(
-                  color: _weTypeGreen,
-                  borderRadius: BorderRadius.circular(11),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x1A17B378),
-                      blurRadius: 6,
-                      offset: Offset(0, 2),
-                    ),
-                  ],
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width * 0.8,
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        item.message,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF3F4F6),
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(18),
+                    topRight: Radius.circular(18),
+                    bottomLeft: Radius.circular(18),
+                    bottomRight: Radius.circular(4),
+                  ),
+                ),
+                child: Text(
+                  item.message,
+                  style: const TextStyle(
+                    color: _textPrimary,
+                    fontSize: 14,
+                    height: 1.45,
+                  ),
                 ),
               ),
             ),
-          // Left-aligned agent streaming bubble with authentic AgentBrandLogo
-          StreamingTextItem() => Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(11),
-                border: Border.all(color: _borderSubtle),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (item.isThinking)
-                    Container(
-                      width: 22,
-                      height: 22,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF5F6F8),
-                        borderRadius: BorderRadius.circular(6),
+
+          // Kelivo Borderless Agent Response with Brand Header
+          StreamingTextItem() => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    if (item.isThinking)
+                      Container(
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          LucideIcons.sparkles,
+                          size: 13,
+                          color: _weTypeGreen,
+                        ),
+                      )
+                    else
+                      AgentBrandLogo(agentId: session.agentId, size: 14),
+                    const SizedBox(width: 8),
+                    Text(
+                      item.isThinking ? 'Thinking' : session.agentId.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _textSecondary,
                       ),
-                      alignment: Alignment.center,
-                      child: const Icon(
-                        LucideIcons.sparkles,
-                        size: 13,
-                        color: _weTypeGreen,
-                      ),
-                    )
-                  else
-                    AgentBrandLogo(agentId: session.agentId, size: 15),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Text(
-                      item.text,
-                      style: TextStyle(
-                        color: item.isThinking ? _textSecondary : _textPrimary,
-                        fontSize: 13.5,
-                        height: 1.45,
-                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Padding(
+                  padding: const EdgeInsets.only(left: 2),
+                  child: Text(
+                    item.text,
+                    style: TextStyle(
+                      color: item.isThinking ? _textSecondary : _textPrimary,
+                      fontSize: 14,
+                      height: 1.55,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          // Structured Tool Call Card
+
+          // Kelivo Compact Tool Call Pill
           ToolCallCardItem() => Container(
-              padding: const EdgeInsets.all(11),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: const Color(0xFFF7F8FA),
                 border: Border.all(
                   color: item.isError
-                      ? const Color(0xFFEF4444).withValues(alpha: 0.4)
+                      ? const Color(0xFFEF4444).withValues(alpha: 0.35)
                       : _borderSubtle,
                 ),
-                borderRadius: BorderRadius.circular(11),
+                borderRadius: BorderRadius.circular(12),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      const Icon(LucideIcons.terminal, size: 14, color: _weTypeGreen),
-                      const SizedBox(width: 6),
+                      const Icon(
+                        LucideIcons.terminal,
+                        size: 13.5,
+                        color: _textSecondary,
+                      ),
+                      const SizedBox(width: 7),
                       Text(
                         item.name,
                         style: const TextStyle(
                           fontWeight: FontWeight.w600,
-                          fontSize: 12.5,
+                          fontSize: 12,
                           fontFamily: 'monospace',
                           color: _textPrimary,
                         ),
                       ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          jsonEncode(item.input),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontFamily: 'monospace',
+                            color: _textSecondary,
+                          ),
+                        ),
+                      ),
+                      if (item.resultContent != null)
+                        Icon(
+                          item.isError ? LucideIcons.circleX : LucideIcons.check,
+                          size: 13,
+                          color: item.isError
+                              ? const Color(0xFFDC2626)
+                              : _weTypeGreen,
+                        ),
                     ],
                   ),
-                  const SizedBox(height: 5),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF6F7F9),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      jsonEncode(item.input),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontFamily: 'monospace',
-                        color: _textSecondary,
-                      ),
-                    ),
-                  ),
                   if (item.resultContent != null) ...[
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 5),
                     Text(
                       item.resultContent!,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 11.5,
                         fontFamily: 'monospace',
                         color: item.isError
                             ? const Color(0xFFDC2626)
-                            : _textPrimary,
+                            : _textSecondary,
                       ),
                     ),
                   ],
                 ],
               ),
             ),
+
           // Structured Error Card
           ErrorCardItem() => Container(
               padding: const EdgeInsets.all(11),
@@ -177,7 +188,7 @@ class SessionTimelineList extends StatelessWidget {
                 border: Border.all(
                   color: const Color(0xFFEF4444).withValues(alpha: 0.3),
                 ),
-                borderRadius: BorderRadius.circular(11),
+                borderRadius: BorderRadius.circular(12),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -209,15 +220,16 @@ class SessionTimelineList extends StatelessWidget {
                 ],
               ),
             ),
+
           // Structured Permission Approval Card
           PermissionRequestCardItem() => Container(
-              padding: const EdgeInsets.all(11),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFFBEB),
+                color: const Color(0xFFFFFDF7),
                 border: Border.all(
-                  color: const Color(0xFFF59E0B).withValues(alpha: 0.35),
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.32),
                 ),
-                borderRadius: BorderRadius.circular(11),
+                borderRadius: BorderRadius.circular(14),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -243,7 +255,7 @@ class SessionTimelineList extends StatelessWidget {
                     ],
                   ),
                   if (item.patterns.isNotEmpty) ...[
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 4),
                     Text(
                       item.patterns.join(', '),
                       style: const TextStyle(
@@ -271,10 +283,10 @@ class SessionTimelineList extends StatelessWidget {
                           child: FilledButton(
                             key: Key('btn-perm-allow-once-${item.permissionId}'),
                             style: FilledButton.styleFrom(
-                              backgroundColor: _weTypeGreen,
+                              backgroundColor: _textPrimary,
                               padding: const EdgeInsets.symmetric(horizontal: 10),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(7),
+                                borderRadius: BorderRadius.circular(8),
                               ),
                             ),
                             onPressed: () => client.replyPermission(
@@ -296,7 +308,7 @@ class SessionTimelineList extends StatelessWidget {
                             style: FilledButton.styleFrom(
                               padding: const EdgeInsets.symmetric(horizontal: 10),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(7),
+                                borderRadius: BorderRadius.circular(8),
                               ),
                             ),
                             onPressed: () => client.replyPermission(
@@ -318,7 +330,7 @@ class SessionTimelineList extends StatelessWidget {
                             style: OutlinedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(horizontal: 10),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(7),
+                                borderRadius: BorderRadius.circular(8),
                               ),
                             ),
                             onPressed: () => client.replyPermission(
@@ -337,17 +349,22 @@ class SessionTimelineList extends StatelessWidget {
                 ],
               ),
             ),
+
           // File Diff Card
           FileDiffCardItem() => Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(11),
+                color: const Color(0xFFF7F8FA),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: _borderSubtle),
               ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.fileDiff, size: 15, color: Color(0xFF2563EB)),
+                  const Icon(
+                    LucideIcons.fileDiff,
+                    size: 14.5,
+                    color: Color(0xFF2563EB),
+                  ),
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
@@ -372,17 +389,22 @@ class SessionTimelineList extends StatelessWidget {
                 ],
               ),
             ),
+
           // Desktop Screen Capture Card
           ScreenCaptureCardItem() => Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(11),
+                color: const Color(0xFFF7F8FA),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: _borderSubtle),
               ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.monitor, size: 15, color: Color(0xFF2563EB)),
+                  const Icon(
+                    LucideIcons.monitor,
+                    size: 14.5,
+                    color: Color(0xFF2563EB),
+                  ),
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
@@ -405,22 +427,23 @@ class SessionTimelineList extends StatelessWidget {
                 ],
               ),
             ),
+
           // Token & Cost Usage Summary Card
           UsageSummaryItem() => Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(11),
+                color: const Color(0xFFF7F8FA),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: _borderSubtle),
               ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.activity, size: 14, color: _weTypeGreen),
+                  const Icon(LucideIcons.activity, size: 13.5, color: _weTypeGreen),
                   const SizedBox(width: 7),
                   Text(
                     '${item.inputTokens} in · ${item.outputTokens} out · \$${item.costUsd.toStringAsFixed(4)}',
                     style: const TextStyle(
-                      fontSize: 11.5,
+                      fontSize: 11,
                       fontFamily: 'monospace',
                       color: _textSecondary,
                     ),

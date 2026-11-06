@@ -247,6 +247,8 @@ export class DshAdapter implements AgentAdapter {
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sessions = new Map<string, DshSessionRecord>();
   private readonly activeProcesses = new Map<string, DshProcessHandle>();
+  private readonly discoverLocalHistory: boolean;
+  private historyLoaded = false;
 
   constructor(options: DshAdapterOptions = {}) {
     this.executablePath = resolveDshBinary(
@@ -254,6 +256,7 @@ export class DshAdapter implements AgentAdapter {
     );
     this.defaultProjectPath = options.defaultProjectPath ?? process.cwd();
     this.normalizer = new DshEventNormalizer(options);
+    this.discoverLocalHistory = !options.spawnProcess && !options.detectVersion;
 
     this.detectVersionImpl =
       options.detectVersion ??
@@ -301,7 +304,47 @@ export class DshAdapter implements AgentAdapter {
   }
 
   async listSessions(): Promise<AgentSession[]> {
+    if (this.discoverLocalHistory && !this.historyLoaded) {
+      this.historyLoaded = true;
+      this.loadLocalDshHistory();
+    }
     return [...this.sessions.values()];
+  }
+
+  private loadLocalDshHistory(): void {
+    const dshSessionsDir = join(homedir(), '.dsh/sessions');
+    if (!existsSync(dshSessionsDir)) return;
+    try {
+      for (const projDir of readdirSync(dshSessionsDir)) {
+        if (projDir.startsWith('.')) continue;
+        const fullProjDir = join(dshSessionsDir, projDir);
+        const stripped = projDir.replace(/^--|--$/g, '');
+        const decodedPath = stripped ? `/${stripped.replaceAll('-', '/')}` : this.defaultProjectPath;
+        const projName = decodedPath.split('/').filter(Boolean).pop() ?? 'workspace';
+        let subDirs: string[] = [];
+        try {
+          subDirs = readdirSync(fullProjDir).filter((d) => d.startsWith('session-'));
+        } catch {
+          continue;
+        }
+        for (const sesId of subDirs) {
+          if (this.sessions.has(sesId)) continue;
+          const nowIso = new Date().toISOString();
+          this.sessions.set(sesId, {
+            id: sesId,
+            dshSessionId: sesId,
+            agentId: 'dsh',
+            title: `${projName} (${sesId.slice(8, 14)})`,
+            projectPath: decodedPath,
+            status: 'idle',
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          });
+        }
+      }
+    } catch {
+      // Ignore scan errors
+    }
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {
