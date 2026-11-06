@@ -161,6 +161,13 @@ export class DesktopBridgeController {
   }
 
   getState(): DesktopDashboardState {
+    if (
+      this.bridgeStatus === 'running' &&
+      this.pairingView &&
+      Date.parse(this.pairingView.expiresAt) <= Date.now() + 5_000
+    ) {
+      this.refreshPairingCode();
+    }
     return {
       locale: this.locale,
       autoUpdate: this.autoUpdate,

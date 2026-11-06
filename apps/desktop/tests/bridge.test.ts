@@ -197,6 +197,15 @@ describe('desktop bridge composition', () => {
     expect(startedState.pairing?.qrUri).toContain('nienie://pair?data=');
     expect(startedState.pairing?.qrSvg).toContain('<svg');
 
+    // Automatically rotates pairing code when expired without manual click
+    const firstCode = startedState.pairing!.pairingCode;
+    (startedState.pairing as { expiresAt: string }).expiresAt = new Date(
+      Date.now() - 1000,
+    ).toISOString();
+    const autoRotated = controller.getState();
+    expect(autoRotated.pairing?.pairingCode).toMatch(/^\d{6}$/);
+    expect(autoRotated.pairing?.pairingCode).not.toBe(firstCode);
+
     // Switch to custom Relay via IPC
     const customRelayState = (await handlers.get(NIENIE_IPC_CHANNELS.SET_RELAY)?.({}, {
       mode: 'custom',
