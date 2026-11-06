@@ -1,5 +1,8 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { createAgentInfo, type AgentAdapter } from '@nienie/agent-events';
@@ -66,7 +69,9 @@ export class CodexAdapter implements AgentAdapter {
   private readonly activeProcesses = new Map<string, CodexProcessHandle>();
 
   constructor(options: CodexAdapterOptions = {}) {
-    this.executablePath = options.executablePath ?? process.env.NIENIE_CODEX_BIN ?? 'codex';
+    this.executablePath = resolveCodexBinary(
+      options.executablePath ?? process.env.NIENIE_CODEX_BIN,
+    );
     this.defaultProjectPath = options.defaultProjectPath ?? process.cwd();
     this.normalizer = new CodexEventNormalizer(options);
 
@@ -75,6 +80,7 @@ export class CodexAdapter implements AgentAdapter {
       (async () => {
         const { stdout } = await execFileAsync(this.executablePath, ['--version'], {
           timeout: 3000,
+          env: buildCodexEnv(),
         });
         return stdout.trim();
       });
@@ -85,6 +91,7 @@ export class CodexAdapter implements AgentAdapter {
         const child = spawn(this.executablePath, args, {
           cwd: spawnOpts.cwd || this.defaultProjectPath,
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: buildCodexEnv(),
         });
         return {
           stdout: child.stdout,
@@ -276,4 +283,77 @@ export class CodexAdapter implements AgentAdapter {
       updatedAt: record.updatedAt,
     };
   }
+}
+
+function resolveCodexBinary(explicit?: string): string {
+  if (explicit) return explicit;
+  const home = homedir();
+  const candidates = [
+    join(home, '.bun/bin/codex'),
+    join(home, '.local/bin/codex'),
+    '/opt/homebrew/bin/codex',
+    '/usr/local/bin/codex',
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return 'codex';
+}
+
+let cachedMacProxy: string | null | undefined;
+
+function detectMacSystemProxyUrl(): string | undefined {
+  if (cachedMacProxy !== undefined) {
+    return cachedMacProxy ?? undefined;
+  }
+  if (process.platform !== 'darwin') {
+    cachedMacProxy = null;
+    return undefined;
+  }
+  try {
+    const out = execFileSync('scutil', ['--proxy'], {
+      encoding: 'utf8',
+      timeout: 800,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const enabled = /HTTPEnable\s*:\s*1/.test(out);
+    const hostMatch = out.match(/HTTPProxy\s*:\s*([^\s\n]+)/);
+    const portMatch = out.match(/HTTPPort\s*:\s*(\d+)/);
+    if (enabled && hostMatch?.[1] && portMatch?.[1]) {
+      cachedMacProxy = `http://${hostMatch[1]}:${portMatch[1]}`;
+      return cachedMacProxy;
+    }
+  } catch {
+    // Ignore scutil errors
+  }
+  cachedMacProxy = null;
+  return undefined;
+}
+
+function buildCodexEnv(): NodeJS.ProcessEnv {
+  const home = homedir();
+  const extraPaths = [
+    join(home, '.bun/bin'),
+    join(home, '.local/bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
+  const currentPath = process.env.PATH ?? '';
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: [...extraPaths, currentPath].filter(Boolean).join(':'),
+  };
+
+  if (!env.https_proxy && !env.HTTPS_PROXY && !env.http_proxy && !env.HTTP_PROXY) {
+    const sysProxy = detectMacSystemProxyUrl();
+    if (sysProxy) {
+      env.http_proxy = sysProxy;
+      env.https_proxy = sysProxy;
+      env.HTTP_PROXY = sysProxy;
+      env.HTTPS_PROXY = sysProxy;
+    }
+  }
+  return env;
 }

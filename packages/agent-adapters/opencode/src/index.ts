@@ -1,3 +1,8 @@
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { createAgentInfo, type AgentAdapter } from '@nienie/agent-events';
 import type {
   AgentSession,
@@ -14,6 +19,7 @@ import { parseSseStream } from './sse.js';
 export { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
 export { parseSseStream } from './sse.js';
 
+const execFileAsync = promisify(execFile);
 const DEFAULT_OPENCODE_URL = 'http://127.0.0.1:4096';
 const DEFAULT_DETECT_TIMEOUT_MS = 2000;
 
@@ -30,6 +36,8 @@ const capabilities = {
 
 export type OpenCodeAdapterOptions = OpenCodeNormalizerOptions & {
   baseUrl?: string | undefined;
+  executablePath?: string | undefined;
+  autoStartServer?: boolean | undefined;
   username?: string | undefined;
   password?: string | undefined;
   directory?: string | undefined;
@@ -60,6 +68,8 @@ export class OpenCodeAdapter implements AgentAdapter {
   readonly capabilities = { ...capabilities };
 
   private readonly baseUrl: string;
+  private readonly executablePath: string;
+  private readonly autoStartServer: boolean;
   private readonly username: string;
   private readonly password: string | undefined;
   private readonly directory: string | undefined;
@@ -70,6 +80,7 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   private sseAbortController: AbortController | undefined;
   private sseLoopPromise: Promise<void> | undefined;
+  private managedServerProcess: ChildProcess | undefined;
 
   constructor(options: OpenCodeAdapterOptions = {}) {
     this.baseUrl = (
@@ -77,6 +88,12 @@ export class OpenCodeAdapter implements AgentAdapter {
       process.env.NIENIE_OPENCODE_URL ??
       DEFAULT_OPENCODE_URL
     ).replace(/\/+$/, '');
+    this.executablePath = resolveOpenCodeBinary(
+      options.executablePath ?? process.env.NIENIE_OPENCODE_BIN,
+    );
+    this.autoStartServer =
+      options.autoStartServer ??
+      (!options.baseUrl && !options.fetch && !process.env.NIENIE_OPENCODE_URL);
     this.username =
       options.username ??
       process.env.NIENIE_OPENCODE_USERNAME ??
@@ -91,6 +108,24 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async detect() {
+    const health = await this.checkHealth();
+    if (health.healthy) {
+      return createAgentInfo(this, true, health.version);
+    }
+
+    if (this.autoStartServer) {
+      const cliVersion = await this.detectCliVersion();
+      if (cliVersion) {
+        await this.ensureManagedServerRunning();
+        const afterStart = await this.checkHealth();
+        return createAgentInfo(this, true, afterStart.version ?? cliVersion);
+      }
+    }
+
+    return createAgentInfo(this, false);
+  }
+
+  private async checkHealth(): Promise<{ healthy: boolean; version?: string | undefined }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.detectTimeoutMs);
 
@@ -101,21 +136,71 @@ export class OpenCodeAdapter implements AgentAdapter {
         signal: controller.signal,
       });
       if (!response.ok) {
-        return createAgentInfo(this, false);
+        return { healthy: false };
       }
       const data = (await response.json()) as { healthy?: boolean; version?: string };
       if (!data?.healthy) {
-        return createAgentInfo(this, false);
+        return { healthy: false };
       }
-      return createAgentInfo(
-        this,
-        true,
-        typeof data.version === 'string' ? data.version : undefined,
-      );
+      return {
+        healthy: true,
+        version: typeof data.version === 'string' ? data.version : undefined,
+      };
     } catch {
-      return createAgentInfo(this, false);
+      return { healthy: false };
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  private async detectCliVersion(): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync(this.executablePath, ['--version'], {
+        timeout: 3000,
+        env: buildAugmentedEnv(),
+      });
+      const raw = stdout.trim();
+      if (!raw) return undefined;
+      const match = raw.match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/);
+      return match?.[1] ?? raw;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async ensureManagedServerRunning(): Promise<void> {
+    const current = await this.checkHealth();
+    if (current.healthy) return;
+
+    if (!this.managedServerProcess || this.managedServerProcess.killed) {
+      try {
+        const parsed = new URL(this.baseUrl);
+        const port = parsed.port || '4096';
+        const hostname = parsed.hostname || '127.0.0.1';
+        const child = spawn(
+          this.executablePath,
+          ['serve', '--pure', '--port', port, '--hostname', hostname],
+          {
+            cwd: this.directory || process.cwd(),
+            stdio: 'ignore',
+            env: buildAugmentedEnv(),
+          },
+        );
+        child.once('exit', () => {
+          if (this.managedServerProcess === child) {
+            this.managedServerProcess = undefined;
+          }
+        });
+        this.managedServerProcess = child;
+      } catch {
+        return;
+      }
+    }
+
+    for (let i = 0; i < 12; i++) {
+      await new Promise((r) => setTimeout(r, 220));
+      const check = await this.checkHealth();
+      if (check.healthy) return;
     }
   }
 
@@ -162,6 +247,9 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {
+    if (this.autoStartServer) {
+      await this.ensureManagedServerRunning();
+    }
     const query = input.projectPath ? { directory: input.projectPath } : undefined;
     const body: Record<string, unknown> = {};
     if (input.title) body.title = input.title;
@@ -194,6 +282,9 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async sendMessage(sessionId: string, message: string): Promise<void> {
+    if (this.autoStartServer) {
+      await this.ensureManagedServerRunning();
+    }
     if (!this.sseAbortController) {
       await this.connectEvents().catch(() => undefined);
     }
@@ -313,6 +404,10 @@ export class OpenCodeAdapter implements AgentAdapter {
     if (this.sseLoopPromise) {
       await this.sseLoopPromise.catch(() => undefined);
       this.sseLoopPromise = undefined;
+    }
+    if (this.managedServerProcess) {
+      this.managedServerProcess.kill('SIGTERM');
+      this.managedServerProcess = undefined;
     }
     this.listeners.clear();
   }
@@ -436,4 +531,36 @@ function toIsoTimestamp(value?: number | string): string {
     }
   }
   return new Date(0).toISOString();
+}
+
+function resolveOpenCodeBinary(explicit?: string): string {
+  if (explicit) return explicit;
+  const home = homedir();
+  const candidates = [
+    join(home, '.bun/bin/opencode'),
+    join(home, '.local/bin/opencode'),
+    '/opt/homebrew/bin/opencode',
+    '/usr/local/bin/opencode',
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return 'opencode';
+}
+
+function buildAugmentedEnv(): NodeJS.ProcessEnv {
+  const home = homedir();
+  const extraPaths = [
+    join(home, '.bun/bin'),
+    join(home, '.local/bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
+  const currentPath = process.env.PATH ?? '';
+  return {
+    ...process.env,
+    PATH: [...extraPaths, currentPath].filter(Boolean).join(':'),
+  };
 }

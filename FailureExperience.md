@@ -464,6 +464,36 @@ UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口�
 1. 必须遵循「Label ABOVE Input」原则，严禁把 20 字以上的长说明塞进 `hintText` / `placeholder`。
 2. 凡是 URL / URI / 路径输入框或文字超过 4 个字的按钮，必须采用纵向堆叠的全宽布局（Full-width Stacked），严禁把长输入框和宽按钮挤在同一水平 `Row` 中。
 
+## 2026-11-06 本机已安装 `opencode` 却显示「未安装」，且手机端向 `Codex` 发送对话后无响应
+
+### 问题
+
+1. 用户电脑已安装 `/Users/ponponon/.bun/bin/opencode`（`1.19.5`），但桌面端与手机端均显示 `OpenCode` 为「未安装」（不可用灰点）。
+2. 用户在手机端连接后向 `Codex Workspace` 发送对话，长时间收不到任何回复。
+
+### 根因
+
+1. **OpenCode 仅探测了 HTTP 端口而未自动拉起服务**：`OpenCodeAdapter.detect()` 仅请求了 `http://127.0.0.1:4096/global/health`，未检查 `~/.bun/bin/opencode` CLI 是否存在，也未在 `4096` 端口未启动时自动执行 `opencode serve --pure --port 4096 --hostname 127.0.0.1`。
+2. **Codex 子进程缺失 macOS 系统代理环境变量**：`codex exec` 使用 Rust `reqwest`/WebSocket 直连 OpenAI，不会自动读取 macOS 的 `scutil --proxy` 系统代理设置。当用户未在终端手动 `export https_proxy` 时，`codex exec` 因直连被墙报 `Connection reset by peer (os error 54)` 并陷入 5 次重连超时。
+3. **手机端输入框缺失 `onSubmitted` 回调**：Flutter `TextField(input-session-prompt)` 未配置 `textInputAction: TextInputAction.send` 与 `onSubmitted`，导致用户按手机输入法键盘右下角的「发送/回车」键时不会触发 `client.sendMessage()`。
+
+### 影响
+
+用户本机明明安装了 OpenCode 却无法使用，且在手机端发消息给 Codex 无响应。
+
+### 修复
+
+1. **`OpenCodeAdapter` 自动发现与自启动**：自动搜索 `~/.bun/bin/opencode`、`~/.local/bin/opencode`、`/opt/homebrew/bin/opencode`，当 `127.0.0.1:4096` 未监听时自动后台拉起 `opencode serve --pure --port 4096 --hostname 127.0.0.1` 并等待 `/global/health` 就绪。
+2. **`CodexAdapter` 自动注入 macOS 系统代理**：在 `darwin` 平台下通过 `scutil --proxy` 自动读取已启用的系统代理（如 `http://127.0.0.1:10902`）注入 `codex exec` 子进程的 `http_proxy` / `https_proxy` 环境变量。
+3. **手机端软键盘发送支持与 Agent 快速切换**：为 `input-session-prompt` 补齐 `TextInputAction.send` 与 `onSubmitted` 回调，并支持点击顶部 Agent 芯片直接切换到对应 Agent 的会话。
+
+### 预防措施
+
+1. 依赖本地 HTTP 守护进程的 CLI Agent（如 OpenCode），适配器必须在检测到 CLI 二进制存在但端口未监听时自动拉起后台 `serve` 进程，严禁要求用户手动去终端先跑一个守护进程。
+2. 在中国大陆开发环境下，桌面主进程 spawn 任何需访问外网 API 的 CLI 工具（如 `codex`、`claude`）时，若环境变量未显式配置代理，必须自动从 `scutil --proxy` 读取系统代理并注入子进程 `env`。
+3. 移动端所有聊天/指令输入框必须同时支持「右侧发送按钮点击」与「软键盘 `TextInputAction.send` + `onSubmitted` 回车发送」。
+
+
 
 
 

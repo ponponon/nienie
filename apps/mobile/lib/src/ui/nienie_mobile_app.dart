@@ -259,7 +259,15 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                 ),
                               ],
                             ),
-                            onPressed: () => client.loadModels(agent.id),
+                            onPressed: () {
+                              client.loadModels(agent.id);
+                              final match = client.sessions
+                                  .where((s) => s.agentId == agent.id)
+                                  .firstOrNull;
+                              if (match != null && client.activeSession?.id != match.id) {
+                                client.openSession(match);
+                              }
+                            },
                           );
                         },
                       ),
@@ -434,6 +442,13 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     child: TextField(
                       key: const Key('input-session-prompt'),
                       controller: _promptController,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (value) {
+                        final text = value.trim();
+                        if (text.isEmpty) return;
+                        _promptController.clear();
+                        client.sendMessage(text);
+                      },
                       style: const TextStyle(fontSize: 13.5, color: _textPrimary),
                       decoration: InputDecoration(
                         hintText: client.strings.promptHint,
