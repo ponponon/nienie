@@ -364,70 +364,103 @@ class _PairingPanelState extends State<PairingPanel> {
         ),
         if (_showAdvanced)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: _cardDecoration(),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                TextField(
-                  key: const Key('input-ws-url'),
-                  controller: widget.wsUrlController,
+                Text(
+                  s.wsUrlLabel,
                   style: const TextStyle(
-                    fontSize: 13,
-                    fontFamily: 'monospace',
-                    color: _textPrimary,
-                  ),
-                  decoration: InputDecoration(
-                    labelText: s.wsUrlLabel,
-                    labelStyle: const TextStyle(fontSize: 12, color: _textSecondary),
-                    border: InputBorder.none,
-                    isDense: true,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: _textSecondary,
                   ),
                 ),
-                const Divider(height: 1, color: _dividerColor),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          key: const Key('input-qr-uri'),
-                          controller: widget.qrUriController,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontFamily: 'monospace',
-                            color: _textPrimary,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: s.qrUriLabel,
-                            hintStyle: const TextStyle(fontSize: 12, color: _textSecondary),
-                            border: InputBorder.none,
-                            isDense: true,
-                          ),
-                        ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF6F7F9),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0x12000000)),
+                  ),
+                  child: TextField(
+                    key: const Key('input-ws-url'),
+                    controller: widget.wsUrlController,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontFamily: 'monospace',
+                      color: _textPrimary,
+                    ),
+                    decoration: const InputDecoration(
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Divider(height: 1, color: _dividerColor),
+                ),
+                Text(
+                  s.qrUriLabel,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: _textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF6F7F9),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0x12000000)),
+                  ),
+                  child: TextField(
+                    key: const Key('input-qr-uri'),
+                    controller: widget.qrUriController,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontFamily: 'monospace',
+                      color: _textPrimary,
+                    ),
+                    decoration: const InputDecoration(
+                      hintText: 'nienie://pair?data=...',
+                      hintStyle: TextStyle(
+                        fontSize: 12.5,
+                        fontFamily: 'monospace',
+                        color: _textSecondary,
                       ),
-                      SizedBox(
-                        height: 30,
-                        child: OutlinedButton(
-                          key: const Key('btn-pair-qr-uri'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _textPrimary,
-                            side: const BorderSide(color: _btnBorderColor),
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(7),
-                            ),
-                          ),
-                          onPressed: () {
-                            client.pairWithQrUri(widget.qrUriController.text);
-                          },
-                          child: Text(
-                            s.pairWithQrBtn,
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                          ),
-                        ),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: 36,
+                  child: OutlinedButton.icon(
+                    key: const Key('btn-pair-qr-uri'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _textPrimary,
+                      side: const BorderSide(color: _btnBorderColor),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    ],
+                    ),
+                    onPressed: () {
+                      client.pairWithQrUri(widget.qrUriController.text);
+                    },
+                    icon: const Icon(LucideIcons.link, size: 14, color: _textSecondary),
+                    label: Text(
+                      s.pairWithQrBtn,
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
+                    ),
                   ),
                 ),
               ],

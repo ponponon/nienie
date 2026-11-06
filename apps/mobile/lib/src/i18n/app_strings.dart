@@ -54,10 +54,10 @@ class NienieStrings {
       };
 
   String get scanQrHint => switch (lang) {
-        AppLanguage.zh => '将电脑端二维码放入框内即可自动连接',
-        AppLanguage.en => 'Align the desktop QR code within the frame',
-        AppLanguage.ja => 'PC の QR コードを枠内に合わせてください',
-        AppLanguage.ko => '컴퓨터의 QR 코드를 프레임 안에 맞춰주세요',
+        AppLanguage.zh => '对准电脑二维码即可自动配对',
+        AppLanguage.en => 'Point camera at desktop QR code',
+        AppLanguage.ja => 'PCのQRコードをスキャン',
+        AppLanguage.ko => '컴퓨터 QR 코드를 스캔하세요',
       };
 
   String get emptyPairingCodeError => switch (lang) {
