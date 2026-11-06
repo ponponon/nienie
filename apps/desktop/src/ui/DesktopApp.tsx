@@ -96,6 +96,14 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
         // Ignore network errors
       }
     };
+
+    const pollTimer = window.setInterval(() => {
+      void window.__NIENIE_REFRESH_STATE__?.();
+    }, 2500);
+
+    return () => {
+      window.clearInterval(pollTimer);
+    };
   }, []);
 
   const handleTabChange = (nextTab: string) => {

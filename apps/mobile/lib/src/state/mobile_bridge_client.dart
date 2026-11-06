@@ -86,29 +86,13 @@ class MobileBridgeClient extends ChangeNotifier {
     String platform = 'ios',
   }) async {
     final payload = PairingQrPayload.decode(qrUri);
-    try {
-      await pairAndConnect(
-        wsUrl: payload.wsUrl,
-        pairingCode: payload.pairingCode,
-        deviceName: deviceName,
-        platform: platform,
-      );
-    } catch (_) {
-      final parsedUri = Uri.tryParse(payload.wsUrl);
-      if (parsedUri != null &&
-          parsedUri.host != '127.0.0.1' &&
-          parsedUri.host != 'localhost' &&
-          parsedUri.hasPort) {
-        await pairAndConnect(
-          wsUrl: 'ws://127.0.0.1:${parsedUri.port}',
-          pairingCode: payload.pairingCode,
-          deviceName: deviceName,
-          platform: platform,
-        );
-      } else {
-        rethrow;
-      }
-    }
+    await pairAndConnect(
+      wsUrl: payload.wsUrl,
+      pairingCode: payload.pairingCode,
+      deviceName: deviceName,
+      platform: platform,
+      allowLocalhostFallback: true,
+    );
   }
 
   Future<void> pairAndConnect({
@@ -116,6 +100,7 @@ class MobileBridgeClient extends ChangeNotifier {
     required String pairingCode,
     String deviceName = 'Nienie Flutter Mobile',
     String platform = 'ios',
+    bool allowLocalhostFallback = false,
   }) async {
     if (pairingCode.trim().isEmpty) {
       connectionState = BridgeConnectionState.error;
@@ -128,8 +113,24 @@ class MobileBridgeClient extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
 
+    String effectiveWsUrl = wsUrl;
     try {
-      await transport.connect(wsUrl);
+      try {
+        await transport.connect(wsUrl);
+      } catch (_) {
+        final parsedUri = Uri.tryParse(wsUrl);
+        if (allowLocalhostFallback &&
+            parsedUri != null &&
+            parsedUri.host != '127.0.0.1' &&
+            parsedUri.host != 'localhost' &&
+            parsedUri.hasPort) {
+          effectiveWsUrl = 'ws://127.0.0.1:${parsedUri.port}';
+          await transport.connect(effectiveWsUrl);
+        } else {
+          rethrow;
+        }
+      }
+
       final res = await transport.sendRequest({
         'type': 'pair.confirm',
         'requestId': _nextRequestId(),
@@ -147,7 +148,7 @@ class MobileBridgeClient extends ChangeNotifier {
       await credentialStore.save(
         SavedDeviceCredential(
           machineId: data['machineId'] as String,
-          wsUrl: wsUrl,
+          wsUrl: effectiveWsUrl,
           deviceId: data['deviceId'] as String,
           deviceToken: data['deviceToken'] as String,
         ),

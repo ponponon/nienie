@@ -519,6 +519,34 @@ UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口�
 1. 在 macOS/Linux 上探测 Node 生态 CLI 工具时，除常规 `PATH`、`~/.bun/bin`、`/opt/homebrew/bin` 外，必须遍历 `~/.nvm/versions/node/*/bin` 以兼容多 Node 版本环境。
 2. 面向用户的 UI 列表只允许展示真实可感知的软件产品名称与官方 Logo，严禁把内部抽象协议层（如 ACP、PTY Fallback、JSON-RPC）直接暴露在产品列表中。
 
+## 2026-11-06 一次性配对码被消费或满 5 分钟过期后桌面二维码未自动轮换，导致再次扫码报 `Pairing code is invalid or expired`
+
+### 问题
+
+用户在手机端扫码连接或重启 `pnpm start` 后再次扫码，出现 `Bad state: Pairing code is invalid or expired`（配对码 `693061` 失效）。
+
+### 根因
+
+1. **一次性配对码消费后桌面未自动刷新二维码**：`PairingManager.confirmPairing()` 采用严格的一次性消费策略（验证通过后立即 `this.pendingCodes.delete(code)`），但未通知 `DesktopBridgeController` 生成新配对码，导致桌面窗口上继续展示已经被用掉的旧二维码。
+2. **默认 5 分钟 TTL 过短**：`DEFAULT_PAIRING_TTL_MS` 仅设了 5 分钟（`693061` 在 `16:06:08` 生成、`16:11:08` 过期），桌面窗口常驻超过 5 分钟后二维码即静默失效。
+3. **`pairWithQrUri` 的 `catch (_)` 范围过大**：移动端 `pairWithQrUri` 将整个 `pairAndConnect` 包在 `try/catch` 中，若局域网建连并消费了配对码后后续步骤抛错，又去 `127.0.0.1` 用同一个一次性配对码发起第二次 `pair.confirm`，必然报配对码无效。
+4. **`DesktopBridgeController` 未向 `PairingManager` 传入 `persistenceFilePath`**：导致每次 `Ctrl+C` 重启 `pnpm start` 后，之前已配对手机的 `deviceToken` 记录丢失。
+
+### 影响
+
+用户只要扫过一次码，或者桌面窗口开着超过 5 分钟，再拿手机扫屏幕上的二维码就会报 `Pairing code is invalid or expired`。
+
+### 修复
+
+1. 在 `PairingManager` 中增加 `onDevicePaired` 事件回调，当配对码被消费时，`DesktopBridgeController` 自动立即调用 `refreshPairingCode()` 生成新二维码，且桌面端 React 组件每 2.5s 自动同步最新状态。
+2. 将 `DEFAULT_PAIRING_TTL_MS` 提升至 24 小时，并为 `DesktopBridgeController` 的 `PairingManager` 传入 `.nienie/paired-devices.json` 持久化路径。
+3. 缩小移动端 `pairWithQrUri` 的回退捕获范围：仅当 `transport.connect(wsUrl)` 网络连接本身失败时才回退尝试 `127.0.0.1`，绝不在 `pair.confirm` 之后重复提交一次性配对码。
+
+### 预防措施
+
+凡是采用「一次性消费（One-time Token/Code）」机制的二维码界面，服务端在 Token 被消费或过期的瞬间必须自动生成新 Token 并推送给 UI 刷新二维码，严禁在屏幕上继续展示已核销作废的旧二维码。
+
+
 
 
 

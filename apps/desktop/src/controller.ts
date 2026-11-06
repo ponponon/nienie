@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname, networkInterfaces } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import qrcode from 'qrcode-generator';
 import type { CodexAdapterOptions } from '@nienie/adapter-codex';
 import type { OpenCodeAdapterOptions } from '@nienie/adapter-opencode';
@@ -136,6 +136,14 @@ export class DesktopBridgeController {
     this.pairingManager = new PairingManager({
       machineId: this.machineId,
       relayUrl: this.getActiveRelayUrl(),
+      ...(this.preferencesFilePath
+        ? { persistenceFilePath: join(dirname(this.preferencesFilePath), 'paired-devices.json') }
+        : {}),
+    });
+
+    this.pairingManager.onDevicePaired((device) => {
+      this.appendLog('info', `Paired mobile device ${device.deviceName} (${device.deviceId})`);
+      this.refreshPairingCode();
     });
 
     this.unsubscribeEvents = this.registry.onEvent((event) => {
