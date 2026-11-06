@@ -346,5 +346,18 @@ describe('desktop bridge composition', () => {
     const startedState = (await startRes.json()) as ReturnType<DesktopBridgeController['getState']>;
     expect(startedState.bridge.status).toBe('running');
     expect(startedState.pairing?.pairingCode).toMatch(/^\d{6}$/);
+
+    // 3. POST /api/ipc supports reactive locale switching without full-page reload
+    const localeRes = await fetch(`${url}/api/ipc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        channel: NIENIE_IPC_CHANNELS.SET_LOCALE,
+        args: ['en'],
+      }),
+    });
+    expect(localeRes.status).toBe(200);
+    const localeState = (await localeRes.json()) as ReturnType<DesktopBridgeController['getState']>;
+    expect(localeState.locale).toBe('en');
   });
 });

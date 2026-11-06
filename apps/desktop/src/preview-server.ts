@@ -157,7 +157,9 @@ export class DesktopPreviewServer {
           body: JSON.stringify({ channel, args }),
         });
         const data = await res.json();
-        window.location.reload();
+        if (!res.ok) {
+          throw new Error((data && data.error) || 'IPC call failed');
+        }
         return data;
       };
       window.nienieDesktop = ${ JSON.stringify(Object.keys(createDesktopPreloadApi({ invoke: async () => ({}) }))) }.reduce((acc, method) => {
@@ -168,6 +170,7 @@ export class DesktopPreviewServer {
           refreshAgents: 'desktop:refresh-agents',
           refreshPairing: 'desktop:refresh-pairing',
           setRelay: 'desktop:set-relay',
+          setLocale: 'desktop:set-locale',
           setMachineName: 'desktop:set-machine-name',
           setAutoUpdate: 'desktop:set-auto-update',
           revokeDevice: 'desktop:revoke-device',
@@ -187,6 +190,22 @@ export class DesktopPreviewServer {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(this.controller.getState()));
       return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/assets/desktop-client.js') {
+      const candidates = [
+        resolve(process.cwd(), 'apps/desktop/dist/desktop-client.js'),
+        resolve(process.cwd(), 'dist/desktop-client.js'),
+      ];
+      const found = candidates.find((p) => existsSync(p));
+      if (found) {
+        res.writeHead(200, {
+          'content-type': 'application/javascript; charset=utf-8',
+          'cache-control': 'no-cache',
+        });
+        res.end(readFileSync(found));
+        return;
+      }
     }
 
     if (req.method === 'GET' && url.pathname === '/assets/wechat-appreciate.jpg') {

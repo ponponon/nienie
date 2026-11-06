@@ -361,3 +361,83 @@ UI 迭代反馈链路割裂，每次微调都需要手动重启进程与窗口�
 ### 预防措施
 
 所有 GUI 开发启动命令（如 `pnpm start`）必须默认开启文件监听与 UI 热更新（Hot Reload / Live Reload），避免要求用户在开发调试阶段反复手动重启进程。
+
+## 2026-11-06 桌面端使用原始 HTML 字符串拼接与整页刷新导致界面呈现廉价感
+
+### 问题
+
+早期桌面端（`apps/desktop/src/renderer.ts`）未按照架构设计使用 React 与现代组件原语，而是直接手写 HTML 字符串拼接、简陋的原生 `<select>` / `<button>`，并在每次 IPC 调用后执行 `window.location.reload()` 整页刷新，导致视觉粗糙、交互生硬且伴随整页白屏闪烁。
+
+### 根因
+
+为图原型省事跳过了 React 19 组件化与成熟的无头 UI 组件库（Radix UI / shadcn 风格 + Lucide 图标库 + Sonner Toast），用静态模板字符串代替了响应式状态树。
+
+### 影响
+
+用户直观感受到桌面端 UI 粗糙劣质，下拉菜单、开关、弹窗与状态反馈缺乏现代 macOS 桌面应用应有的细腻质感。
+
+### 修复
+
+1. 在 `apps/desktop` 中引入 `react` 19、`react-dom`、`lucide-react`、`sonner` 及 `@radix-ui/react-tabs`、`@radix-ui/react-switch`、`@radix-ui/react-select`、`@radix-ui/react-collapsible`、`@radix-ui/react-dialog`。
+2. 重构为 `DesktopApp.tsx` 响应式组件树，结合 `renderToString` SSR 首屏直出与 `/assets/desktop-client.js` 客户端激活。
+3. 移除 `preview-server.ts` 中 IPC 调用后的 `window.location.reload()`，所有开关、语言切换、配对码刷新、Relay 配置与本机重命名均通过 React 状态在 0ms 内原地无感更新并触发 `sonner` Toast 反馈。
+
+### 预防措施
+
+桌面端与前端界面严禁使用原始 HTML 字符串拼接和 `window.location.reload()` 充当状态更新；必须使用 React + Radix UI / shadcn 原语 + 统一矢量图标库（Lucide / Phosphor）构建真正的响应式组件树。
+
+## 2026-11-06 子页面 `min-height: calc(100vh - 48px)` 未扣除父容器上下内边距总和（`58px`）导致无故出现纵向滚动条
+
+### 问题
+
+在「升级和反馈」页面未展开折叠项、内容高度远小于窗口高度的情况下，右侧画布依然出现了一条几乎占满全高的纵向滚动条；同时应用图标 SVG 路径误写成了五笔折线（显示为字母 `M` 而非 `N`）。
+
+### 根因
+
+1. 外层 `.wetype-shell` 有上下 `padding: 12px`（共 `24px`），内层 `.wetype-main` 有 `padding-top: 10px; padding-bottom: 24px;`（共 `34px`），两层容器垂直内边距总和为 `24 + 34 = 58px`，而 `.about-pane-inner` 设置了 `min-height: calc(100vh - 48px)`，比可用内容高度多出了 `10px`，触发了 `.wetype-main` 的 `overflow-y: auto` 滚动条。
+2. SVG 折线坐标写成了 `M15 33V17L25 29.5L35 17V33`（5 个顶点的 `M`），而非 4 个顶点的 `N`（`M17 33V17L33 33V17`）。
+
+### 影响
+
+页面明明内容很少却挂着一条多余的滚动条，破坏了桌面原生设置界面的精致感。
+
+### 修复
+
+1. 将 `.about-pane-inner` 的 `min-height` 修正为 `calc(100vh - 64px)`（小于 `100vh - 58px` 可用净高），消除静态溢出滚动条，同时保持底部版权区 `margin-top: auto` 贴底。
+2. 将应用图标 SVG 路径修正为标准字母 `N`（`M17 33V17L33 33V17`）。
+
+### 预防措施
+
+在使用 `calc(100vh - Xpx)` 计算子容器 `min-height` 时，必须精确累加所有祖先容器的上下 `padding` + `border` 总和并留出安全余量，严禁凭感觉估算扣除值导致产生几像素的幽灵滚动条。
+
+## 2026-11-06 使用通用符号图标（`>_`、`</>`、`⌘`）代替各 AI Agent 真实官方品牌 Logo
+
+### 问题
+
+在「本机 AI 助手」列表中，为 Codex、OpenCode、Claude Code、Pi、ACP、OpenClaw 等具体 AI 产品使用了 `lucide-react` 的通用符号图标（如 `Terminal`、`Code2`、`Command`），导致多个不同 Agent 显示相同的 `⌘` 符号，缺乏品牌辨识度与真实产品感。
+
+### 根因
+
+直接从通用 UI 图标库（Lucide）中找近义符号充当品牌 Logo，而未引入专门的 AI 品牌图标库（`@lobehub/icons-static-svg`）及本地开源仓库（`/Users/ponponon/Desktop/code/me/github/opencode`）中的官方品牌 SVG。
+
+### 影响
+
+用户一眼看出图标不是真实的 Agent 官方 Logo，显得山寨且难以快速区分不同 Agent。
+
+### 修复
+
+1. 引入 `@lobehub/icons-static-svg` 并提取官方品牌矢量图标：
+   - **Codex**：使用 `@lobehub/icons-static-svg/icons/codex-color.svg`（OpenAI Codex 官方蓝紫渐变云朵终端标志）
+   - **OpenCode**：使用 `/Users/ponponon/Desktop/code/me/github/opencode` 官方仓库中的双色几何方块 Logo（`opencode-logo-light-square.svg`）
+   - **Claude Code**：使用 `@lobehub/icons-static-svg/icons/claudecode-color.svg`（Anthropic Claude Code 官方陶土橙像素标志）
+   - **OpenClaw**：使用 `@lobehub/icons-static-svg/icons/openclaw-color.svg`（OpenClaw 官方红色龙虾标志）
+   - **Pi**：使用 `@lobehub/icons-static-svg/icons/pi.svg`（Pi 官方几何字母标志）
+   - **ACP Agent**：使用 `@lobehub/icons-static-svg/icons/mcp.svg`（协议互联标志）
+2. 将图标底框改为纯白圆角应用图标底座（`.agent-brand-box`），避免底色污染官方品牌本色。
+
+### 预防措施
+
+凡是展示具体第三方产品、AI 模型或编程 Agent（如 OpenCode、Codex、Claude Code、OpenClaw、Pi 等），必须使用 `@lobehub/icons-static-svg`、`simple-icons` 或官方仓库中的真实品牌 SVG Logo，严禁拿通用 UI 图标（如 `⌘`、`</>`、星星）敷衍代替。
+
+
+

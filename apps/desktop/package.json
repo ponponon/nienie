@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lobehub/icons-static-svg": "^1.102.0",
     "@nienie/adapter-acp": "workspace:*",
     "@nienie/adapter-claude-code": "workspace:*",
     "@nienie/adapter-codex": "workspace:*",
@@ -17,9 +18,21 @@
     "@nienie/adapter-pi": "workspace:*",
     "@nienie/adapter-pty": "workspace:*",
     "@nienie/bridge-core": "workspace:*",
-    "qrcode-generator": "^2.0.4"
+    "@radix-ui/react-collapsible": "^1.2.1",
+    "@radix-ui/react-dialog": "^1.3.1",
+    "@radix-ui/react-select": "^2.4.1",
+    "@radix-ui/react-switch": "^1.4.1",
+    "@radix-ui/react-tabs": "^1.2.1",
+    "@radix-ui/react-tooltip": "^1.4.1",
+    "lucide-react": "^1.69.0",
+    "qrcode-generator": "^2.0.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "sonner": "^2.0.8"
   },
   "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "electron": "^45.2.2"
   }
 }
