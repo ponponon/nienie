@@ -237,6 +237,9 @@
 - 移动端启动自动重连与 Bridge 重启断线自动恢复（`loadSavedPreferences(autoReconnect: true)` & `transport.disconnected` in `apps/mobile`）：
   - App 启动时若本地存在已保存电脑凭据（`deviceToken`），自动静默发起 `hello` 免扫码重连（并在局域网 IP 变化时自动回退尝试 `127.0.0.1` USB 通道）
   - 当电脑端重启 `pnpm start` 导致 WebSocket 断开时，`IoBridgeTransport` 触发 `transport.disconnected` 并自动后台重试 `reconnectWithSavedCredential` 恢复连接，无需用户重新扫码
+- 历史会话聊天记录同步回放与空会话自动创建（`emitSqliteSessionHistory` / `emitCodexThreadHistory` in `packages/agent-adapters/*` & `openSession` / `sendMessage` in `apps/mobile`）：
+  - 在手机端抽屉点击 OpenCode、MiMo Code 或 Codex 的任意历史会话时，`loadSession` 自动从本机 `opencode.db`、`mimocode.db`（`part JOIN message`）及 `thread_history_*.sqlite`（`thread_items`）读取过往的用户提问、Agent 回复与工具调用记录并渲染到手机主对话页面
+  - 主对话页面底部 `R22` 输入舱常驻显示，当在空白新对话状态下直接输入指令发送时，自动创建当前选中 Agent 的新会话并发送消息
 
 ## MVP 规划
 

@@ -516,6 +516,11 @@ class MobileBridgeClient extends ChangeNotifier {
     } else {
       activeSession = session;
     }
+    if ((_timelineBySession[session.id] ?? const []).isEmpty) {
+      try {
+        await replayMissedEvents(session.id);
+      } catch (_) {}
+    }
     notifyListeners();
   }
 
@@ -532,10 +537,20 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   Future<void> sendMessage(String text) async {
-    final current = activeSession;
-    if (current == null || text.trim().isEmpty) return;
-
     final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+
+    AgentSession? current = activeSession;
+    if (current == null) {
+      final targetAgent = selectedAgentId.isNotEmpty
+          ? selectedAgentId
+          : (agents.where((a) => a.available).firstOrNull?.id ?? 'opencode');
+      current = await createSession(
+        agentId: targetAgent,
+        title: trimmed.length > 28 ? trimmed.substring(0, 28) : trimmed,
+      );
+    }
+
     final items = _timelineBySession.putIfAbsent(current.id, () => []);
     items.add(UserPromptItem(trimmed));
     notifyListeners();
@@ -615,6 +630,11 @@ class MobileBridgeClient extends ChangeNotifier {
       case 'text_delta':
         final delta = event.payload['delta'] as String? ?? '';
         if (delta.isEmpty) break;
+        final role = event.payload['role'] as String?;
+        if (role == 'user') {
+          items.add(UserPromptItem(delta));
+          break;
+        }
         if (items.isNotEmpty &&
             items.last is StreamingTextItem &&
             !(items.last as StreamingTextItem).isThinking) {

@@ -403,11 +403,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
               : SessionTimelineList(client: client, session: active),
         ),
 
-        // Kelivo 1:1 Floating Two-Deck Rounded Composer Capsule (R22)
-        if (active != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
-            child: Container(
+        // Kelivo 1:1 Floating Two-Deck Rounded Composer Capsule (R22, always visible)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+          child: Container(
               padding: const EdgeInsets.fromLTRB(14, 10, 10, 8),
               decoration: BoxDecoration(
                 color: const Color(0xFFF3F4F6),

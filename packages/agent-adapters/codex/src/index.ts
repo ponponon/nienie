@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
-import { createAgentInfo, type AgentAdapter } from '@nienie/agent-events';
+import { createAgentInfo, createCanonicalEvent, type AgentAdapter } from '@nienie/agent-events';
 import type {
   AgentSession,
   CanonicalAgentEvent,
@@ -68,7 +68,9 @@ export class CodexAdapter implements AgentAdapter {
   private readonly sessions = new Map<string, CodexSessionRecord>();
   private readonly activeProcesses = new Map<string, CodexProcessHandle>();
   private readonly discoverLocalHistory: boolean;
+  private readonly loadedHistoryThreads = new Set<string>();
   private historyLoaded = false;
+  private historySeqCounter = 0;
 
   constructor(options: CodexAdapterOptions = {}) {
     this.executablePath = resolveCodexBinary(
@@ -198,6 +200,10 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async loadSession(sessionId: string): Promise<AgentSession> {
+    if (this.discoverLocalHistory && !this.loadedHistoryThreads.has(sessionId)) {
+      this.loadedHistoryThreads.add(sessionId);
+      this.emitCodexThreadHistory(sessionId);
+    }
     const existing = this.sessions.get(sessionId);
     if (existing) {
       return this.toAgentSession(existing);
@@ -216,6 +222,96 @@ export class CodexAdapter implements AgentAdapter {
     };
     this.sessions.set(sessionId, resumed);
     return this.toAgentSession(resumed);
+  }
+
+  private emitCodexThreadHistory(sessionId: string): void {
+    if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) return;
+    const codexDir = join(homedir(), '.codex');
+    const historyDb = resolveLatestVersionedSqlite(codexDir, 'thread_history');
+    if (!historyDb) return;
+
+    try {
+      const sql = `SELECT item_id, item_type, item_json FROM thread_items WHERE thread_id = '${sessionId}' ORDER BY rollout_ordinal ASC LIMIT 80;`;
+      const out = execFileSync('sqlite3', ['-json', historyDb, sql], {
+        encoding: 'utf8',
+        timeout: 2000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const rows = JSON.parse(out || '[]') as Array<{
+        item_id?: string;
+        item_type?: string;
+        item_json?: string;
+      }>;
+      for (const row of rows) {
+        if (!row.item_json) continue;
+        try {
+          const item = JSON.parse(row.item_json) as {
+            id?: string;
+            type?: string;
+            text?: string;
+            command?: string;
+            content?: Array<{ type?: string; text?: string }>;
+          };
+          if (row.item_type === 'userMessage') {
+            const text = (item.content ?? [])
+              .map((c) => c.text ?? '')
+              .join('')
+              .trim();
+            if (text) {
+              this.emitEvent(
+                createCanonicalEvent({
+                  eventId: `cx_hist_${randomUUID()}`,
+                  agentId: 'codex',
+                  sessionId,
+                  sequence: ++this.historySeqCounter,
+                  timestamp: new Date().toISOString(),
+                  type: 'text_delta',
+                  payload: { delta: text, role: 'user' },
+                }),
+              );
+            }
+          } else if (row.item_type === 'agentMessage' && item.text?.trim()) {
+            this.emitEvent(
+              createCanonicalEvent({
+                eventId: `cx_hist_${randomUUID()}`,
+                agentId: 'codex',
+                sessionId,
+                sequence: ++this.historySeqCounter,
+                timestamp: new Date().toISOString(),
+                type: 'text_delta',
+                payload: { delta: `${item.text.trim()}\n` },
+              }),
+            );
+          } else if (row.item_type === 'commandExecution' && item.command) {
+            this.emitEvent(
+              createCanonicalEvent({
+                eventId: `cx_hist_${randomUUID()}`,
+                agentId: 'codex',
+                sessionId,
+                sequence: ++this.historySeqCounter,
+                timestamp: new Date().toISOString(),
+                type: 'tool_use',
+                payload: {
+                  toolCallId: item.id || row.item_id || `cmd_${++this.historySeqCounter}`,
+                  name: 'bash',
+                  input: { command: item.command },
+                },
+              }),
+            );
+          }
+        } catch {
+          // Ignore malformed item_json
+        }
+      }
+    } catch {
+      // Ignore sqlite history read errors
+    }
+  }
+
+  private emitEvent(event: CanonicalAgentEvent): void {
+    for (const listener of this.listeners) {
+      listener(event);
+    }
   }
 
   async sendMessage(sessionId: string, message: string): Promise<void> {
@@ -358,13 +454,21 @@ function resolveCodexBinary(explicit?: string): string {
 }
 
 function resolveLatestCodexStateDb(codexDir: string): string | undefined {
+  return resolveLatestVersionedSqlite(codexDir, 'state');
+}
+
+function resolveLatestVersionedSqlite(
+  codexDir: string,
+  prefix: string,
+): string | undefined {
   if (!existsSync(codexDir)) return undefined;
+  const pattern = new RegExp(`^${prefix}(?:_(\\d+))?\\.sqlite$`);
   try {
     const candidates = readdirSync(codexDir)
-      .filter((name) => /^state(?:_\d+)?\.sqlite$/.test(name))
+      .filter((name) => pattern.test(name))
       .map((name) => {
         const fullPath = join(codexDir, name);
-        const verMatch = name.match(/^state_(\d+)\.sqlite$/);
+        const verMatch = name.match(pattern);
         const schemaVer = verMatch?.[1] ? Number(verMatch[1]) : 0;
         let mtimeMs = 0;
         try {

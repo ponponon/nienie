@@ -1,9 +1,10 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { createAgentInfo, type AgentAdapter } from '@nienie/agent-events';
+import { createAgentInfo, createCanonicalEvent, type AgentAdapter } from '@nienie/agent-events';
 import type {
   AgentSession,
   AgentStatus,
@@ -82,6 +83,8 @@ export class OpenCodeAdapter implements AgentAdapter {
   private sseLoopPromise: Promise<void> | undefined;
   private managedServerProcess: ChildProcess | undefined;
   private readonly sessionDirectories = new Map<string, string>();
+  private readonly loadedHistorySessions = new Set<string>();
+  private historySeqCounter = 0;
 
   constructor(
     options: OpenCodeAdapterOptions & {
@@ -329,6 +332,15 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   async loadSession(sessionId: string): Promise<AgentSession> {
     if (this.autoStartServer) {
+      if (!this.loadedHistorySessions.has(sessionId)) {
+        this.loadedHistorySessions.add(sessionId);
+        this.emitSqliteSessionHistory(sessionId);
+      }
+      const dbSessions = this.readLocalSqliteSessions();
+      const foundInDb = dbSessions.find((s) => s.id === sessionId);
+      if (foundInDb) {
+        return foundInDb;
+      }
       await this.ensureManagedServerRunning();
     }
     const encodedId = encodeURIComponent(sessionId);
@@ -343,6 +355,98 @@ export class OpenCodeAdapter implements AgentAdapter {
     ]);
 
     return this.mapSession(raw, statusMap[sessionId], knownDir);
+  }
+
+  private emitSqliteSessionHistory(sessionId: string): void {
+    if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) return;
+    const dbFolder = this.id === 'mimo' ? 'mimocode' : 'opencode';
+    const dbName = this.id === 'mimo' ? 'mimocode.db' : 'opencode.db';
+    const dbPath = join(homedir(), '.local/share', dbFolder, dbName);
+    if (!existsSync(dbPath)) return;
+
+    try {
+      const sql = `SELECT json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, substr(json_extract(p.data, '$.state.output'), 1, 500) AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.time_created ASC LIMIT 120;`;
+      const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
+        encoding: 'utf8',
+        timeout: 2000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const rows = JSON.parse(out || '[]') as Array<{
+        role?: string;
+        part_type?: string;
+        text?: string | null;
+        tool?: string | null;
+        call_id?: string | null;
+        tool_output?: string | null;
+      }>;
+
+      for (const row of rows) {
+        const text = (row.text ?? '').trim();
+        if (
+          text.startsWith('<system-reminder>') ||
+          text.startsWith('[Attachments] The user attached')
+        ) {
+          continue;
+        }
+        if (row.role === 'user' && row.part_type === 'text' && text) {
+          this.emit(
+            createCanonicalEvent({
+              eventId: `hist_${randomUUID()}`,
+              agentId: this.id,
+              sessionId,
+              sequence: ++this.historySeqCounter,
+              timestamp: new Date().toISOString(),
+              type: 'text_delta',
+              payload: { delta: text, role: 'user' },
+            }),
+          );
+        } else if (row.role === 'assistant' && row.part_type === 'text' && text) {
+          this.emit(
+            createCanonicalEvent({
+              eventId: `hist_${randomUUID()}`,
+              agentId: this.id,
+              sessionId,
+              sequence: ++this.historySeqCounter,
+              timestamp: new Date().toISOString(),
+              type: 'text_delta',
+              payload: { delta: `${text}\n` },
+            }),
+          );
+        } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
+          const callId = row.call_id || `call_${++this.historySeqCounter}`;
+          this.emit(
+            createCanonicalEvent({
+              eventId: `hist_${randomUUID()}`,
+              agentId: this.id,
+              sessionId,
+              sequence: ++this.historySeqCounter,
+              timestamp: new Date().toISOString(),
+              type: 'tool_use',
+              payload: { toolCallId: callId, name: row.tool, input: {} },
+            }),
+          );
+          if (row.tool_output) {
+            this.emit(
+              createCanonicalEvent({
+                eventId: `hist_${randomUUID()}`,
+                agentId: this.id,
+                sessionId,
+                sequence: ++this.historySeqCounter,
+                timestamp: new Date().toISOString(),
+                type: 'tool_result',
+                payload: {
+                  toolCallId: callId,
+                  content: row.tool_output,
+                  isError: false,
+                },
+              }),
+            );
+          }
+        }
+      }
+    } catch {
+      // Ignore sqlite history read errors
+    }
   }
 
   async getSessionDiff(sessionId: string): Promise<SessionFileDiff[]> {
