@@ -240,6 +240,10 @@
 - 历史会话聊天记录同步回放与空会话自动创建（`emitSqliteSessionHistory` / `emitCodexThreadHistory` in `packages/agent-adapters/*` & `openSession` / `sendMessage` in `apps/mobile`）：
   - 在手机端抽屉点击 OpenCode、MiMo Code 或 Codex 的任意历史会话时，`loadSession` 自动从本机 `opencode.db`、`mimocode.db`（`part JOIN message`）及 `thread_history_*.sqlite`（`thread_items`）读取过往的用户提问、Agent 回复与工具调用记录并渲染到手机主对话页面
   - 主对话页面底部 `R22` 输入舱常驻显示，当在空白新对话状态下直接输入指令发送时，自动创建当前选中 Agent 的新会话并发送消息
+- Nienie 官方网站上线与双端安装包分发（`website/index.html` & `https://nienie.quniv.cn`）：
+  - 对齐 `openctrlc` 暖米白编辑感设计体系（`--page-bg: #f6f5f1`、`--page-ink: #1f2521`、自动深浅色模式与中英双语切换），无任何含用户隐私的真机截图
+  - 构建 Android 发布版安装包（`Nienie-v0.1.0-android.apk`）与 macOS Apple Silicon 桌面客户端（`Nienie-v0.1.0-macos-arm64.zip`）并上传至京东云 MinIO（`https://file.quniv.cn/resource/nienie/`）
+  - 通过火山引擎 `ve dns` 绑定 `https://nienie.quniv.cn` 并配置 OpenResty TLS 站点，提供直链下载与手机浏览器扫码下载二维码
 
 ## MVP 规划
 
