@@ -220,3 +220,9 @@ export {
   type QuicTlsConfig,
   type P2PMessageHandler,
 } from './quic-p2p.js';
+export {
+  raceTransports,
+  type TransportKind,
+  type TransportCandidate,
+  type RaceOptions,
+} from './connection-racer.js';
