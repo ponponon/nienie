@@ -585,12 +585,18 @@ class MobileBridgeClient extends ChangeNotifier {
     }
   }
 
-  /// 启动「等待回复」超时计时器：到期仍无回复内容则把占位卡片标记为超时。
+  /// 启动「等待回复」超时计时器：到期若 Agent 仍在运行则继续等待，
+  /// 仅当会话不在运行态且仍无回复内容时才判定为超时（此时重试才安全）。
   void _startPendingTimer(String sessionId, PendingResponseItem pending) {
     _pendingTimers[pending] = Timer(pendingResponseTimeout, () {
-      _pendingTimers.remove(pending);
       final items = _timelineBySession[sessionId];
       if (items == null || !items.contains(pending)) return;
+      // Agent 正在工作（running）：不算超时，重新计时继续等待
+      if (_sessionStatusBySession[sessionId] == 'running') {
+        _startPendingTimer(sessionId, pending);
+        return;
+      }
+      _pendingTimers.remove(pending);
       if (!pending.timedOut) {
         pending.timedOut = true;
         notifyListeners();
@@ -660,6 +666,8 @@ class MobileBridgeClient extends ChangeNotifier {
         }
         final permissionId = event.payload['permissionId'] as String?;
         if (status == 'waiting' && permissionId != null) {
+          // 权限请求到达：收起「等待中」占位，改为展示权限卡片
+          _resolvePending(event.sessionId);
           final permission = event.payload['permission'] as String? ?? 'permission';
           final detail = event.payload['detail'] as String? ?? 'Permission requested';
           final rawPatterns = event.payload['patterns'] as List<dynamic>? ?? const [];
@@ -750,6 +758,7 @@ class MobileBridgeClient extends ChangeNotifier {
         break;
 
       case 'error':
+        _resolvePending(event.sessionId);
         items.add(
           ErrorCardItem(
             code: event.payload['code'] as String? ?? 'ERROR',

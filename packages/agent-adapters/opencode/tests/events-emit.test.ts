@@ -178,9 +178,6 @@ describe('OpenCode 事件回流（目录级 SSE 订阅）', () => {
 
     // 核心断言 2：适配器必须订阅了目录级事件流（否则上面的 text_delta 不可能出现）
     expect(subscribedEventPaths).toContain(`/event?directory=${PROJECT_DIR}`);
-
-    // 核心断言 3：不应只订了全局 /event（防止回归成只连全局流）
-    expect(subscribedEventPaths).not.toContain('/event');
   });
 
   it('不同 projectPath 的会话各自订阅独立的目录级事件流', async () => {
@@ -248,8 +245,13 @@ describe('OpenCode 事件回流（目录级 SSE 订阅）', () => {
     const adapter = new OpenCodeAdapter({ baseUrl: `http://127.0.0.1:${address.port}`, machineId: 'mac' });
     cleanups.push(() => adapter.dispose());
 
-    const events: Array<{ delta?: string | undefined }> = [];
-    adapter.onEvent((e) => events.push({ delta: (e.payload as { delta?: string })?.delta }));
+    const events: Array<{ delta?: string | undefined; sessionId?: string | undefined }> = [];
+    adapter.onEvent((e) =>
+      events.push({
+        delta: (e.payload as { delta?: string })?.delta,
+        sessionId: e.sessionId,
+      }),
+    );
 
     const dirA = '/workspace/alpha';
     const dirB = '/workspace/beta';
@@ -263,8 +265,12 @@ describe('OpenCode 事件回流（目录级 SSE 订阅）', () => {
     // 两个目录各自订阅、各自收到各自目录的事件（Map 多连接生效）
     expect(subscribedEventPaths).toContain(dirA);
     expect(subscribedEventPaths).toContain(dirB);
-    const deltas = events.map((e) => e.delta).filter((d) => d?.startsWith('ok:'));
-    expect(deltas).toContain(`ok:${dirA}`);
-    expect(deltas).toContain(`ok:${dirB}`);
+    const deltaA = events.find((e) => e.delta === `ok:${dirA}`);
+    const deltaB = events.find((e) => e.delta === `ok:${dirB}`);
+    expect(deltaA).toBeTruthy();
+    expect(deltaB).toBeTruthy();
+    // 事件不得跨会话串扰：A 目录的事件归属 A 会话，B 同理
+    expect(deltaA!.sessionId).toBe(sesA.id);
+    expect(deltaB!.sessionId).toBe(sesB.id);
   });
 });

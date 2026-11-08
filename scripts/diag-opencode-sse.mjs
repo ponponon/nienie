@@ -29,7 +29,7 @@ const WAIT_MS = Number(argValue('wait', '5000'));
 /** 订阅一条 SSE，返回 { count, types, stop }。 */
 async function subscribe(eventUrl) {
   const controller = new AbortController();
-  const types = [];
+  const events = [];
   const res = await fetch(eventUrl, {
     headers: { accept: 'text/event-stream' },
     signal: controller.signal,
@@ -48,7 +48,11 @@ async function subscribe(eventUrl) {
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           try {
-            types.push(JSON.parse(line.slice(6)).type);
+            const evt = JSON.parse(line.slice(6));
+            events.push({
+              type: evt.type,
+              sessionID: evt.properties?.sessionID,
+            });
           } catch {
             /* ignore */
           }
@@ -60,9 +64,9 @@ async function subscribe(eventUrl) {
   })();
   return {
     get count() {
-      return types.length;
+      return events.length;
     },
-    types,
+    events,
     async stop() {
       controller.abort();
       await pump.catch(() => {});
@@ -106,9 +110,10 @@ async function runCombo(label, createWithDir, subscribeUrl) {
   await sendPrompt(ses.id, createWithDir);
   await new Promise((r) => setTimeout(r, WAIT_MS));
   await sub.stop();
-  // 过滤掉 server.connected 这种连接期噪声，只看会话/消息事件
-  const meaningful = sub.types.filter((t) => t !== 'server.connected');
-  return { label, total: sub.count, meaningful: meaningful.length, types: [...new Set(meaningful)] };
+  // 只统计本次诊断会话的事件：排除 server.connected 噪声，也排除同目录其他会话的事件
+  const mine = sub.events.filter((e) => e.sessionID === ses.id && e.type !== 'server.connected');
+  const types = [...new Set(mine.map((e) => e.type))];
+  return { label, total: sub.count, meaningful: mine.length, types };
 }
 
 async function main() {

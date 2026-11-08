@@ -81,8 +81,9 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   private readonly sseConnections = new Map<
     string,
-    { controller: AbortController; loop: Promise<void> }
+    { controller: AbortController; ready: Promise<void>; loop?: Promise<void> | undefined }
   >();
+  private disposed = false;
   private managedServerProcess: ChildProcess | undefined;
   private readonly sessionDirectories = new Map<string, string>();
   private readonly loadedHistorySessions = new Set<string>();
@@ -468,7 +469,8 @@ export class OpenCodeAdapter implements AgentAdapter {
       await this.ensureManagedServerRunning();
     }
     const knownDir = this.sessionDirectories.get(sessionId);
-    await this.connectEvents(knownDir).catch(() => undefined);
+    // 强一致：SSE 事件流建立失败则不发送 Prompt，避免「Agent 生成了但手机收不到回复」
+    await this.connectEvents(knownDir);
 
     const encodedId = encodeURIComponent(sessionId);
     const query = knownDir ? { directory: knownDir } : undefined;
@@ -548,59 +550,89 @@ export class OpenCodeAdapter implements AgentAdapter {
   async connectEvents(directory?: string): Promise<void> {
     const effectiveDir = directory ?? this.directory;
     const key = effectiveDir ?? '';
-    if (this.sseConnections.has(key)) {
+    const existing = this.sseConnections.get(key);
+    if (existing) {
+      // 复用已建立 / 建立中的连接，避免并发重复建连
+      return existing.ready;
+    }
+    if (this.disposed) {
       return;
     }
 
     const controller = new AbortController();
-    const response = await this.fetchImpl(
-      this.buildUrl('/event', effectiveDir ? { directory: effectiveDir } : undefined),
-      {
-        method: 'GET',
-        headers: this.buildHeaders({
-          accept: 'text/event-stream',
-          ...(effectiveDir ? { 'x-opencode-directory': effectiveDir } : {}),
-        }),
-        signal: controller.signal,
-      },
-    );
+    const entry: {
+      controller: AbortController;
+      ready: Promise<void>;
+      loop?: Promise<void> | undefined;
+    } = { controller, ready: Promise.resolve() };
+    // 先登记 entry，使 dispose 能中止「建立中」的连接
+    this.sseConnections.set(key, entry);
 
-    if (!response.ok || !response.body) {
-      controller.abort();
-      throw new Error(`Failed to connect to OpenCode SSE stream (${response.status})`);
-    }
-
-    const stream = response.body;
-    const loop = (async () => {
+    entry.ready = (async () => {
       try {
-        for await (const rawEvent of parseSseStream(stream)) {
-          if (controller.signal.aborted) break;
-          const normalized = this.normalizer.normalize(rawEvent);
-          for (const event of normalized) {
-            this.emit(event);
-          }
+        const response = await this.fetchImpl(
+          this.buildUrl('/event', effectiveDir ? { directory: effectiveDir } : undefined),
+          {
+            method: 'GET',
+            headers: this.buildHeaders({
+              accept: 'text/event-stream',
+              ...(effectiveDir ? { 'x-opencode-directory': effectiveDir } : {}),
+            }),
+            signal: controller.signal,
+          },
+        );
+
+        if (this.disposed) {
+          controller.abort();
+          throw new Error('OpenCode adapter disposed');
         }
-      } catch {
-        // Ignore stream abort or disconnect errors when disposing
-      } finally {
-        const current = this.sseConnections.get(key);
-        if (current?.controller === controller) {
+        if (!response.ok || !response.body) {
+          controller.abort();
+          throw new Error(`Failed to connect to OpenCode SSE stream (${response.status})`);
+        }
+
+        const stream = response.body;
+        entry.loop = (async () => {
+          try {
+            for await (const rawEvent of parseSseStream(stream)) {
+              if (controller.signal.aborted) break;
+              const normalized = this.normalizer.normalize(rawEvent);
+              for (const event of normalized) {
+                this.emit(event);
+              }
+            }
+          } catch {
+            // Ignore stream abort or disconnect errors when disposing
+          } finally {
+            if (this.sseConnections.get(key) === entry) {
+              this.sseConnections.delete(key);
+            }
+          }
+        })();
+      } catch (error) {
+        // 建立失败：移除 entry 以便后续重试
+        if (this.sseConnections.get(key) === entry) {
           this.sseConnections.delete(key);
         }
+        throw error;
       }
     })();
 
-    this.sseConnections.set(key, { controller, loop });
+    return entry.ready;
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     const connections = [...this.sseConnections.values()];
     this.sseConnections.clear();
     for (const { controller } of connections) {
       controller.abort();
     }
+    for (const { ready } of connections) {
+      await ready.catch(() => undefined);
+    }
     for (const { loop } of connections) {
-      await loop.catch(() => undefined);
+      await loop?.catch(() => undefined);
     }
     if (this.managedServerProcess) {
       this.managedServerProcess.kill('SIGTERM');
@@ -637,12 +669,18 @@ export class OpenCodeAdapter implements AgentAdapter {
     const status = cachedStatus ?? mapOpenCodeSessionStatus(rawStatus);
     const createdAt = toIsoTimestamp(raw.time?.created);
     const updatedAt = toIsoTimestamp(raw.time?.updated ?? raw.time?.created);
+    const directory = raw.directory ?? fallbackDirectory ?? this.directory;
+
+    // 缓存 sessionId → directory，供 sendMessage/loadSession 定位正确的目录级事件流
+    if (directory) {
+      this.sessionDirectories.set(raw.id, directory);
+    }
 
     return {
       id: raw.id,
       agentId: this.id,
       title: raw.title?.trim() || 'Untitled session',
-      projectPath: raw.directory ?? fallbackDirectory ?? this.directory ?? '',
+      projectPath: directory ?? '',
       status,
       createdAt,
       updatedAt,
@@ -702,7 +740,8 @@ export class OpenCodeAdapter implements AgentAdapter {
       const token = Buffer.from(`${this.username}:${this.password}`).toString('base64');
       headers.authorization = `Basic ${token}`;
     }
-    if (this.directory) {
+    // 显式传入的会话目录优先，不被适配器默认目录覆盖
+    if (this.directory && !headers['x-opencode-directory']) {
       headers['x-opencode-directory'] = this.directory;
     }
     return headers;

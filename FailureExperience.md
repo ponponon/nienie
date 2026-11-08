@@ -888,3 +888,44 @@ MiMo 适配器复用同一 `OpenCodeAdapter` 类，自动受益。
 1. **凡对接 OpenCode 系（OpenCode/MiMo）事件流，必须按会话 directory 订阅 `GET /event?directory=<dir>`，不能只连全局 `/event`**，否则目录会话事件静默丢失。
 2. 新增 Agent 适配器时，务必验证「带项目上下文建会话 → 发消息 → 事件能否回流」这条链路，而非只测无目录的裸会话。
 3. 排查「回复生成了但不显示」类问题，优先核对**事件回流链路**（适配器 SSE 订阅 → normalize → Bridge 广播 → 手机渲染），而非 Prompt 生成链路。
+
+---
+
+## SSE 事件回流修复的五个隐性缺陷（ChatGPT 复盘）
+
+在完成 directory 级 SSE 订阅修复后，请 ChatGPT 做 code review，它指出了五个「测试能过但生产有隐患」的隐性缺陷，已逐一修复。这些是长期工程经验。
+
+### 1. `buildHeaders` 默认目录覆盖显式目录（隐蔽 bug）
+
+`buildHeaders` 无条件用 `this.directory`（适配器默认目录）覆盖 `x-opencode-directory`，导致 `connectEvents(dir)` 传入的**会话级目录**被适配器默认目录盖掉，HTTP Header 与 URL 的 `directory` 不一致，行为依赖 OpenCode 对两参数的优先级。修复：仅当未显式传入时才填默认目录（`if (this.directory && !headers['x-opencode-directory'])`）。**通用教训：默认值填充必须让位于显式传参，不能覆盖。**
+
+### 2. `mapSession` 不缓存 directory → 旧会话恢复回退到全局流
+
+`mapSession` 计算了 `raw.directory ?? fallbackDirectory ?? this.directory` 却没写入 `sessionDirectories`，导致重启后打开旧项目会话时 `sendMessage` 取不到目录，回退连全局 `/event`，把最初的 bug 又带回来。修复：`mapSession` 统一缓存 `sessionId → directory`。**通用教训：任何把「会话↔目录」映射用于路由的地方，都必须保证映射被完整填充（含 mapSession / loadSession / listSessions 所有入口）。**
+
+### 3. `connectEvents` 并发重复建连接竞态
+
+`Map.set` 在 `await fetch` 之后。同一目录两个并发调用都发现 map 无此 key，各自建连，第二条覆盖 map，第一条成野连接（且两条都 emit → 手机重复显示回复）。修复：先把 entry（含 controller）登记进 map，再建连；并发调用复用同一 `ready` Promise。
+
+### 4. `dispose` 与建连过程的生命周期竞态
+
+`dispose` 看到的 map 为空（连接还在 fetch 中），无法中止未登记的 controller；fetch 返回后连接仍会建立（已 dispose 的 adapter 又连上 SSE）。修复：加 `disposed` 标志 + 建连前/fetch 返回后都检查 + 先登记 entry 使 dispose 能中止建立中的连接。
+
+### 5. 吞掉 SSE 建立失败仍发 Prompt → 重现「生成了但没回复」
+
+`connectEvents(knownDir).catch(() => undefined)` 吞掉错误后仍发 Prompt，Agent 生成成功但无事件订阅者，手机 Thinking 45 秒后超时——正是最初 bug 的症状。修复：`sendMessage` 强一致——SSE 建立失败就不发 Prompt、直接抛错（手机显示错误可重试）；`loadSession` 保持宽松（历史回放仍可用）。**通用教训：远程控制链路里「发送成功 / Agent 执行 / 事件传输 / 手机展示」是四件事，不能用一个 sendMessage 成败笼统代表。**
+
+### 6. 手机端 Retry 可能重复执行危险任务
+
+`retryPrompt` 无条件重发 prompt。若 Agent 正在执行「删除所有未使用文件」这类操作，超时后点 Retry 会二次执行。修复：超时 watchdog 先查会话状态，`running`（Agent 工作中）不算超时、继续等待；仅当非 running 且无回复才判定超时（此时 Retry 才安全）。同时 error / permission waiting / idle 都会收起「等待中」占位。**通用教训：面向 Agent 的重试必须区分「执行中」和「已失败」，绝不能盲目重发。**
+
+### 测试策略补充
+
+- mock 应复刻真实事件投递语义（OpenCode 的 directory 隔离），否则测试双连接会重复计数、掩盖真实行为。
+- 守卫测试应断言「必须存在目录级订阅」（正向），而非「不能有全局订阅」（过度约束，正确实现可能两者都有）。
+- 多会话测试要断言 sessionId 归属，防止跨会话串扰。
+- 诊断工具应按 sessionId 过滤，排除同目录其他会话事件干扰。
+
+### 后续建议（ChatGPT，待做）
+
+P2：SSE 自动重连 + 指数退避、目录连接引用计数/闲置回收、事件历史恢复、`AgentEventConnectionManager` 统一管理 SSE 生命周期（供各适配器复用）。

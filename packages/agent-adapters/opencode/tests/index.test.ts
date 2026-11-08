@@ -329,7 +329,7 @@ describe('OpenCodeAdapter', () => {
     const receivedPrompts: Array<{ sessionId: string; body: unknown; auth?: string | undefined }> = [];
     const receivedPermissions: Array<{ sessionId: string; permissionId: string; body: unknown }> = [];
     const abortedSessions: string[] = [];
-    const sseClients = new Set<ServerResponse>();
+    const sseClients = new Map<ServerResponse, string>();
 
     const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -416,7 +416,10 @@ describe('OpenCodeAdapter', () => {
         res.writeHead(204);
         res.end();
 
-        for (const client of sseClients) {
+        // 只向订阅了本会话 directory 的 SSE 客户端投递事件（复刻真实 OpenCode 行为）
+        const targetDir = url.searchParams.get('directory') ?? '';
+        for (const [client, clientDir] of sseClients) {
+          if (clientDir !== targetDir) continue;
           client.write(
             `event: message\ndata: ${JSON.stringify({
               id: 'evt_live_1',
@@ -492,7 +495,8 @@ describe('OpenCodeAdapter', () => {
           'cache-control': 'no-cache',
           connection: 'keep-alive',
         });
-        sseClients.add(res);
+        const eventDir = url.searchParams.get('directory') ?? '';
+        sseClients.set(res, eventDir);
         req.on('close', () => sseClients.delete(res));
         res.write(
           `event: message\ndata: ${JSON.stringify({
@@ -512,7 +516,7 @@ describe('OpenCodeAdapter', () => {
     cleanups.push(
       () =>
         new Promise<void>((resolve) => {
-          for (const client of sseClients) client.end();
+          for (const client of sseClients.keys()) client.end();
           server.close(() => resolve());
         }),
     );
