@@ -100,33 +100,50 @@
       color: var(--page-ink);
     }
 
-    .lang-select {
+    [data-page="nienie"] .lang-select {
       appearance: none;
-      background: var(--page-panel);
+      -webkit-appearance: none;
+      background-color: var(--page-panel);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%2368706a' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 11px center;
       border: 1px solid var(--page-line);
       border-radius: 999px;
-      padding: 6px 13px;
+      padding: 7px 30px 7px 14px;
       font-family: var(--font-sans);
       font-size: 12.5px;
       font-weight: 600;
       color: var(--page-ink);
       cursor: pointer;
+      outline: none;
+      transition: border-color 150ms ease, box-shadow 150ms ease;
     }
 
+    [data-page="nienie"] .lang-select:hover {
+      border-color: var(--page-muted);
+    }
+
+    [data-page="nienie"] .lang-select:focus-visible {
+      border-color: var(--page-accent);
+      box-shadow: 0 0 0 3px rgba(23, 179, 120, 0.18);
+    }
+
+    [data-page="nienie"] a[data-slot="cta-button"],
     [data-page="nienie"] [data-slot="cta-button"] {
       display: inline-flex;
       align-items: center;
       gap: 8px;
       padding: 9px 16px;
-      border: 1px solid var(--page-ink);
+      border: 1px solid #1f2521;
       border-radius: 999px;
-      background: var(--page-ink);
-      color: var(--page-bg);
+      background: #1f2521;
+      color: #ffffff;
       font-size: 13px;
       font-weight: 600;
       transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
     }
 
+    [data-page="nienie"] a[data-slot="cta-button"]:hover,
     [data-page="nienie"] [data-slot="cta-button"]:hover {
       background: var(--page-accent);
       border-color: var(--page-accent);
@@ -222,11 +239,14 @@
       transition: transform 160ms ease, background 160ms ease, color 160ms ease, border-color 160ms ease;
     }
 
+    [data-page="nienie"] a[data-slot="primary-button"],
     [data-page="nienie"] [data-slot="primary-button"] {
-      background: var(--page-ink);
-      color: var(--page-bg);
+      background: #1f2521;
+      border-color: #1f2521;
+      color: #ffffff;
     }
 
+    [data-page="nienie"] a[data-slot="secondary-button"],
     [data-page="nienie"] [data-slot="secondary-button"] {
       background: var(--page-panel);
       border-color: var(--page-line);
@@ -442,21 +462,23 @@
       margin-top: 2px;
     }
 
-    .dl-btn {
+    [data-page="nienie"] a.dl-btn,
+    [data-page="nienie"] .dl-btn {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 8px 15px;
+      padding: 9px 16px;
       border-radius: 8px;
-      background: var(--page-ink);
-      color: var(--page-bg);
+      background: #1f2521;
+      color: #ffffff;
       font-size: 12.5px;
       font-weight: 700;
       white-space: nowrap;
       transition: background 150ms ease, transform 150ms ease;
     }
 
-    .dl-btn:hover {
+    [data-page="nienie"] a.dl-btn:hover,
+    [data-page="nienie"] .dl-btn:hover {
       background: var(--page-accent);
       color: #ffffff;
       transform: translateY(-1px);

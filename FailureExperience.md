@@ -704,6 +704,33 @@ Codex 客户端在遇到破坏性 SQLite Schema 演进时，会将主 Schema 版
 
 严禁为了偷懒通过旧单元测试而将侧边栏/抽屉列表塞进主对话画布；主对话页面在空状态下必须保持 100% 纯净留白。
 
+## 2026-11-08 官网 `[data-page="nienie"] a { color: inherit }` 选择器优先级高于 `.dl-btn`，导致深色下载按钮变成「黑底黑字」看不清文字，且 `<select>` 漏加下拉箭头与自定义焦点环
+
+### 问题
+
+1. 官网顶栏语言切换 `<select class="lang-select">` 设置了 `appearance: none` 后未添加右侧下拉箭头 SVG，也未设置 `outline: none`，导致既没有下拉指示箭头，点击后还出现粗糙的浏览器默认蓝色焦点框。
+2. 官网下载卡片中的 `<a class="dl-btn">直接下载 APK</a>` 按钮呈现纯黑块，按钮上的文字变成黑色无法看清。
+
+### 根因
+
+1. 全局链接重置写了 `[data-page="nienie"] a { color: inherit; }`（CSS 优先级 `0, 1, 1`），而按钮样式写了 `.dl-btn { background: var(--page-ink); color: var(--page-bg); }`（CSS 优先级 `0, 1, 0`）。由于 `0, 1, 1 > 0, 1, 0`，`<a class="dl-btn">` 的文字颜色被强制覆盖成了父级深色 `--page-ink`（`#1f2521`），造成 `#1f2521` 背景上渲染 `#1f2521` 文字（黑底黑字）！
+2. 对 `<select>` 使用 `appearance: none` 移除了系统原生箭头后，漏配了 `background-image` 下拉箭头 SVG 与 `outline: none`。
+
+### 影响
+
+官网核心下载按钮文字无法辨认，语言下拉框视觉残缺。
+
+### 修复
+
+1. 将 `.dl-btn`、`[data-slot="primary-button"]`、`[data-slot="cta-button"]` 选择器提升为 `[data-page="nienie"] a.dl-btn` 并显式声明 `background: #1f2521; color: #ffffff;`，彻底解决选择器优先级覆盖导致的黑底黑字问题。
+2. 为 `[data-page="nienie"] .lang-select` 补齐内联 `chevron-down` SVG 背景图、右侧留白 `padding-right: 30px`、`outline: none` 以及翡翠绿 `:focus-visible` 焦点环。
+
+### 预防措施
+
+1. 当页面根节点使用属性选择器（如 `[data-page="..."] a { color: inherit }`）重置链接颜色时，所有充当按钮的 `<a>` 标签样式必须带上同级作用域前缀（如 `[data-page="..."] a.dl-btn`），并在上线前执行 `BUTTON CONTRAST CHECK` 检查按钮背景与文字对比度。
+2. 凡是对 `<select>` 设置 `appearance: none`，必须同步成套配置自定义下拉箭头 SVG、`padding-right` 与 `outline: none`。
+
+
 
 
 
