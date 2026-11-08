@@ -730,6 +730,39 @@ Codex 客户端在遇到破坏性 SQLite Schema 演进时，会将主 Schema 版
 1. 当页面根节点使用属性选择器（如 `[data-page="..."] a { color: inherit }`）重置链接颜色时，所有充当按钮的 `<a>` 标签样式必须带上同级作用域前缀（如 `[data-page="..."] a.dl-btn`），并在上线前执行 `BUTTON CONTRAST CHECK` 检查按钮背景与文字对比度。
 2. 凡是对 `<select>` 设置 `appearance: none`，必须同步成套配置自定义下拉箭头 SVG、`padding-right` 与 `outline: none`。
 
+## 2026-11-08 将 CSS、JS、二维码、多语言字典全部硬塞进单个 `website/index.html` 导致文件膨胀至 1100+ 行，极难维护
+
+### 问题
+
+官网 `website/index.html` 把约 600 行 CSS、700 个 `<rect>` 二维码 SVG 格子、多语言字典 JS 与交互脚本全部内联硬编码，导致单文件超过 1100 行，改样式、改多语言文案或更新二维码都极难维护。误以为 Cloudflare Pages 只能托管单个 HTML 文件。
+
+### 根因
+
+1. 未拆分职责，把结构、样式、脚本、二进制资源（SVG）全部内联进 `index.html`。
+2. 误解了 Cloudflare Pages 的能力——`wrangler pages deploy` 上传的是整个目录树（最多 2 万文件），并非只能放单个 HTML。
+
+### 影响
+
+单文件臃肿、样式与脚本混杂、二维码 SVG 数百行噪点混在 HTML 里，后续维护成本极高。
+
+### 修复
+
+按职责拆分为模块化多文件结构，并用 `wrangler pages deploy website` 整体发布：
+* `index.html`（约 200 行纯净语义化 HTML，仅 `<link>` / `<script type="module">` 引用外部资源）
+* `styles/tokens.css`（OpenCtrlC 暖色调色板、字体与深浅色变量）
+* `styles/main.css`（布局与组件样式）
+* `scripts/i18n.js`（中/英/日/韩四语字典与切换逻辑，ES Module 导出）
+* `scripts/main.js`（命令复制按钮与语言切换初始化，`import { applyI18n }`）
+* `assets/favicon.svg`（品牌图标）
+* `assets/apk-qr.svg`（独立的 APK 下载二维码矢量图，从 HTML 中移出）
+* `_headers`（Cloudflare Pages 安全响应头与静态资源缓存策略）
+
+### 预防措施
+
+1. **Cloudflare Pages 支持完整静态资源目录树**（HTML + CSS + JS + SVG/图片 + `_headers`/`_redirects`），严禁把 CSS/JS/资源内联进单个 HTML 文件，必须按 `styles/`、`scripts/`、`assets/` 职责拆分，并用原生 `<script type="module">` ESM 组织脚本。
+2. 二维码、图标等矢量/二进制资源必须独立成 `assets/` 下的文件由 `<img>` 或 `<link rel="icon">` 引用，严禁把数百行 `<rect>` 格子直接内联在 HTML 标记里。
+
+
 
 
 
