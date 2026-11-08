@@ -741,7 +741,9 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
           <Tabs.Content value="about" forceMount className="tab-pane" data-pane="about">
             <div className="about-pane-inner">
               <div className="about-hero">
-                <div className="about-app-icon">{renderBrandMarkSvg()}</div>
+                <div className="about-app-icon">
+                  <img src="/assets/nienie-logo.png" width="76" height="76" alt="" />
+                </div>
                 <div className="about-app-name">Nienie</div>
                 <div className="about-app-version">0.1.0 (100)</div>
               </div>
@@ -915,19 +917,5 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
         }}
       />
     </>
-  );
-}
-
-function renderBrandMarkSvg() {
-  return (
-    <svg width="44" height="44" viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path
-        d="M17 33V17L33 33V17"
-        stroke="#FFFFFF"
-        strokeWidth="4.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }

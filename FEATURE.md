@@ -292,3 +292,11 @@
 - [x] OpenClaw Gateway 适配
 - [x] 其他 JSONL / HTTP Agent 适配
 - [x] PTY/TUI 通用兜底适配
+
+### 2026-11-09 统一 P6 小猫品牌图标
+
+- 采用 P6 小猫图案作为 Nienie 的唯一品牌图标，保留 1254 × 1254 PNG 母版，增加 `pnpm brand:assets` 脚本统一生成网站、桌面端与手机端尺寸。
+- 替换官网页眉和 favicon；提供 16–512 px PNG favicon、ICO、Apple touch icon 和 PWA manifest。
+- 替换 Electron「关于」页图标，并设置 macOS Dock、BrowserWindow 图标；提供 PNG、ICO、ICNS 多尺寸资源。
+- 替换 Flutter 手机端页眉图标，并生成 iOS 全尺寸 AppIcon、Android 密度图标和 Android adaptive icon。
+- 将 Android 与 iOS 启动画面同步为小猫图案和匹配的蜜桃背景；平台启动器图标由操作系统应用圆角遮罩，界面内小图标按组件尺寸裁切。

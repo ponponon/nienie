@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 import { app, BrowserWindow } from 'electron';
@@ -21,6 +22,7 @@ function detectLanIp(): string | undefined {
 
 let controller: DesktopBridgeController | undefined;
 let preview: DesktopPreviewServer | undefined;
+const appIconPath = resolve(process.cwd(), 'apps/desktop/assets/nienie-logo.png');
 
 async function bootstrap() {
   const host = process.env.NIENIE_BRIDGE_HOST ?? '0.0.0.0';
@@ -75,8 +77,12 @@ async function bootstrap() {
 
   const mainWindow = new BrowserWindow({
     ...createDesktopWindowOptions(),
+    ...(existsSync(appIconPath) ? { icon: appIconPath } : {}),
     trafficLightPosition: { x: 24, y: 22 },
   });
+  if (existsSync(appIconPath)) {
+    app.dock?.setIcon(appIconPath);
+  }
   await mainWindow.loadURL(previewAddr.url);
   mainWindow.show();
   mainWindow.focus();

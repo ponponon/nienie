@@ -208,6 +208,22 @@ export class DesktopPreviewServer {
       }
     }
 
+    if (req.method === 'GET' && url.pathname === '/assets/nienie-logo.png') {
+      const candidates = [
+        resolve(process.cwd(), 'apps/desktop/assets/nienie-logo.png'),
+        resolve(process.cwd(), 'assets/branding/nienie-logo-512.png'),
+      ];
+      const found = candidates.find((p) => existsSync(p));
+      if (found) {
+        res.writeHead(200, {
+          'content-type': 'image/png',
+          'cache-control': 'public, max-age=3600',
+        });
+        res.end(readFileSync(found));
+        return;
+      }
+    }
+
     if (req.method === 'GET' && url.pathname === '/assets/wechat-appreciate.jpg') {
       const candidates = [
         resolve(process.cwd(), 'apps/desktop/assets/wechat-appreciate.jpg'),

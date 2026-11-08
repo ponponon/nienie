@@ -38,13 +38,6 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
 </svg>
 ''';
 
-  static const String _nienieBrandMarkSvg = '''
-<svg viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="50" height="50" rx="13" fill="#17B378"/>
-  <path d="M17 33V17L33 33V17" stroke="#FFFFFF" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-''';
-
   @override
   void dispose() {
     _wsUrlController.dispose();
@@ -132,7 +125,15 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           SizedBox(
             width: 24,
             height: 24,
-            child: SvgPicture.string(_nienieBrandMarkSvg),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.asset(
+                'assets/brand/nienie-logo.png',
+                width: 24,
+                height: 24,
+                fit: BoxFit.cover,
+              ),
+            ),
           ),
           const SizedBox(width: 8),
           Expanded(

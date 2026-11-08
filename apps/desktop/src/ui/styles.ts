@@ -793,11 +793,19 @@ export const DESKTOP_MODERN_CSS = `
     width: 76px;
     height: 76px;
     border-radius: 19px;
-    background: linear-gradient(145deg, #1DC988 0%, #139A65 100%);
-    box-shadow: 0 8px 20px -4px rgba(23, 179, 120, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.35);
+    overflow: hidden;
+    background: #FCE7DD;
+    box-shadow: 0 8px 20px -4px rgba(67, 82, 129, 0.22);
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .about-app-icon img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
 
   .about-app-name {

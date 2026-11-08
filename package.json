@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node scripts/start-mac.mjs",
+    "brand:assets": "node scripts/generate-brand-assets.mjs",
     "build": "pnpm --recursive build",
     "typecheck": "pnpm --recursive typecheck",
     "test": "pnpm --recursive test",
