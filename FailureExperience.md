@@ -795,6 +795,38 @@ QUIC 打洞 P2P 隧道无法建立，多级网络的 Tier-2 层不可用。
 2. **P2P 打洞的 UDP 包必须与 QUIC 握手复用同一个 socket**，否则 NAT 映射互不相通。
 3. 严禁把 RSA/ECDSA 签名（TLS 证书体系）与 HMAC（QUIC 连接 ID / Retry Token 派生）混为一谈排查 —— 它们是两套独立机制。
 
+## 2026-11-08 esbuild 把 ESM-only + 原生 `.node` 模块打包进 CJS 导致 `pnpm start` 启动即崩
+
+### 问题
+
+`pnpm start` 启动 `electron-main.cjs` 时抛 `TypeError: The argument 'filename' must be ... Received undefined`（`Module.createRequire` 收到 `undefined`）。
+
+### 根因
+
+`@matrixai/quic` 是 **ESM-only**（`"type": "module"`，无 `require` 入口）且靠 `createRequire(import.meta.url)` 相对定位加载自身 `prebuild/*.node` 原生绑定。esbuild 把它**内联打包**进 CJS 的 `electron-main.cjs` 后，`import.meta.url` 被转成 `var import_meta = {}`，于是 `createRequire(import_meta.url)` → `createRequire(undefined)` → 启动即崩；且原生绑定的相对路径也会错乱。**原生 / ESM-only 模块本质不可被 bundle，必须 externalize + 运行时懒加载。**
+
+### 修复
+
+1. `packages/bridge-core/src/quic-p2p.ts`：`import type`（编译期擦除）+ 运行时 `await import('@matrixai/quic')` 懒加载（仅在真正使用 P2P 的 `bind/connect` 时加载）。
+2. `scripts/start-mac.mjs`：对所有 Node 打包命令加 `--external:@matrixai/*`，不内联，运行时从 `node_modules` 动态加载。
+
+### 防回归守卫（已固化为单元测试）
+
+新增 **`packages/bridge-core/tests/bundle-externals.test.ts`**，从两个层面锁死约束：
+1. **配置层**：断言 `scripts/start-mac.mjs` 含 `--external:@matrixai/*`（防止有人删掉 external 标记）。
+2. **源码层**：断言 `quic-p2p.ts` 及 bridge-core 源码只用 `import type` + 动态 `import()` 引用 externalized 包，**严禁静态运行时 `import ... from`**（会被 esbuild 内联）。
+
+已验证该测试能真正拦截回归：注入一个静态 `import { X } from '@matrixai/quic'` 后测试立即失败并提示「存在静态运行时导入，会被 esbuild 内联导致 CJS 崩溃」。
+
+### 预防措施
+
+1. **往 `bridge-core` / 桌面端打包链路添加原生（`.node`）或 ESM-only 依赖时，必须同时：**
+   - 在 `scripts/start-mac.mjs` 的 esbuild 命令加 `--external:<pkg>`；
+   - 在源码用 `import type` + 动态 `import()` 懒加载，严禁静态 `import ... from`。
+2. **新增此类依赖时，记得在 `bundle-externals.test.ts` 的 `EXTERNALIZED_PACKAGES` 数组中登记包名前缀**，让守卫测试覆盖到。
+3. 严禁把「运行时按 `import.meta.url`/`__dirname` 定位原生资源」的包内联进单文件 bundle（路径会错乱）。
+
+
 
 
 
