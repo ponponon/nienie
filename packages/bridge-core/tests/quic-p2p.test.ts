@@ -11,7 +11,7 @@
  *
  * 架构语义：对应 RustDesk 的 Tier-2（P2P 打洞）——同内网直连 → UDP 打洞 P2P（0 带宽）→ 失败才中继。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { QUICSocket, QUICServer, QUICClient, events } from '@matrixai/quic';
 import { createHmac, randomBytes, randomFillSync, timingSafeEqual } from 'node:crypto';
 
@@ -111,6 +111,33 @@ const commonConfig = {
 const serverConfig = { ...commonConfig, key: TEST_KEY, cert: TEST_CERT };
 const clientConfig = { ...commonConfig };
 
+describe('QUIC crypto primitives（锁定 ChatGPT 诊断的返回类型）', () => {
+  it('toArrayBuffer 必须精确保留 Buffer subarray 边界（不能泄露底层大 buffer）', () => {
+    const original = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    const sub = original.subarray(3, 7); // 视图：byteOffset=3, byteLength=4
+    const result = toArrayBuffer(sub);
+    expect(result.byteLength).toBe(4);
+    expect(Array.from(new Uint8Array(result))).toEqual([3, 4, 5, 6]);
+  });
+
+  it('server sign 必须返回 32 字节 ArrayBuffer（返回 Buffer 会导致 SCID 截断失效）', async () => {
+    const crypto = createServerCrypto();
+    const data = new Uint8Array([1, 2, 3]).buffer;
+    const signature = await crypto.ops.sign(crypto.key, data);
+    expect(signature).toBeInstanceOf(ArrayBuffer);
+    expect(signature.byteLength).toBe(32); // HMAC-SHA256 输出 32 字节，quiche 截取前 20
+  });
+
+  it('server verify 必须能自校验签名且拒绝篡改', async () => {
+    const crypto = createServerCrypto();
+    const data = new Uint8Array([9, 8, 7]).buffer;
+    const sig = await crypto.ops.sign(crypto.key, data);
+    expect(await crypto.ops.verify(crypto.key, data, sig)).toBe(true);
+    const tampered = await crypto.ops.sign(crypto.key, new Uint8Array([1]).buffer);
+    expect(await crypto.ops.verify(crypto.key, data, tampered)).toBe(false);
+  });
+});
+
 describe('QUIC over hole-punched UDP (Nienie Tier-2 P2P)', () => {
   it(
     '两个对等点经 UDP 打洞后在同一 socket 建立 QUIC 隧道并双向收发消息',
@@ -137,21 +164,32 @@ describe('QUIC over hole-punched UDP (Nienie Tier-2 P2P)', () => {
             const conn = evt.detail;
             conn.addEventListener(events.EventQUICConnectionStream.name, (e2: any) => {
               const stream = e2.detail;
-              const reader = stream.readable.getReader();
-              reader.read().then(({ value }: any) => {
-                const text = Buffer.from(value ?? []).toString('utf8');
-                resolve(text);
-              });
+              // 健壮性：循环读取完整消息（不能只 read 一次）
+              void (async () => {
+                const chunks: Buffer[] = [];
+                const reader = stream.readable.getReader();
+                for (;;) {
+                  const { value, done } = await reader.read();
+                  if (done) break;
+                  chunks.push(Buffer.from(value ?? []));
+                }
+                resolve(Buffer.concat(chunks).toString('utf8'));
+              })();
             });
           });
         });
         await serverA.start();
 
         // 易错点 #4：打洞必须用 QUICSocket 自身的 socket.send()（共享 NAT 映射）
+        // 用 spy 锁定「打洞确实用了 QUICSocket 自己的 send」，防止未来被改成独立 dgram socket
+        const sendSpyA = vi.spyOn(socketA, 'send');
+        const sendSpyB = vi.spyOn(socketB, 'send');
         await Promise.all([
           socketA.send(Buffer.from('NIE-PUNCH'), socketB.port, socketB.host),
           socketB.send(Buffer.from('NIE-PUNCH'), socketA.port, socketA.host),
         ]);
+        expect(sendSpyA).toHaveBeenCalled();
+        expect(sendSpyB).toHaveBeenCalled();
 
         clientB = await (QUICClient as any).createQUICClient({
           socket: socketB,
