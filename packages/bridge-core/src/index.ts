@@ -205,3 +205,15 @@ export {
   type DaemonCliHandle,
   type RelayCliHandle,
 } from './cli.js';
+export {
+  QuicP2PNode,
+  toArrayBuffer,
+  createServerCrypto,
+  clientCrypto,
+  buildServerConfig,
+  buildClientConfig,
+  type PeerEndpoint,
+  type QuicP2PNodeOptions,
+  type QuicTlsConfig,
+  type P2PMessageHandler,
+} from './quic-p2p.js';
