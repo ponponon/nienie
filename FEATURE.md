@@ -27,7 +27,7 @@
   - `loadSession()`：调用 `GET /session/:id` 恢复会话并校验会话真实存在，拒绝伪造已丢失会话状态
   - `sendMessage()`：调用 `POST /session/:id/prompt_async` 发送结构化文本消息并自动维护 SSE 订阅
   - `cancel()`：调用 `POST /session/:id/abort` 取消正在执行的会话
-  - `connectEvents()` & `parseSseStream()`：解析 `/event` SSE 流（支持分块帧、注释忽略、CRLF 兼容）
+  - `connectEvents()` & `parseSseStream()`：解析 `/event` SSE 流（支持分块帧、注释忽略、CRLF 兼容）。**按会话 directory 订阅** `GET /event?directory=<dir>`（OpenCode/MiMo 对带 `?directory=` 建的会话只推目录级事件流、不进全局 `/event`），`createSession` 记录 `projectPath` 供 `sendMessage`/`loadSession` 定位正确事件流，确保项目会话回复实时回流手机
 - 实现 `OpenCodeEventNormalizer`：
   - 将 OpenCode v1/v2 事件（`session.status`、`session.idle`、`message.part.delta`、`message.part.updated`、`permission.asked`、`step-finish`、`session.error`、`session.next.*`）转换为 Nienie `CanonicalAgentEvent`
   - 过滤用户自身消息文本，防止误发为 assistant `text_delta`

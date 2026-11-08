@@ -79,8 +79,10 @@ export class OpenCodeAdapter implements AgentAdapter {
   private readonly normalizer: OpenCodeEventNormalizer;
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
 
-  private sseAbortController: AbortController | undefined;
-  private sseLoopPromise: Promise<void> | undefined;
+  private readonly sseConnections = new Map<
+    string,
+    { controller: AbortController; loop: Promise<void> }
+  >();
   private managedServerProcess: ChildProcess | undefined;
   private readonly sessionDirectories = new Map<string, string>();
   private readonly loadedHistorySessions = new Set<string>();
@@ -327,6 +329,10 @@ export class OpenCodeAdapter implements AgentAdapter {
       body,
     });
 
+    if (input.projectPath) {
+      this.sessionDirectories.set(raw.id, input.projectPath);
+    }
+
     return this.mapSession(raw, { type: 'idle' }, input.projectPath);
   }
 
@@ -345,6 +351,7 @@ export class OpenCodeAdapter implements AgentAdapter {
     }
     const encodedId = encodeURIComponent(sessionId);
     const knownDir = this.sessionDirectories.get(sessionId);
+    await this.connectEvents(knownDir).catch(() => undefined);
     const query = knownDir ? { directory: knownDir } : undefined;
     const [raw, statusMap] = await Promise.all([
       this.requestJson<OpenCodeRawSession>(`/session/${encodedId}`, {
@@ -460,12 +467,10 @@ export class OpenCodeAdapter implements AgentAdapter {
     if (this.autoStartServer) {
       await this.ensureManagedServerRunning();
     }
-    if (!this.sseAbortController) {
-      await this.connectEvents().catch(() => undefined);
-    }
+    const knownDir = this.sessionDirectories.get(sessionId);
+    await this.connectEvents(knownDir).catch(() => undefined);
 
     const encodedId = encodeURIComponent(sessionId);
-    const knownDir = this.sessionDirectories.get(sessionId);
     const query = knownDir ? { directory: knownDir } : undefined;
     const response = await this.fetchImpl(
       this.buildUrl(`/session/${encodedId}/prompt_async`, query),
@@ -540,27 +545,33 @@ export class OpenCodeAdapter implements AgentAdapter {
     }
   }
 
-  async connectEvents(): Promise<void> {
-    if (this.sseAbortController) {
+  async connectEvents(directory?: string): Promise<void> {
+    const effectiveDir = directory ?? this.directory;
+    const key = effectiveDir ?? '';
+    if (this.sseConnections.has(key)) {
       return;
     }
 
     const controller = new AbortController();
-    this.sseAbortController = controller;
-
-    const response = await this.fetchImpl(this.buildUrl('/event'), {
-      method: 'GET',
-      headers: this.buildHeaders({ accept: 'text/event-stream' }),
-      signal: controller.signal,
-    });
+    const response = await this.fetchImpl(
+      this.buildUrl('/event', effectiveDir ? { directory: effectiveDir } : undefined),
+      {
+        method: 'GET',
+        headers: this.buildHeaders({
+          accept: 'text/event-stream',
+          ...(effectiveDir ? { 'x-opencode-directory': effectiveDir } : {}),
+        }),
+        signal: controller.signal,
+      },
+    );
 
     if (!response.ok || !response.body) {
-      this.sseAbortController = undefined;
+      controller.abort();
       throw new Error(`Failed to connect to OpenCode SSE stream (${response.status})`);
     }
 
     const stream = response.body;
-    this.sseLoopPromise = (async () => {
+    const loop = (async () => {
       try {
         for await (const rawEvent of parseSseStream(stream)) {
           if (controller.signal.aborted) break;
@@ -572,21 +583,24 @@ export class OpenCodeAdapter implements AgentAdapter {
       } catch {
         // Ignore stream abort or disconnect errors when disposing
       } finally {
-        if (this.sseAbortController === controller) {
-          this.sseAbortController = undefined;
+        const current = this.sseConnections.get(key);
+        if (current?.controller === controller) {
+          this.sseConnections.delete(key);
         }
       }
     })();
+
+    this.sseConnections.set(key, { controller, loop });
   }
 
   async dispose(): Promise<void> {
-    if (this.sseAbortController) {
-      this.sseAbortController.abort();
-      this.sseAbortController = undefined;
+    const connections = [...this.sseConnections.values()];
+    this.sseConnections.clear();
+    for (const { controller } of connections) {
+      controller.abort();
     }
-    if (this.sseLoopPromise) {
-      await this.sseLoopPromise.catch(() => undefined);
-      this.sseLoopPromise = undefined;
+    for (const { loop } of connections) {
+      await loop.catch(() => undefined);
     }
     if (this.managedServerProcess) {
       this.managedServerProcess.kill('SIGTERM');

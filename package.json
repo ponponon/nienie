@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "description": "Mobile-first control console for local coding agents.",
   "packageManager": "pnpm@10.33.2",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node scripts/start-mac.mjs",
     "build": "pnpm --recursive build",
@@ -13,6 +15,7 @@
     "verify": "node scripts/verify-all.mjs"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.7",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   }

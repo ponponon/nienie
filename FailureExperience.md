@@ -842,3 +842,49 @@ QUIC 打洞 P2P 隧道无法建立，多级网络的 Tier-2 层不可用。
 
 
 
+
+---
+
+## OpenCode/MiMo 对带 `?directory=` 的会话不向全局 `/event` 推事件，导致手机发消息后收不到回复
+
+### 现象
+
+手机对项目会话（如「ideaboom 新任务」）发「你是什么模型」，OpenCode 后台正常生成了回复（DB `message` 表可见 `role:assistant` 完整文本），但**手机聊天界面只显示用户气泡，AI 回复一直不出现**。Bridge 日志里也看不到 `registry.onEvent` 的事件流水。
+
+### 定位过程
+
+1. 直接查 OpenCode DB：回复确实生成 → 说明 Prompt 链路正常，问题在**事件回流链路**。
+2. 裸 fetch 订阅 `GET /event` 手动解析 SSE：能收到全部 25 个事件（`message.part.delta`/`session.idle` 等）→ OpenCode 事件流本身正常。
+3. 用适配器 `connectEvents` + `normalize` 却只有 0~1 个事件 → 差异在会话的创建方式。
+4. 对比实验（同一 prompt，不同建会话方式）：
+   - 裸 `POST /session`（**不带** `?directory=`）→ 25 事件；
+   - `POST /session?directory=<projectPath>`（**带** `?directory=`）→ **仅 1 个 `server.connected`，无任何会话/消息事件**。
+5. 订阅 `GET /event?directory=<projectPath>` 再对带 `?directory=` 的会话发消息 → **25 事件恢复**。
+
+### 根因
+
+**OpenCode（及基于其 fork 的 MiMo）的事件总线按 directory 分片：**
+- 会话用 `?directory=<projectPath>` 创建时，它的 `session/message` 事件**只推给** `GET /event?directory=<projectPath>` 这条 SSE，**不进**全局 `GET /event`。
+- 适配器此前只连全局 `/event`，于是目录会话的所有事件被静默丢弃 —— 回复在 DB 里，但没人广播给手机。
+- 而项目会话必须带 `?directory=` 创建，否则 OpenCode DB 的 `session.directory` 不会记录项目路径，手机端项目树会把会话归错项目。**这是「项目树正确」与「事件流正常」的两难，靠调用参数无法两全。**
+
+### 修复
+
+改为**按 directory 订阅 SSE**（`packages/agent-adapters/opencode/src/index.ts`）：
+
+1. `connectEvents(directory?)`：由单一 `sseAbortController` 改为 `Map<dir, {controller, loop}>` 多连接，按会话 directory 订阅 `GET /event?directory=<dir>`（无 directory 时才订全局 `/event`）。
+2. `createSession`：仍带 `?directory=<projectPath>` 创建（保证项目树正确），但**同时把 `projectPath` 记入 `sessionDirectories`**，供后续定位事件流。
+3. `sendMessage` / `loadSession`：先 `connectEvents(sessionDirectories.get(sessionId))` 连上该目录的 SSE，再发 Prompt，确保该目录事件能回流。
+4. `dispose` 中止并清理所有 per-directory 连接。
+
+MiMo 适配器复用同一 `OpenCodeAdapter` 类，自动受益。
+
+### 验证
+
+`createSession({projectPath})` + `sendMessage` 现在稳定产出 `text_delta`（如 `text_delta:收到`）；项目树仍正确（OpenCode DB `session.directory` = projectPath）。全量 69 vitest + 10 flutter 测试通过。
+
+### 预防措施
+
+1. **凡对接 OpenCode 系（OpenCode/MiMo）事件流，必须按会话 directory 订阅 `GET /event?directory=<dir>`，不能只连全局 `/event`**，否则目录会话事件静默丢失。
+2. 新增 Agent 适配器时，务必验证「带项目上下文建会话 → 发消息 → 事件能否回流」这条链路，而非只测无目录的裸会话。
+3. 排查「回复生成了但不显示」类问题，优先核对**事件回流链路**（适配器 SSE 订阅 → normalize → Bridge 广播 → 手机渲染），而非 Prompt 生成链路。
