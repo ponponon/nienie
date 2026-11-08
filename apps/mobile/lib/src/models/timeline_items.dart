@@ -7,6 +7,14 @@ class UserPromptItem extends SessionTimelineItem {
   const UserPromptItem(this.message);
 }
 
+/// 发送后、回复到达前的「等待中」占位卡片。
+/// 若 [timedOut] 为 true 表示长时间未收到回复，UI 切换为「重试 / 查看电脑端」兜底。
+class PendingResponseItem extends SessionTimelineItem {
+  final String promptText;
+  bool timedOut;
+  PendingResponseItem({required this.promptText, this.timedOut = false});
+}
+
 class StreamingTextItem extends SessionTimelineItem {
   String text;
   final bool isThinking;

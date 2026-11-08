@@ -430,4 +430,86 @@ void main() {
     expect(find.text('컴퓨터 Bridge 연결'), findsOneWidget);
     expect(find.text('페어링 및 연결'), findsOneWidget);
   });
+
+  Future<void> pumpToSession(WidgetTester tester) async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await tester.pumpWidget(NienieMobileApp(client: client));
+    await tester.tap(find.byKey(const Key('btn-toggle-advanced')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('input-ws-url')), 'ws://127.0.0.1:4100');
+    await tester.enterText(find.byKey(const Key('input-pairing-code')), '123456');
+    await tester.tap(find.byKey(const Key('btn-connect-pair')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Implement OpenCode adapter'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('shows Thinking pending right after send, resolves it when reply streams in', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '你好');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+
+    // 发送后立刻出现「Thinking…」占位
+    expect(find.text('Thinking…'), findsOneWidget);
+
+    // 回复内容开始流式到达
+    transport.emitServerEvent({
+      'version': 1,
+      'eventId': 'evt_t1',
+      'sessionId': 'ses_alpha',
+      'sequence': 1,
+      'timestamp': '2026-11-04T10:00:01Z',
+      'type': 'text_delta',
+      'payload': {'delta': '收到'},
+    });
+    await tester.pump();
+
+    // 占位消失，真实回复出现
+    expect(find.text('Thinking…'), findsNothing);
+    expect(find.text('收到'), findsOneWidget);
+    client.dispose();
+  });
+
+  testWidgets('pending times out into retry fallback card, retry re-sends prompt', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '帮我跑测试');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+    expect(find.text('Thinking…'), findsOneWidget);
+
+    // 推进时钟超过超时阈值，且期间无任何回复
+    await tester.pump(MobileBridgeClient.pendingResponseTimeout + const Duration(seconds: 1));
+
+    // 占位切换为超时兜底卡片
+    expect(find.text('Thinking…'), findsNothing);
+    expect(find.text('Reply timed out'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
+
+    // 点「重试」应重新发送该 prompt
+    final sentBefore = transport.sentPrompts.length;
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(transport.sentPrompts.length, sentBefore + 1);
+    expect(transport.sentPrompts.last, '帮我跑测试');
+    client.dispose();
+  });
 }

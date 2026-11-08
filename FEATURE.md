@@ -245,6 +245,13 @@
   - 构建 Android 发布版安装包（`Nienie-v0.1.0-android.apk`）与 macOS Apple Silicon 桌面客户端（`Nienie-v0.1.0-macos-arm64.zip`）并上传至京东云 MinIO（`https://file.quniv.cn/resource/nienie/`）
   - 官网托管于 **Cloudflare Pages**（`https://nienie-web.pages.dev`，`wrangler pages deploy`），双端安装包大文件则分发于京东云 MinIO（`https://file.quniv.cn/resource/nienie/`）；提供直链下载、短链重定向与手机浏览器扫码下载二维码
 
+### 2026-11-08 修复项目会话回复不回流 + 补齐事件回流守卫、诊断工具与等待态
+
+- **修复项目会话事件回流**（`packages/agent-adapters/opencode/src/index.ts`）：改为按会话 directory 订阅 `GET /event?directory=<dir>`，解决「OpenCode/MiMo 对带 `?directory=` 建的会话不向全局 `/event` 推事件、手机只见用户气泡无回复」的根因（详见 `FailureExperience.md`）
+- **事件回流守卫测试**（`packages/agent-adapters/opencode/tests/events-emit.test.ts`）：mock 精确复刻真实 OpenCode 事件投递语义（目录会话事件只投目录级订阅者），锁定「带 projectPath 建会话 → sendMessage → 必收 text_delta 且必须订 `/event?directory=<projectPath>`」，谁改回全局流立即变红
+- **一键诊断脚本**（`scripts/diag-opencode-sse.mjs`）：对比「建会话是否带 `?directory=`」×「订阅全局还是目录级 `/event`」四组合的事件数并输出结论，用于快速定位「回复生成了但不显示」类问题
+- **手机端「等待回复」加载态 + 超时兜底**（`apps/mobile`）：发送后即显示 `Thinking…` spinner 占位卡片（`PendingResponseItem`），收到 `text_delta`/`thinking_delta`/`tool_use` 或 `session.idle` 即收起；超 45 秒无回复自动切换为「Reply timed out + Retry / Check desktop」兜底卡片，Retry 可一键重发该 prompt
+
 ## MVP 规划
 
 - [x] Electron Bridge 启动和健康检查

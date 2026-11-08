@@ -40,8 +40,12 @@ class MobileBridgeClient extends ChangeNotifier {
   final Map<String, int> _lastSequenceBySession = {};
   final Map<String, List<SessionTimelineItem>> _timelineBySession = {};
   final Map<String, String> _sessionStatusBySession = {};
+  final Map<PendingResponseItem, Timer> _pendingTimers = {};
   StreamSubscription<Map<String, dynamic>>? _subscription;
   int _requestCounter = 0;
+
+  /// 发送后多久未收到任何回复内容即判定为「等待超时」，UI 切换为兜底卡片。
+  static const Duration pendingResponseTimeout = Duration(seconds: 45);
 
   MobileBridgeClient({
     required this.transport,
@@ -553,6 +557,9 @@ class MobileBridgeClient extends ChangeNotifier {
 
     final items = _timelineBySession.putIfAbsent(current.id, () => []);
     items.add(UserPromptItem(trimmed));
+    final pending = PendingResponseItem(promptText: trimmed);
+    items.add(pending);
+    _startPendingTimer(current.id, pending);
     notifyListeners();
 
     final res = await transport.sendRequest({
@@ -566,6 +573,7 @@ class MobileBridgeClient extends ChangeNotifier {
 
     if (res['ok'] != true) {
       final err = res['error'] as Map<String, dynamic>?;
+      _resolvePending(current.id, pending);
       items.add(
         ErrorCardItem(
           code: err?['code'] as String? ?? 'SEND_FAILED',
@@ -575,6 +583,41 @@ class MobileBridgeClient extends ChangeNotifier {
       );
       notifyListeners();
     }
+  }
+
+  /// 启动「等待回复」超时计时器：到期仍无回复内容则把占位卡片标记为超时。
+  void _startPendingTimer(String sessionId, PendingResponseItem pending) {
+    _pendingTimers[pending] = Timer(pendingResponseTimeout, () {
+      _pendingTimers.remove(pending);
+      final items = _timelineBySession[sessionId];
+      if (items == null || !items.contains(pending)) return;
+      if (!pending.timedOut) {
+        pending.timedOut = true;
+        notifyListeners();
+      }
+    });
+  }
+
+  /// 收到回复内容或会话空闲时，移除「等待中」占位并取消超时计时。
+  void _resolvePending(String sessionId, [PendingResponseItem? specific]) {
+    final timer = specific != null ? _pendingTimers.remove(specific) : null;
+    timer?.cancel();
+    final items = _timelineBySession[sessionId];
+    if (items == null) return;
+    if (specific != null) {
+      items.remove(specific);
+      return;
+    }
+    // 未指定时移除末尾的等待占位（回复开始 / 结束）
+    while (items.isNotEmpty && items.last is PendingResponseItem) {
+      final p = items.removeLast() as PendingResponseItem;
+      _pendingTimers.remove(p)?.cancel();
+    }
+  }
+
+  /// 兜底卡片的「重试」：重发该卡片记录的 prompt。
+  Future<void> retryPrompt(String promptText) async {
+    await sendMessage(promptText);
   }
 
   void _handleServerMessage(Map<String, dynamic> raw) {
@@ -611,6 +654,10 @@ class MobileBridgeClient extends ChangeNotifier {
       case 'status':
         final status = event.payload['status'] as String? ?? 'idle';
         _sessionStatusBySession[event.sessionId] = status;
+        if (status == 'idle') {
+          // 回复结束：收起「等待中」占位
+          _resolvePending(event.sessionId);
+        }
         final permissionId = event.payload['permissionId'] as String?;
         if (status == 'waiting' && permissionId != null) {
           final permission = event.payload['permission'] as String? ?? 'permission';
@@ -635,6 +682,8 @@ class MobileBridgeClient extends ChangeNotifier {
           items.add(UserPromptItem(delta));
           break;
         }
+        // 回复内容开始到达：收起「等待中」占位
+        _resolvePending(event.sessionId);
         if (items.isNotEmpty &&
             items.last is StreamingTextItem &&
             !(items.last as StreamingTextItem).isThinking) {
@@ -647,6 +696,7 @@ class MobileBridgeClient extends ChangeNotifier {
       case 'thinking_delta':
         final delta = event.payload['delta'] as String? ?? '';
         if (delta.isEmpty) break;
+        _resolvePending(event.sessionId);
         if (items.isNotEmpty &&
             items.last is StreamingTextItem &&
             (items.last as StreamingTextItem).isThinking) {
@@ -662,6 +712,7 @@ class MobileBridgeClient extends ChangeNotifier {
         final input = Map<String, dynamic>.from(
           event.payload['input'] as Map? ?? const {},
         );
+        _resolvePending(event.sessionId);
         items.add(
           ToolCallCardItem(
             toolCallId: toolCallId,
@@ -729,6 +780,10 @@ class MobileBridgeClient extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final timer in _pendingTimers.values) {
+      timer.cancel();
+    }
+    _pendingTimers.clear();
     _subscription?.cancel();
     transport.close();
     super.dispose();

@@ -59,6 +59,101 @@ class SessionTimelineList extends StatelessWidget {
               ),
             ),
 
+          // 等待回复占位 / 超时兜底卡片
+          PendingResponseItem() => item.timedOut
+              ? Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7ED),
+                    border: Border.all(
+                      color: const Color(0xFFF59E0B).withValues(alpha: 0.35),
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            LucideIcons.clockAlert,
+                            size: 14,
+                            color: Color(0xFFB45309),
+                          ),
+                          const SizedBox(width: 6),
+                          const Text(
+                            'Reply timed out',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFFB45309),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'No response yet. The agent may still be working on the computer.',
+                        style: TextStyle(
+                          color: _textSecondary,
+                          fontSize: 13,
+                          height: 1.45,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          _ActionButton(
+                            icon: LucideIcons.refreshCw,
+                            label: 'Retry',
+                            filled: true,
+                            onTap: () => client.retryPrompt(item.promptText),
+                          ),
+                          const SizedBox(width: 8),
+                          const _ActionButton(
+                            icon: LucideIcons.monitor,
+                            label: 'Check desktop',
+                            filled: false,
+                            onTap: null,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                )
+              : Row(
+                  children: [
+                    AgentBrandLogo(agentId: session.agentId, size: 14),
+                    const SizedBox(width: 8),
+                    Text(
+                      session.agentId.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _textSecondary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const SizedBox(
+                      width: 13,
+                      height: 13,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.8,
+                        color: _weTypeGreen,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Thinking…',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: _textSecondary,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+
           // Kelivo Borderless Agent Response with Brand Header
           StreamingTextItem() => Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -453,6 +548,54 @@ class SessionTimelineList extends StatelessWidget {
             ),
         };
       },
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool filled;
+  final VoidCallback? onTap;
+
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    required this.filled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = filled ? Colors.white : const Color(0xFFB45309);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: filled ? const Color(0xFFB45309) : Colors.transparent,
+          border: Border.all(
+            color: const Color(0xFFB45309).withValues(alpha: 0.45),
+          ),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: color),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
