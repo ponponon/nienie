@@ -136,6 +136,7 @@ class ManagedP2PConnection implements P2PConnection {
   constructor(
     private readonly client: { connection: QUICConnection; destroy(opts: { force: boolean }): Promise<void> },
     readonly remote: PeerEndpoint,
+    private readonly onClosed?: () => void,
   ) {}
 
   get connection(): QUICConnection {
@@ -155,7 +156,11 @@ class ManagedP2PConnection implements P2PConnection {
   }
 
   async close(): Promise<void> {
-    await this.client.destroy({ force: true }).catch(() => {});
+    try {
+      await this.client.destroy({ force: true });
+    } finally {
+      this.onClosed?.();
+    }
   }
 }
 
@@ -266,21 +271,36 @@ export class QuicP2PNode {
     this.requireBound();
     const { serverName = 'localhost', signal } = options;
     signal?.throwIfAborted();
+
     const client = await (QUICClient as unknown as {
-      createQUICClient(opts: unknown): Promise<{ connection: QUICConnection; destroy(o: { force: boolean }): Promise<void> }>;
-    }).createQUICClient({
-      socket: this.socket!,
-      host: peer.host,
-      port: peer.port,
-      serverName,
-      crypto: clientCrypto,
-      config: this.clientConfig,
-    });
+      createQUICClient(
+        opts: unknown,
+        ctx?: { signal?: AbortSignal },
+      ): Promise<{ connection: QUICConnection; destroy(o: { force: boolean }): Promise<void> }>;
+    }).createQUICClient(
+      {
+        socket: this.socket!,
+        host: peer.host,
+        port: peer.port,
+        serverName,
+        crypto: clientCrypto,
+        config: this.clientConfig,
+      },
+      // 把取消信号真正传入握手过程（而非仅在握手前检查一次）
+      signal ? { signal } : undefined,
+    );
+
+    // 握手期间被取消但最终迟到成功 → 立即销毁刚建立的连接
+    if (signal?.aborted) {
+      await client.destroy({ force: true }).catch(() => {});
+      throw (signal.reason ?? new Error('connect aborted'));
+    }
+
     this.activeClients.add(client);
-    signal?.addEventListener('abort', () => {
-      void client.destroy({ force: true }).catch(() => {});
+    const managed = new ManagedP2PConnection(client, peer, () => {
+      this.activeClients.delete(client);
     });
-    return new ManagedP2PConnection(client, peer);
+    return managed;
   }
 
   /** 从流循环读取完整消息（健壮性：不能只 read 一次）；生产应加长度上限防无限缓冲。 */
