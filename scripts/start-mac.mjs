@@ -34,6 +34,13 @@ const clientBundleOut = resolve(rootDir, 'apps/desktop/dist/desktop-client.js');
 const esmRequireBanner =
   "--banner:js=import { createRequire as __nienieCreateRequire } from 'node:module'; const require = __nienieCreateRequire(import.meta.url);";
 
+// @matrixai/quic 是 ESM-only + 原生 .node 绑定（按 import.meta.url 定位），严禁打包进 bundle。
+const quicExternals = [
+  '--external:@matrixai/quic',
+  '--external:@matrixai/quic-*',
+  '--external:@matrixai/*',
+];
+
 function bundleLiveRenderer() {
   execFileSync(
     esbuildBin,
@@ -58,6 +65,7 @@ function bundleLiveRenderer() {
       '--format=esm',
       '--target=node22',
       esmRequireBanner,
+      ...quicExternals,
       `--outfile=${rendererLiveOut}`,
       '--log-level=silent',
     ],
@@ -79,6 +87,7 @@ if (isSmokeOrHeadless) {
       '--format=esm',
       '--target=node22',
       esmRequireBanner,
+      ...quicExternals,
       `--outfile=${outFile}`,
     ],
     { cwd: rootDir, stdio: 'inherit' },
@@ -104,6 +113,7 @@ if (isSmokeOrHeadless) {
       '--format=cjs',
       '--target=node22',
       '--external:electron',
+      ...quicExternals,
       `--outfile=${outFile}`,
     ],
     { cwd: rootDir, stdio: 'inherit' },

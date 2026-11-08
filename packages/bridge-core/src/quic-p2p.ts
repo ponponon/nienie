@@ -17,16 +17,28 @@
  *  - connect() 返回持有 QUICClient 生命周期的受管连接句柄，供竞速器取消失败分支。
  *  - 全生命周期用状态机管理，杜绝重复 bind 泄漏 socket / 破坏 NAT 映射。
  */
-import {
+// @matrixai/quic 是 ESM-only + 依赖自身 prebuild/*.node 原生绑定（按 import.meta.url 相对定位），
+// 严禁被 esbuild 打包进 CJS（import.meta.url 会变 undefined 导致 createRequire 崩溃、原生绑定路径错乱）。
+// 因此：类型用 `import type`（编译期擦除），运行时用动态 `import()` 懒加载 + esbuild `--external:@matrixai/quic`。
+// 这样主进程启动不触发它，仅在真正使用 P2P（bind/connect）时才加载。
+import type {
   QUICSocket,
   QUICServer,
   QUICClient,
-  events,
-  type QUICConnection,
-  type QUICStream,
+  QUICConnection,
+  QUICStream,
 } from '@matrixai/quic';
 import { createHmac, randomBytes, randomFillSync, timingSafeEqual } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
+
+type QuicModule = typeof import('@matrixai/quic');
+let quicMod: QuicModule | undefined;
+async function loadQuic(): Promise<QuicModule> {
+  if (!quicMod) {
+    quicMod = await import('@matrixai/quic');
+  }
+  return quicMod;
+}
 
 /** 对端网络端点。跨公网应填信令服务器观测到的公网 IP:port，而非本地 bind 地址。 */
 export type PeerEndpoint = {
@@ -164,13 +176,32 @@ class ManagedP2PConnection implements P2PConnection {
   }
 }
 
+type SocketHandle = {
+  host: string;
+  port: number;
+  start(opts: { host: string; port: number }): Promise<void>;
+  send(data: Buffer, port: number, host: string): Promise<number> | number;
+  stop(opts: { force: boolean }): Promise<void>;
+};
+
+type ServerHandle = {
+  addEventListener(name: string, cb: (evt: unknown) => void): void;
+  start(): Promise<void>;
+  stop(opts: { force: boolean }): Promise<void>;
+};
+
+type ClientHandle = {
+  connection: QUICConnection;
+  destroy(opts: { force: boolean }): Promise<void>;
+};
+
 /**
  * P2P QUIC 节点：持有一个 QUICSocket，可监听入站、可打洞后主动出站建连。
  * 手机与电脑各自运行一个节点；同一设备的 Server/Client 共享同一 QUICSocket。
  */
 export class QuicP2PNode {
-  private socket: QUICSocket | undefined;
-  private server: QUICServer | undefined;
+  private socket: SocketHandle | undefined;
+  private server: ServerHandle | undefined;
   private state: NodeState = 'idle';
   private readonly activeClients = new Set<{ destroy(o: { force: boolean }): Promise<void> }>();
   private readonly serverCrypto: ReturnType<typeof createServerCrypto>;
@@ -193,16 +224,17 @@ export class QuicP2PNode {
       throw new Error(`Cannot bind in state ${this.state}`);
     }
     this.state = 'binding';
-    const socket = new QUICSocket({ resolveHostname: (h) => h });
+    const { QUICSocket } = await loadQuic();
+    const socket = new (QUICSocket as unknown as {
+      new (o: { resolveHostname: (h: string) => string }): SocketHandle;
+    })({ resolveHostname: (h) => h });
     try {
-      await socket.start({ host: host ?? this.defaultHost, port: port ?? this.defaultPort });
+      await socket.start({ host: host ?? this.defaultHost, port: port ?? this.defaultPort } as never);
       this.socket = socket;
       this.state = 'bound';
       return { host: socket.host, port: socket.port };
     } catch (error) {
-      await (socket as unknown as { stop(o: { force: boolean }): Promise<void> })
-        .stop({ force: true })
-        .catch(() => {});
+      await socket.stop({ force: true }).catch(() => {});
       this.state = 'idle';
       throw error;
     }
@@ -237,21 +269,25 @@ export class QuicP2PNode {
     if (this.server) {
       throw new Error('QUIC server already started');
     }
-    const server = new QUICServer({
-      socket: this.socket!,
+    const quic = await loadQuic();
+    const server = new (quic.QUICServer as unknown as {
+      new (o: unknown): ServerHandle;
+    })({
+      socket: this.socket,
       crypto: this.serverCrypto,
       config: this.serverConfig,
     });
-    server.addEventListener(events.EventQUICServerConnection.name, (evt) => {
-      const conn = (evt as unknown as { detail: QUICConnection }).detail;
-      conn.addEventListener(events.EventQUICConnectionStream.name, (e2) => {
-        const stream = (e2 as unknown as { detail: QUICStream }).detail;
+    server.addEventListener(quic.events.EventQUICServerConnection.name, (evt) => {
+      const conn = (evt as { detail: QUICConnection }).detail;
+      (conn as unknown as {
+        addEventListener(name: string, cb: (e: unknown) => void): void;
+      }).addEventListener(quic.events.EventQUICConnectionStream.name, (e2) => {
+        const stream = (e2 as { detail: QUICStream }).detail;
         void (async () => {
           const text = await this.readStream(stream);
           await onMessage(text, stream);
         })().catch(() => {
-          // 业务处理失败（JSON 解析、Agent 异常等）不视为网络层崩溃；
-          // 生产接入 logger/reportError 回调上报。
+          // 业务处理失败（JSON 解析、Agent 异常等）不视为网络层崩溃；生产接入 logger/reportError 上报。
         });
       });
     });
@@ -272,14 +308,15 @@ export class QuicP2PNode {
     const { serverName = 'localhost', signal } = options;
     signal?.throwIfAborted();
 
-    const client = await (QUICClient as unknown as {
+    const quic = await loadQuic();
+    const client = await (quic.QUICClient as unknown as {
       createQUICClient(
         opts: unknown,
         ctx?: { signal?: AbortSignal },
-      ): Promise<{ connection: QUICConnection; destroy(o: { force: boolean }): Promise<void> }>;
+      ): Promise<ClientHandle>;
     }).createQUICClient(
       {
-        socket: this.socket!,
+        socket: this.socket,
         host: peer.host,
         port: peer.port,
         serverName,
@@ -303,18 +340,6 @@ export class QuicP2PNode {
     return managed;
   }
 
-  /** 从流循环读取完整消息（健壮性：不能只 read 一次）；生产应加长度上限防无限缓冲。 */
-  private async readStream(stream: QUICStream): Promise<string> {
-    const chunks: Buffer[] = [];
-    const reader = stream.readable.getReader();
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      chunks.push(Buffer.from(value ?? []));
-    }
-    return Buffer.concat(chunks).toString('utf8');
-  }
-
   /**
    * 统一关闭：停止 server、销毁活动连接、关闭 socket，保留清理异常原因。
    * 并发 close() 幂等；closing 后拒绝新 bind/serve/connect。
@@ -324,11 +349,7 @@ export class QuicP2PNode {
     this.state = 'closing';
     const cleanups: Promise<unknown>[] = [];
     if (this.server) {
-      cleanups.push(
-        (this.server as unknown as { stop(o: { force: boolean }): Promise<void> })
-          .stop({ force: true })
-          .catch(() => {}),
-      );
+      cleanups.push(this.server.stop({ force: true }).catch(() => {}));
       this.server = undefined;
     }
     for (const client of this.activeClients) {
@@ -336,11 +357,7 @@ export class QuicP2PNode {
     }
     this.activeClients.clear();
     if (this.socket) {
-      cleanups.push(
-        (this.socket as unknown as { stop(o: { force: boolean }): Promise<void> })
-          .stop({ force: true })
-          .catch(() => {}),
-      );
+      cleanups.push(this.socket.stop({ force: true }).catch(() => {}));
       this.socket = undefined;
     }
     await Promise.allSettled(cleanups);
@@ -351,5 +368,19 @@ export class QuicP2PNode {
     if (this.state !== 'bound' || !this.socket) {
       throw new Error(`QuicP2PNode not bound (state=${this.state})`);
     }
+  }
+
+  /** 从流循环读取完整消息（健壮性：不能只 read 一次）；生产应加长度上限防无限缓冲。 */
+  private async readStream(stream: QUICStream): Promise<string> {
+    const chunks: Buffer[] = [];
+    const reader = (stream as unknown as {
+      readable: { getReader(): { read(): Promise<{ value?: Buffer; done: boolean }>; releaseLock(): void } };
+    }).readable.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      chunks.push(Buffer.from(value ?? []));
+    }
+    return Buffer.concat(chunks).toString('utf8');
   }
 }
