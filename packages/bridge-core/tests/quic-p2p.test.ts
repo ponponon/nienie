@@ -95,7 +95,7 @@ describe('QUIC crypto primitives（锁定 ChatGPT 诊断的返回类型）', () 
 
 describe('QUIC over hole-punched UDP (Nienie Tier-2 P2P) · 生产 QuicP2PNode', () => {
   it(
-    '两个 QuicP2PNode 经 UDP 打洞后建立 QUIC 隧道并双向收发消息',
+    '两个 QuicP2PNode 经打洞后建立 QUIC 隧道并双向收发消息（打洞与建连职责分离）',
     async () => {
       const nodeA = new QuicP2PNode({ tls });
       const nodeB = new QuicP2PNode({ tls });
@@ -105,29 +105,26 @@ describe('QUIC over hole-punched UDP (Nienie Tier-2 P2P) · 生产 QuicP2PNode',
 
         const serverGot = new Promise<string>((resolve) => {
           // 易错点 #2：生产 serve() 内部用 events.EventQUICServerConnection.name
-          nodeA.serve((text, stream) => {
+          void nodeA.serve((text, stream) => {
             resolve(text);
             const writer = stream.writable.getWriter();
             void writer.write(Buffer.from('ACK: ' + text)).then(() => writer.close());
           });
         });
 
-        // 易错点 #3：生产 connect() 内部用 socket.send() 打洞（spy 锁定真实复用 QUICSocket）
-        // 连接方 nodeB 执行 punch（真实 NAT 需信令层协调两端同时 punch，见 quic-p2p.ts 注释）
-        const punchSpy = vi.spyOn(nodeB, 'punch');
+        // 打洞与建连分离：上层（信令/竞速）编排双端 punch，再建连（ChatGPT 建议）
+        const punchSpyB = vi.spyOn(nodeB, 'punch');
+        await Promise.all([nodeA.punch(epB), nodeB.punch(epA)]);
+        expect(punchSpyB).toHaveBeenCalled();
+
         const conn = await nodeB.connect(epA);
-        expect(punchSpy).toHaveBeenCalled();
+        expect(conn.transport).toBe('quic');
 
-        const stream = (
-          conn as unknown as { newStream(t: string): { writable: WritableStream<Buffer> } }
-        ).newStream('bidi');
-        const writer = stream.writable.getWriter();
-        const msg = 'Nienie P2P QUIC tunnel message';
-        await writer.write(Buffer.from(msg));
-        await writer.close();
-
+        await conn.send(Buffer.from('Nienie P2P QUIC tunnel message'));
         const received = await serverGot;
-        expect(received).toBe(msg);
+        expect(received).toBe('Nienie P2P QUIC tunnel message');
+
+        await conn.close();
       } finally {
         await nodeA.close();
         await nodeB.close();
@@ -135,4 +132,31 @@ describe('QUIC over hole-punched UDP (Nienie Tier-2 P2P) · 生产 QuicP2PNode',
     },
     25000,
   );
+
+  it('bind 重复调用必须被状态机拒绝（防止泄漏 socket / 破坏 NAT 映射）', async () => {
+    const node = new QuicP2PNode({ tls });
+    try {
+      await node.bind('127.0.0.1', 0);
+      await expect(node.bind('127.0.0.1', 0)).rejects.toThrow(/Cannot bind/);
+    } finally {
+      await node.close();
+    }
+  });
+
+  it('connect 传入已 AbortSignal 必须立即中止（供竞速器取消失败分支）', async () => {
+    const nodeA = new QuicP2PNode({ tls });
+    const nodeB = new QuicP2PNode({ tls });
+    try {
+      const epA = await nodeA.bind('127.0.0.1', 0);
+      await nodeB.bind('127.0.0.1', 0);
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        nodeB.connect(epA, { signal: controller.signal }),
+      ).rejects.toThrow();
+    } finally {
+      await nodeA.close();
+      await nodeB.close();
+    }
+  });
 });
