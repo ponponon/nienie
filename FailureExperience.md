@@ -762,6 +762,40 @@ Codex 客户端在遇到破坏性 SQLite Schema 演进时，会将主 Schema 版
 1. **Cloudflare Pages 支持完整静态资源目录树**（HTML + CSS + JS + SVG/图片 + `_headers`/`_redirects`），严禁把 CSS/JS/资源内联进单个 HTML 文件，必须按 `styles/`、`scripts/`、`assets/` 职责拆分，并用原生 `<script type="module">` ESM 组织脚本。
 2. 二维码、图标等矢量/二进制资源必须独立成 `assets/` 下的文件由 `<img>` 或 `<link rel="icon">` 引用，严禁把数百行 `<rect>` 格子直接内联在 HTML 标记里。
 
+## 2026-11-08 `@matrixai/quic`（Cloudflare quiche）QUIC-over-hole-punched-UDP 握手永不收尾（经 ChatGPT 诊断）
+
+### 问题
+
+实现 RustDesk 式 Tier-2 P2P（UDP 打洞 + QUIC 隧道）时，PoC 里 UDP 打洞成功、`QUICClient` 发起握手（`Connect` → `Start QUICConnection`），但服务端始终不触发入站连接、客户端一直 pending。
+
+### 根因（经 ChatGPT 按 `@matrixai/quic` 官方源码逐条诊断确认）
+
+1. **`crypto.ops.sign()` 返回类型错（最关键）**：`sign()` 必须返回 **ArrayBuffer**，不能返回 `Buffer`/`Uint8Array`。`QUICConnectionId` 继承 `Uint8Array`，传 Buffer 会**复制整个 32 字节**而非截取前 20 字节（`quiche.MAX_CONN_ID_LEN`），导致 SCID 长度错误、TLS 握手永不收尾。`sign`/`verify` 同时用于 SCID 派生与 Stateless Retry Token，必须用同一 HMAC 密钥。
+2. **入站连接事件名写错**：必须用 `events.EventQUICServerConnection.name`，不是字符串 `'connection'`。
+3. **打洞必须用 `QUICSocket` 自身的 `socket.send()`**：与 QUIC 共享同一 NAT 映射；不能用独立 `dgram` socket（NAT 映射不共享）。`QUICSocket` 收到非 QUIC 的原始 UDP（如打洞包）会静默丢弃，这是正常的。
+4. **`reuseAddr` 属于 `QUICSocket.start()`**（创建底层 dgram socket 时用），`QUICServer` 复用已有 socket 时不重新 bind、不涉及 `reuseAddr`。
+5. **`client.randomBytes(data)`**：`data` 是 `ArrayBuffer`，用 `randomFillSync(new Uint8Array(data))` 原地填充。
+6. **跨公网对端地址**必须用信令服务器观测到的公网 `IP:port`，不是 `socket.host/port`（那是本地 bind 地址）。
+
+### 影响
+
+QUIC 打洞 P2P 隧道无法建立，多级网络的 Tier-2 层不可用。
+
+### 修复
+
+1. `sign()` 返回 `toArrayBuffer(hmacDigest)`（`buf.buffer.slice(byteOffset, byteOffset+byteLength)`）。
+2. 用 `events.EventQUICServerConnection.name` 监听入站连接。
+3. 打洞改用 `socketA.send(Buffer, port, host)` / `socketB.send(...)`（QUICSocket 自身）。
+4. Server/Client config 分离（客户端不持服务端私钥），加 `maxIdleTimeout` 避免无限 pending。
+5. 修正后的 PoC 端到端跑通：**UDP 打洞 → 同 socket QUIC 隧道 → 双向消息收发**，并固化为防回归测试 `packages/bridge-core/tests/quic-p2p.test.ts`。
+
+### 预防措施
+
+1. 接入 `@matrixai/quic`（quiche 系）时：`crypto.ops.sign` 返回 **ArrayBuffer**、事件用 `events.*.name`、打洞用 `QUICSocket.send()`，三者缺一不可。
+2. **P2P 打洞的 UDP 包必须与 QUIC 握手复用同一个 socket**，否则 NAT 映射互不相通。
+3. 严禁把 RSA/ECDSA 签名（TLS 证书体系）与 HMAC（QUIC 连接 ID / Retry Token 派生）混为一谈排查 —— 它们是两套独立机制。
+
+
 
 
 

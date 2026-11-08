@@ -11,8 +11,13 @@
       "import": "./src/index.ts"
     }
   },
-  "scripts": { "build": "tsc", "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
   "dependencies": {
+    "@matrixai/quic": "^2.0.9",
     "@nienie/agent-events": "workspace:*",
     "@nienie/protocol": "workspace:*"
   }
