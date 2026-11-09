@@ -39,6 +39,10 @@ class MobileBridgeClient extends ChangeNotifier {
   AgentSession? activeSession;
 
   final Map<String, int> _lastSequenceBySession = {};
+  // 每会话当前事件流 epoch，供 replay 定位
+  final Map<String, String> _currentEpochBySession = {};
+  // 正在回放缺口的会话，避免重复触发
+  final Set<String> _gapReplayInFlight = <String>{};
   // eventId 幂等去重：稳定事件 ID（如 history:sid:part:rev）重复到达只处理一次
   final Set<String> _seenEventIds = <String>{};
   static const int _maxSeenEventIds = 2000;
@@ -291,15 +295,26 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   Future<void> replayMissedEvents(String sessionId) async {
-    final afterSeq = _lastSequenceBySession[sessionId] ?? 0;
+    final epoch = _currentEpochBySession[sessionId];
+    final epochKey = epoch != null && epoch.isNotEmpty ? '$sessionId#$epoch' : sessionId;
+    // 注意：判重 key 与 _handleServerMessage 的 epochKey 必须一致（都是 sessionId#streamEpoch）
+    final afterSeq = _lastSequenceBySession[epochKey] ?? 0;
     final res = await transport.sendRequest({
       'type': 'events.replay',
       'requestId': _nextRequestId(),
       'sessionId': sessionId,
+      if (epoch != null && epoch.isNotEmpty) 'streamEpoch': epoch,
       'afterSequence': afterSeq,
     });
     if (res['ok'] == true) {
       final data = res['data'] as Map<String, dynamic>;
+      // 服务端 epoch 已变或缓存被截断：清空本地时间线，以快照方式重建
+      final resetRequired = data['resetRequired'] == true;
+      final truncated = data['truncated'] == true;
+      if (resetRequired || truncated) {
+        _timelineBySession.remove(sessionId);
+        _lastSequenceBySession.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
+      }
       final events = data['events'] as List<dynamic>? ?? const [];
       for (final rawEvt in events) {
         _handleServerMessage({
@@ -673,10 +688,22 @@ class MobileBridgeClient extends ChangeNotifier {
 
     // 2) streamEpoch 感知的 sequence 判重：进程重启后 sequence 重置（新 epoch）
     //    不会被误判为旧事件；同一 epoch 内按 sequence 排序去重。
+    if (event.streamEpoch.isNotEmpty) {
+      _currentEpochBySession[event.sessionId] = event.streamEpoch;
+    }
     final epochKey = '${event.sessionId}#${event.streamEpoch}';
     final lastSeq = _lastSequenceBySession[epochKey] ?? 0;
     if (event.sequence <= lastSeq) {
       return;
+    }
+    // 3) 序列缺口检测：sequence 跳号说明中间事件丢失，触发回放补齐
+    if (lastSeq > 0 && event.sequence > lastSeq + 1 && !_gapReplayInFlight.contains(event.sessionId)) {
+      _gapReplayInFlight.add(event.sessionId);
+      unawaited(
+        replayMissedEvents(event.sessionId).whenComplete(
+          () => _gapReplayInFlight.remove(event.sessionId),
+        ),
+      );
     }
     _lastSequenceBySession[epochKey] = event.sequence;
 

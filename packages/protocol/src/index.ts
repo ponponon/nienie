@@ -258,6 +258,7 @@ export type BridgeRequest =
       type: 'events.replay';
       requestId: string;
       sessionId: string;
+      streamEpoch?: string | undefined;
       afterSequence: number;
     }
   | {
@@ -265,6 +266,19 @@ export type BridgeRequest =
       requestId: string;
       displayId?: string | undefined;
     };
+
+/** 事件回放结果：按 (sessionId, streamEpoch) 定位，标注截断与是否需快照重置。 */
+export type EventsReplayResult = {
+  sessionId: string;
+  streamEpoch: string;
+  earliestSequence: number;
+  latestSequence: number;
+  /** 服务端缓存已截断，afterSequence 之前的事件可能缺失。 */
+  truncated: boolean;
+  /** 客户端应丢弃本地时间线、以快照方式重建。 */
+  resetRequired: boolean;
+  events: CanonicalAgentEvent[];
+};
 
 export type BridgeResponse =
   | { type: 'response'; requestId: string; ok: true; data: unknown }
@@ -605,7 +619,8 @@ export function parseBridgeRequest(
         !obj.sessionId.trim() ||
         typeof obj.afterSequence !== 'number' ||
         !Number.isInteger(obj.afterSequence) ||
-        obj.afterSequence < 0
+        obj.afterSequence < 0 ||
+        (obj.streamEpoch !== undefined && typeof obj.streamEpoch !== 'string')
       ) {
         return {
           ok: false,
@@ -619,6 +634,7 @@ export function parseBridgeRequest(
           type: 'events.replay',
           requestId,
           sessionId: obj.sessionId,
+          ...(obj.streamEpoch ? { streamEpoch: obj.streamEpoch } : {}),
           afterSequence: obj.afterSequence,
         },
       };

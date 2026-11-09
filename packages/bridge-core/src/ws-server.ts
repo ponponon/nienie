@@ -95,6 +95,8 @@ export class BridgeServer {
   private readonly clients = new Map<string, ClientConnection>();
   private readonly sessionIndex = new Map<string, AgentSession>();
   private readonly eventHistoryBySession = new Map<string, CanonicalAgentEvent[]>();
+  /** 每个会话当前事件流 epoch；epoch 变化即新事件流，旧缓存不与新事件混排。 */
+  private readonly sessionEpoch = new Map<string, string>();
 
   constructor(options: BridgeServerOptions) {
     this.registry = options.registry;
@@ -664,13 +666,31 @@ export class BridgeServer {
 
       case 'events.replay': {
         if (!bypassAuth) this.requireAuthenticated(client);
-        const buffered = this.eventHistoryBySession.get(request.sessionId) ?? [];
-        const events = buffered.filter((evt) => evt.sequence > request.afterSequence);
+        const sessionId = request.sessionId;
+        const currentEpoch = this.sessionEpoch.get(sessionId) ?? '';
+        const buffered = this.eventHistoryBySession.get(sessionId) ?? [];
+        const earliestSequence = buffered.length > 0 ? buffered[0]!.sequence : 0;
         const latestSequence = buffered.length > 0 ? buffered[buffered.length - 1]!.sequence : 0;
+
+        // 客户端请求的 epoch 与服务端当前 epoch 不一致：旧事件流已结束，需快照重建
+        const epochMismatch =
+          request.streamEpoch !== undefined && request.streamEpoch !== currentEpoch;
+
+        // 缓存截断：afterSequence 落在缓存窗口之前，之前的事件已缺失
+        const truncated = buffered.length > 0 && request.afterSequence + 1 < earliestSequence;
+
+        const events =
+          epochMismatch || truncated
+            ? []
+            : buffered.filter((evt) => evt.sequence > request.afterSequence);
+
         return {
-          sessionId: request.sessionId,
-          afterSequence: request.afterSequence,
-          latestSequence: latestSequence,
+          sessionId,
+          streamEpoch: currentEpoch,
+          earliestSequence,
+          latestSequence,
+          truncated: truncated && !epochMismatch,
+          resetRequired: epochMismatch,
           events,
         };
       }
@@ -733,6 +753,12 @@ export class BridgeServer {
   }
 
   private broadcastEvent(event: CanonicalAgentEvent): void {
+    // epoch 变化＝新事件流实例：清空旧缓存，避免新旧 epoch 事件混排导致 replay 语义错乱
+    const prevEpoch = this.sessionEpoch.get(event.sessionId);
+    if (prevEpoch !== event.streamEpoch) {
+      this.sessionEpoch.set(event.sessionId, event.streamEpoch);
+      this.eventHistoryBySession.delete(event.sessionId);
+    }
     let history = this.eventHistoryBySession.get(event.sessionId);
     if (!history) {
       history = [];
