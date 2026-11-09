@@ -968,3 +968,19 @@ ChatGPT 明确：远程 Agent 控制应追求 **At-least-once delivery + Idempot
 
 ### 已知边界（后续用 part-snapshot 协议彻底解决）
 若 Bridge 在 part 更新中途重启，adapter emittedLength 归零会全量重发，而客户端只有部分前缀，理论上可能重复前缀。彻底解法是 ChatGPT 建议的 part snapshot/update 事件（partId+revision+完整内容，客户端按 partId 覆盖而非追加），本版已为每条历史事件带上 partId/partRevision 铺垫。
+
+---
+
+## 真机 ADB 端到端验证：手机收不到回复的根因是「运行中的 Bridge 是旧代码」
+
+用户反馈手机发消息依然没回复。用 ADB 真机（OnePlus PLF110）端到端排查，根因不是逻辑 bug，而是**运行中的 Bridge 跑的是旧 bundle**：
+- `curl :4100/diagnostics` 返回 404 → 说明 Bridge 没加载我后加的诊断/重连/SSE 修复（dist 是旧时间点构建的）。
+- 重建桌面 bundle（`pnpm start`）+ 重启 Bridge 后，`/diagnostics` 正常、`adapters.opencode[0].state=connected receivedEvents=85`，手机端到端「hello → 你好，Hello！…」回复立刻正常。
+
+**通用教训：改了 Bridge/适配器代码后，必须重建桌面 bundle 并重启 Bridge 才会生效**；`/diagnostics` 可作为「Bridge 是否在跑新代码」的快速探针。排查「手机没回复」先确认 Bridge 是不是旧的，再查逻辑。
+
+### 设备命名千篇一律
+手机端硬编码 `deviceName='Nienie Flutter Mobile'` + `platform='ios'`（连 Android 都写死 iOS），导致桌面「已连接设备」全一样无区分度。改用 `device_info_plus` 取手机型号（Android: brand+model，iOS: 用户设备名）+ 按实际 `Platform.operatingSystem` 上报。真机验证新配对设备名 = `OnePlus PLF110 | android`。注意设备名在配对时一次性写入，改完需重新配对才生效。
+
+### 附带构建 bug
+Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源只允许 a-z0-9_），导致 `flutter build` 失败；XML 引用的是 `niebie_launch_image`（下划线）。重命名文件对齐即可。

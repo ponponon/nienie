@@ -5,6 +5,7 @@ import '../models/protocol_models.dart';
 import '../models/timeline_items.dart';
 import '../storage/credential_store.dart';
 import '../transport/bridge_transport.dart';
+import '../utils/device_identity.dart';
 
 enum BridgeConnectionState { disconnected, connecting, connected, error }
 
@@ -119,8 +120,8 @@ class MobileBridgeClient extends ChangeNotifier {
 
   Future<void> pairWithQrUri(
     String qrUri, {
-    String deviceName = 'Nienie Flutter Mobile',
-    String platform = 'ios',
+    String? deviceName,
+    String? platform,
   }) async {
     final payload = PairingQrPayload.decode(qrUri);
     await pairAndConnect(
@@ -135,8 +136,8 @@ class MobileBridgeClient extends ChangeNotifier {
   Future<void> pairAndConnect({
     required String wsUrl,
     required String pairingCode,
-    String deviceName = 'Nienie Flutter Mobile',
-    String platform = 'ios',
+    String? deviceName,
+    String? platform,
     bool allowLocalhostFallback = false,
   }) async {
     if (pairingCode.trim().isEmpty) {
@@ -144,6 +145,15 @@ class MobileBridgeClient extends ChangeNotifier {
       errorMessage = strings.emptyPairingCodeError;
       notifyListeners();
       return;
+    }
+
+    // 缺省用真实设备身份（手机型号 + 实际平台），让设备列表有区分度
+    String effectiveName = deviceName ?? '';
+    String effectivePlatform = platform ?? '';
+    if (deviceName == null || platform == null) {
+      final identity = await resolveDeviceIdentity();
+      effectiveName = deviceName ?? identity.name;
+      effectivePlatform = platform ?? identity.platform;
     }
 
     connectionState = BridgeConnectionState.connecting;
@@ -172,8 +182,8 @@ class MobileBridgeClient extends ChangeNotifier {
         'type': 'pair.confirm',
         'requestId': _nextRequestId(),
         'pairingCode': pairingCode,
-        'deviceName': deviceName,
-        'platform': platform,
+        'deviceName': effectiveName,
+        'platform': effectivePlatform,
       });
 
       if (res['ok'] != true) {
