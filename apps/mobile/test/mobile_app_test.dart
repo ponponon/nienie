@@ -512,4 +512,45 @@ void main() {
     expect(transport.sentPrompts.last, '帮我跑测试');
     client.dispose();
   });
+
+  testWidgets('事件按 eventId 幂等去重，streamEpoch 变化时 sequence 重置仍被接受', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'hi');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+
+    Map<String, dynamic> evt(String eventId, String epoch, int seq, String delta) => {
+      'version': 1,
+      'eventId': eventId,
+      'streamEpoch': epoch,
+      'sessionId': 'ses_alpha',
+      'sequence': seq,
+      'timestamp': '2026-11-08T10:00:0${seq}Z',
+      'type': 'text_delta',
+      'payload': {'delta': delta},
+    };
+
+    transport.emitServerEvent(evt('e1', 'ep1', 1, 'A'));
+    await tester.pump();
+    expect(find.text('A'), findsOneWidget);
+
+    // 同 eventId 重复到达 → 幂等去重（不应变成 AA）
+    transport.emitServerEvent(evt('e1', 'ep1', 1, 'A'));
+    await tester.pump();
+
+    // 新 streamEpoch（Bridge 重启），sequence 重置为 1，仍应被接受
+    transport.emitServerEvent(evt('e2', 'ep2', 1, 'B'));
+    await tester.pump();
+
+    // 结果应为 "AB"：e1 去重后未重复，e2 因新 epoch 被接受
+    expect(find.text('AB'), findsOneWidget);
+    client.dispose();
+  });
 }

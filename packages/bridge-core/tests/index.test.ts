@@ -145,6 +145,7 @@ describe('bridge core', () => {
 
     opencode.emit({
       version: 1,
+      streamEpoch: 'epoch_test',
       eventId: 'evt_1',
       agentId: 'opencode',
       sessionId: 'ses_existing',
@@ -302,6 +303,7 @@ describe('bridge core', () => {
     // 8. Event broadcast to all connected clients
     opencode.emit({
       version: 1,
+      streamEpoch: 'epoch_test',
       eventId: 'evt_broadcast_1',
       agentId: 'opencode',
       sessionId: 'ses_new',
@@ -571,6 +573,7 @@ describe('bridge core', () => {
     for (let seq = 1; seq <= 3; seq++) {
       opencode.emit({
         version: 1,
+      streamEpoch: 'epoch_test',
         eventId: `evt_rel_${seq}`,
         agentId: 'opencode',
         sessionId: 'ses_seed_1',
@@ -754,6 +757,7 @@ describe('bridge core', () => {
     // Emit waiting permission event and error event with sensitive secret
     opencode.emit({
       version: 1,
+      streamEpoch: 'epoch_test',
       eventId: 'evt_push_1',
       agentId: 'opencode',
       sessionId: 'ses_seed_1',
@@ -767,6 +771,7 @@ describe('bridge core', () => {
     });
     opencode.emit({
       version: 1,
+      streamEpoch: 'epoch_test',
       eventId: 'evt_push_2',
       agentId: 'opencode',
       sessionId: 'ses_seed_1',

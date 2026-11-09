@@ -128,6 +128,7 @@ class AgentSession {
 class CanonicalAgentEvent {
   final int version;
   final String eventId;
+  final String streamEpoch;
   final String sessionId;
   final int sequence;
   final String timestamp;
@@ -137,6 +138,7 @@ class CanonicalAgentEvent {
   const CanonicalAgentEvent({
     required this.version,
     required this.eventId,
+    required this.streamEpoch,
     required this.sessionId,
     required this.sequence,
     required this.timestamp,
@@ -148,6 +150,7 @@ class CanonicalAgentEvent {
     return CanonicalAgentEvent(
       version: json['version'] as int? ?? PROTOCOL_VERSION,
       eventId: json['eventId'] as String? ?? '',
+      streamEpoch: json['streamEpoch'] as String? ?? '',
       sessionId: json['sessionId'] as String,
       sequence: json['sequence'] as int,
       timestamp: json['timestamp'] as String? ?? '',

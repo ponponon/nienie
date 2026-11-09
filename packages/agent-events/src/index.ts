@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   PROTOCOL_VERSION,
   type AgentCapabilities,
@@ -53,6 +54,8 @@ export function createAgentInfo(
 
 export type CreateCanonicalEventInput = {
   eventId: string;
+  /** 事件流实例标识；缺省时由 createCanonicalEvent 生成。 */
+  streamEpoch?: string | undefined;
   machineId?: string | undefined;
   agentId?: AgentId | undefined;
   sessionId: string;
@@ -62,10 +65,16 @@ export type CreateCanonicalEventInput = {
   payload: Record<string, unknown>;
 };
 
+/** 生成事件流实例标识（每个 Adapter/事件流实例一个）。 */
+export function generateStreamEpoch(): string {
+  return `epoch_${randomUUID()}`;
+}
+
 export function createCanonicalEvent(input: CreateCanonicalEventInput): CanonicalAgentEvent {
   return {
     version: PROTOCOL_VERSION,
     eventId: input.eventId,
+    streamEpoch: input.streamEpoch ?? generateStreamEpoch(),
     ...(input.machineId ? { machineId: input.machineId } : {}),
     ...(input.agentId ? { agentId: input.agentId } : {}),
     sessionId: input.sessionId,

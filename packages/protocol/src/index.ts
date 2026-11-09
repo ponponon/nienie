@@ -194,6 +194,12 @@ export type CanonicalAgentEventType =
 export type CanonicalAgentEvent = {
   version: typeof PROTOCOL_VERSION;
   eventId: string;
+  /**
+   * 事件流实例标识。每次 Adapter/Bridge 启动事件流时生成新的 epoch。
+   * 客户端按 (sessionId, streamEpoch, sequence) 判重与排序，
+   * 进程重启后 sequence 重置不会被误判为旧事件。
+   */
+  streamEpoch: string;
   machineId?: string | undefined;
   agentId?: AgentId | undefined;
   sessionId: string;

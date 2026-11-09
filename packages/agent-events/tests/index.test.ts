@@ -34,6 +34,7 @@ describe('agent event contracts', () => {
   it('builds a canonical agent event envelope with version 1', () => {
     const event = createCanonicalEvent({
       eventId: 'evt_1',
+      streamEpoch: 'epoch_test',
       machineId: 'machine_local',
       agentId: 'opencode',
       sessionId: 'ses_1',
@@ -45,6 +46,7 @@ describe('agent event contracts', () => {
 
     expect(event).toEqual({
       version: 1,
+      streamEpoch: 'epoch_test',
       eventId: 'evt_1',
       machineId: 'machine_local',
       agentId: 'opencode',

@@ -953,3 +953,18 @@ HTTP 直出项目路径/Session ID/machineId。修复：仅允许 localhost 访�
 
 ### 未做（ChatGPT 建议的 P0，留待后续）
 SQLite rowid 水位无法发现已有 part 的 UPDATE（需 partId+revision 复合水位）；事件协议缺 streamEpoch（Bridge/重启后 sequence 重置会让手机误丢事件）；手机 Retry 需查电脑端实时状态而非本地缓存。这三个是「事件可靠性协议」级改造，ChatGPT 建议作为下一个独立提交重点做。
+
+---
+
+## 事件可靠性协议的三个本质问题（ChatGPT 第三轮定调）
+
+ChatGPT 明确：远程 Agent 控制应追求 **At-least-once delivery + Idempotent processing**（不追求不现实的 exactly-once 网络传输）。据此修复三个本质问题：
+
+1. **sequence 是进程内计数器**：Bridge/Adapter 重启后 normalizer 重建、sequence 归 1，手机端 `sequence <= lastSeq` 会把新事件全当旧事件丢弃，直到 sequence 超过重启前的值。修复：协议加 `streamEpoch`，客户端按 `(sessionId, streamEpoch, sequence)` 判重，epoch 变即重置。
+
+2. **rowid 水位无法发现已有 part 的 UPDATE**：OpenCode 会 UPDATE 已存在的 part 记录（流式文本增长就是同一条 part 反复 UPDATE），`WHERE rowid > 水位` 永远看不到更新。修复：改 partId + emittedLength 复合水位，只补发 `content[已回放长度:]` 缺失后缀，幂等且捕获增长。
+
+3. **randomUUID 历史事件 ID 不幂等**：每次回放生成新 `hist_xxx`，客户端无法识别重复。修复：稳定 eventId `history:{sessionId}:{partId}:{revision}` + 客户端 `eventId` 去重。
+
+### 已知边界（后续用 part-snapshot 协议彻底解决）
+若 Bridge 在 part 更新中途重启，adapter emittedLength 归零会全量重发，而客户端只有部分前缀，理论上可能重复前缀。彻底解法是 ChatGPT 建议的 part snapshot/update 事件（partId+revision+完整内容，客户端按 partId 覆盖而非追加），本版已为每条历史事件带上 partId/partRevision 铺垫。

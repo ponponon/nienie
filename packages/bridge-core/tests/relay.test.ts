@@ -194,6 +194,7 @@ describe('Public Relay server and outbound Bridge/Mobile routing', () => {
     mobileInbox.length = 0;
     opencode.emit({
       version: 1,
+      streamEpoch: 'epoch_test',
       eventId: 'evt_relay_stream_1',
       agentId: 'opencode',
       sessionId: 'ses_relay_1',

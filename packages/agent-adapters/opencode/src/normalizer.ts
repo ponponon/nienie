@@ -4,6 +4,7 @@ import {
   DEFAULT_MAX_TOOL_OUTPUT_LENGTH,
   redactSensitiveData,
   truncateOutput,
+  generateStreamEpoch,
 } from '@nienie/agent-events';
 import type { AgentStatus, CanonicalAgentEvent, CanonicalAgentEventType } from '@nienie/protocol';
 
@@ -13,6 +14,8 @@ export type OpenCodeNormalizerOptions = {
   maxToolOutputLength?: number | undefined;
   now?: (() => Date) | undefined;
   idGenerator?: (() => string) | undefined;
+  /** 事件流实例标识；缺省时生成，历史回放与实时事件共享同一 epoch。 */
+  streamEpoch?: string | undefined;
 };
 
 type RawRecord = Record<string, unknown>;
@@ -20,6 +23,7 @@ type RawRecord = Record<string, unknown>;
 export class OpenCodeEventNormalizer {
   private readonly agentId: 'opencode' | 'mimo';
   private readonly machineId: string | undefined;
+  readonly streamEpoch: string;
   private readonly maxToolOutputLength: number;
   private readonly now: () => Date;
   private readonly idGenerator: () => string;
@@ -35,6 +39,7 @@ export class OpenCodeEventNormalizer {
   constructor(options: OpenCodeNormalizerOptions = {}) {
     this.agentId = options.agentId ?? 'opencode';
     this.machineId = options.machineId;
+    this.streamEpoch = options.streamEpoch ?? generateStreamEpoch();
     this.maxToolOutputLength = options.maxToolOutputLength ?? DEFAULT_MAX_TOOL_OUTPUT_LENGTH;
     this.now = options.now ?? (() => new Date());
     this.idGenerator = options.idGenerator ?? (() => `evt_${randomUUID()}`);
@@ -433,6 +438,7 @@ export class OpenCodeEventNormalizer {
 
     return createCanonicalEvent({
       eventId: this.idGenerator(),
+      streamEpoch: this.streamEpoch,
       machineId: this.machineId,
       agentId: this.agentId,
       sessionId,

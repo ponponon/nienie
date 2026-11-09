@@ -38,6 +38,9 @@ class MobileBridgeClient extends ChangeNotifier {
   AgentSession? activeSession;
 
   final Map<String, int> _lastSequenceBySession = {};
+  // eventId 幂等去重：稳定事件 ID（如 history:sid:part:rev）重复到达只处理一次
+  final Set<String> _seenEventIds = <String>{};
+  static const int _maxSeenEventIds = 2000;
   final Map<String, List<SessionTimelineItem>> _timelineBySession = {};
   final Map<String, String> _sessionStatusBySession = {};
   final Map<PendingResponseItem, Timer> _pendingTimers = {};
@@ -648,11 +651,24 @@ class MobileBridgeClient extends ChangeNotifier {
     if (eventMap == null) return;
 
     final event = CanonicalAgentEvent.fromJson(Map<String, dynamic>.from(eventMap));
-    final lastSeq = _lastSequenceBySession[event.sessionId] ?? 0;
+
+    // 1) eventId 幂等去重：稳定事件 ID 重复到达（历史补偿重放）只处理一次
+    if (event.eventId.isNotEmpty) {
+      if (_seenEventIds.contains(event.eventId)) return;
+      _seenEventIds.add(event.eventId);
+      if (_seenEventIds.length > _maxSeenEventIds) {
+        _seenEventIds.remove(_seenEventIds.first);
+      }
+    }
+
+    // 2) streamEpoch 感知的 sequence 判重：进程重启后 sequence 重置（新 epoch）
+    //    不会被误判为旧事件；同一 epoch 内按 sequence 排序去重。
+    final epochKey = '${event.sessionId}#${event.streamEpoch}';
+    final lastSeq = _lastSequenceBySession[epochKey] ?? 0;
     if (event.sequence <= lastSeq) {
       return;
     }
-    _lastSequenceBySession[event.sessionId] = event.sequence;
+    _lastSequenceBySession[epochKey] = event.sequence;
 
     final items = _timelineBySession.putIfAbsent(event.sessionId, () => []);
 

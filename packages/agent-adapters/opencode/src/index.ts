@@ -89,7 +89,10 @@ export class OpenCodeAdapter implements AgentAdapter {
   private readonly sessionDirectories = new Map<string, string>();
   private readonly loadedHistorySessions = new Set<string>();
   private historySeqCounter = 0;
-  private readonly historyHighWater = new Map<string, number>();
+  /** partId → 已回放的文本长度，用于增量补发缺失后缀（幂等 + 捕获 UPDATE）。 */
+  private readonly emittedPartLength = new Map<string, number>();
+  /** 已回放的 tool callId，保证 tool_use/tool_result 只发一次。 */
+  private readonly emittedToolCalls = new Set<string>();
 
   constructor(
     options: OpenCodeAdapterOptions & {
@@ -384,96 +387,119 @@ export class OpenCodeAdapter implements AgentAdapter {
     if (!existsSync(dbPath)) return;
 
     try {
-      // 增量回放：只取 rowid > 已回放水位的行，天然幂等（重连补偿不会重复已发内容）
-      const highWater = this.historyHighWater.get(sessionId) ?? 0;
-      const sql = `SELECT p.rowid AS rid, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, substr(json_extract(p.data, '$.state.output'), 1, 500) AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND p.rowid > ${highWater} AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT 200;`;
-      const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
-        encoding: 'utf8',
-        timeout: 2000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      const rows = JSON.parse(out || '[]') as Array<{
-        rid: number;
-        role?: string;
-        part_type?: string;
-        text?: string | null;
-        tool?: string | null;
-        call_id?: string | null;
-        tool_output?: string | null;
-      }>;
+      // 增量回放：按 partId + 已回放长度只补发缺失后缀，幂等且能捕获 UPDATE。
+      // 不用 rowid 水位（rowid 无法发现已有行的内容更新）。
+      const pageSize = 200;
+      for (let offset = 0; offset < 2000; offset += pageSize) {
+        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, substr(json_extract(p.data, '$.state.output'), 1, 500) AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
+        const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
+          encoding: 'utf8',
+          timeout: 2000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const rows = JSON.parse(out || '[]') as Array<{
+          part_id?: string | null;
+          role?: string;
+          part_type?: string;
+          text?: string | null;
+          tool?: string | null;
+          call_id?: string | null;
+          tool_output?: string | null;
+        }>;
+        if (rows.length === 0) break;
 
-      for (const row of rows) {
-        if (typeof row.rid === 'number' && row.rid > highWater) {
-          this.historyHighWater.set(sessionId, row.rid);
-        }
-        const text = (row.text ?? '').trim();
-        if (
-          text.startsWith('<system-reminder>') ||
-          text.startsWith('[Attachments] The user attached')
-        ) {
-          continue;
-        }
-        // 历史与实时事件共享 normalizer 的单调 sequence，避免撞号
-        const seq = this.normalizer.nextSequence(sessionId);
-        if (row.role === 'user' && row.part_type === 'text' && text) {
-          this.emit(
-            createCanonicalEvent({
-              eventId: `hist_${randomUUID()}`,
-              agentId: this.id,
-              sessionId,
-              sequence: seq,
-              timestamp: new Date().toISOString(),
-              type: 'text_delta',
-              payload: { delta: text, role: 'user' },
-            }),
-          );
-        } else if (row.role === 'assistant' && row.part_type === 'text' && text) {
-          this.emit(
-            createCanonicalEvent({
-              eventId: `hist_${randomUUID()}`,
-              agentId: this.id,
-              sessionId,
-              sequence: seq,
-              timestamp: new Date().toISOString(),
-              type: 'text_delta',
-              payload: { delta: `${text}\n` },
-            }),
-          );
-        } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
-          const callId = row.call_id || `call_${++this.historySeqCounter}`;
-          this.emit(
-            createCanonicalEvent({
-              eventId: `hist_${randomUUID()}`,
-              agentId: this.id,
-              sessionId,
-              sequence: seq,
-              timestamp: new Date().toISOString(),
-              type: 'tool_use',
-              payload: { toolCallId: callId, name: row.tool, input: {} },
-            }),
-          );
-          if (row.tool_output) {
-            this.emit(
-              createCanonicalEvent({
-                eventId: `hist_${randomUUID()}`,
-                agentId: this.id,
-                sessionId,
-                sequence: this.normalizer.nextSequence(sessionId),
-                timestamp: new Date().toISOString(),
-                type: 'tool_result',
-                payload: {
-                  toolCallId: callId,
-                  content: row.tool_output,
-                  isError: false,
-                },
-              }),
-            );
+        for (const row of rows) {
+          const partId = row.part_id ?? `part_${++this.historySeqCounter}`;
+          const text = row.text ?? '';
+          const emitted = this.emittedPartLength.get(partId) ?? 0;
+          const trimmed = text.trim();
+
+          if (row.role === 'user' && row.part_type === 'text') {
+            if (
+              trimmed.startsWith('<system-reminder>') ||
+              trimmed.startsWith('[Attachments] The user attached')
+            ) {
+              this.emittedPartLength.set(partId, text.length);
+              continue;
+            }
+            if (text.length > emitted) {
+              this.emittedPartLength.set(partId, text.length);
+              this.emitTextDelta(sessionId, partId, text.length, text.slice(emitted), 'user');
+            }
+          } else if (row.role === 'assistant' && row.part_type === 'text') {
+            if (trimmed.startsWith('<system-reminder>')) {
+              this.emittedPartLength.set(partId, text.length);
+              continue;
+            }
+            if (text.length > emitted) {
+              this.emittedPartLength.set(partId, text.length);
+              this.emitTextDelta(sessionId, partId, text.length, text.slice(emitted), undefined);
+            }
+          } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
+            const callId = row.call_id || `call_${++this.historySeqCounter}`;
+            if (!this.emittedToolCalls.has(callId)) {
+              this.emittedToolCalls.add(callId);
+              this.emit(
+                createCanonicalEvent({
+                  eventId: `history:${sessionId}:tool:${callId}`,
+                  streamEpoch: this.normalizer.streamEpoch,
+                  agentId: this.id,
+                  sessionId,
+                  sequence: this.normalizer.nextSequence(sessionId),
+                  timestamp: new Date().toISOString(),
+                  type: 'tool_use',
+                  payload: { toolCallId: callId, name: row.tool, input: {} },
+                }),
+              );
+              if (row.tool_output) {
+                this.emit(
+                  createCanonicalEvent({
+                    eventId: `history:${sessionId}:tool:${callId}:result`,
+                    streamEpoch: this.normalizer.streamEpoch,
+                    agentId: this.id,
+                    sessionId,
+                    sequence: this.normalizer.nextSequence(sessionId),
+                    timestamp: new Date().toISOString(),
+                    type: 'tool_result',
+                    payload: { toolCallId: callId, content: row.tool_output, isError: false },
+                  }),
+                );
+              }
+            }
           }
         }
+        if (rows.length < pageSize) break;
       }
     } catch {
       // Ignore sqlite history read errors
     }
+  }
+
+  /** 回放文本增量：稳定 eventId + streamEpoch + partRevision，供客户端幂等去重。 */
+  private emitTextDelta(
+    sessionId: string,
+    partId: string,
+    revision: number,
+    delta: string,
+    role: string | undefined,
+  ): void {
+    this.emit(
+      createCanonicalEvent({
+        eventId: `history:${sessionId}:${partId}:${revision}`,
+        streamEpoch: this.normalizer.streamEpoch,
+        agentId: this.id,
+        sessionId,
+        sequence: this.normalizer.nextSequence(sessionId),
+        timestamp: new Date().toISOString(),
+        type: 'text_delta',
+        payload: {
+          delta,
+          partId,
+          partRevision: revision,
+          ...(role ? { role } : {}),
+        },
+      }),
+    );
   }
 
   async getSessionDiff(sessionId: string): Promise<SessionFileDiff[]> {

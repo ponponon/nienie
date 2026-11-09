@@ -308,3 +308,11 @@
 - **事件历史补偿**：`emitSqliteSessionHistory` 改增量回放（`p.rowid > 水位`，幂等），`onReconnect` 触发对已加载会话的增量补发；历史与实时事件共享 normalizer 的单调 sequence（`nextSequence`）避免撞号。
 - **Bridge `/diagnostics` 路由**（`ws-server.ts`）：聚合 machineId / connectedClients / 每会话事件缓冲计数 / 各适配器 SSE 连接状态（连接数、重连次数、最后事件时间）。
 - **B 诊断脚本升级为链路自检表**（`scripts/diag-opencode-sse.mjs`）：新增「OpenCode Health → Create Session → Session Directory → SSE HTTP → SSE Connected → Prompt HTTP → Session Status → Assistant Text Delta → Session Idle」全链路逐步状态表，一键定位「后台生成但不显示」断在哪一环。
+
+### 2026-11-08 事件可靠性协议：streamEpoch + partId 复合水位 + 幂等历史恢复
+
+- **`streamEpoch` 事件流实例标识**（`packages/protocol`）：`CanonicalAgentEvent` 新增 `streamEpoch`，每次 Adapter/事件流实例生成新 epoch。客户端按 `(sessionId, streamEpoch, sequence)` 判重排序，Bridge/进程重启后 sequence 重置不再被误判为旧事件。
+- **历史恢复升级为 partId + emittedLength 复合水位**（`emitSqliteSessionHistory`）：弃用 rowid 水位（无法发现已有 part 的 UPDATE），改为按 `partId → 已回放长度` 只补发缺失后缀，幂等且能捕获内容增长；tool 调用按 `callId` 去重只发一次。完整分页（LIMIT 200 循环）。
+- **稳定历史 eventId**：`history:{sessionId}:{partId}:{revision}`，配合客户端 `eventId` 幂等去重，多次重连/重放不重复追加。
+- **手机端判重升级**：`eventId` 幂等去重（去重稳定事件 ID）+ `sessionId#streamEpoch` 感知的 sequence 判重（epoch 变化即重置）。
+- 每条历史事件带 `streamEpoch` + `partId` + `partRevision`，为后续 part-snapshot 精确恢复铺垫。
