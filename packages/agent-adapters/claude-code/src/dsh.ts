@@ -9,6 +9,7 @@ import {
   createAgentInfo,
   createCanonicalEvent,
   DEFAULT_MAX_TOOL_OUTPUT_LENGTH,
+  generateStreamEpoch,
   redactSensitiveData,
   truncateOutput,
   type AgentAdapter,
@@ -39,12 +40,15 @@ export type DshNormalizerOptions = {
   maxToolOutputLength?: number | undefined;
   now?: (() => Date) | undefined;
   idGenerator?: (() => string) | undefined;
+  /** 事件流实例标识；缺省时生成。 */
+  streamEpoch?: string | undefined;
 };
 
 type RawRecord = Record<string, unknown>;
 
 export class DshEventNormalizer {
   private readonly machineId: string | undefined;
+  readonly streamEpoch: string;
   private readonly maxToolOutputLength: number;
   private readonly now: () => Date;
   private readonly idGenerator: () => string;
@@ -56,9 +60,16 @@ export class DshEventNormalizer {
 
   constructor(options: DshNormalizerOptions = {}) {
     this.machineId = options.machineId;
+    this.streamEpoch = options.streamEpoch ?? generateStreamEpoch();
     this.maxToolOutputLength = options.maxToolOutputLength ?? DEFAULT_MAX_TOOL_OUTPUT_LENGTH;
     this.now = options.now ?? (() => new Date());
     this.idGenerator = options.idGenerator ?? (() => `evt_${randomUUID()}`);
+  }
+
+  nextSequence(sessionId: string): number {
+    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
+    this.sequences.set(sessionId, nextSeq);
+    return nextSeq;
   }
 
   getDshSessionId(sessionId: string): string | undefined {
@@ -194,11 +205,11 @@ export class DshEventNormalizer {
     type: CanonicalAgentEventType,
     payload: Record<string, unknown>,
   ): CanonicalAgentEvent {
-    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
-    this.sequences.set(sessionId, nextSeq);
+    const nextSeq = this.nextSequence(sessionId);
 
     return createCanonicalEvent({
       eventId: this.idGenerator(),
+      streamEpoch: this.streamEpoch,
       machineId: this.machineId,
       agentId: 'dsh',
       sessionId,

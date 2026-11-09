@@ -5,7 +5,13 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
-import { createAgentInfo, createCanonicalEvent, type AgentAdapter } from '@nienie/agent-events';
+import {
+  createAgentInfo,
+  createCanonicalEvent,
+  DEFAULT_MAX_TOOL_OUTPUT_LENGTH,
+  truncateOutput,
+  type AgentAdapter,
+} from '@nienie/agent-events';
 import type {
   AgentSession,
   CanonicalAgentEvent,
@@ -70,7 +76,10 @@ export class CodexAdapter implements AgentAdapter {
   private readonly discoverLocalHistory: boolean;
   private readonly loadedHistoryThreads = new Set<string>();
   private historyLoaded = false;
-  private historySeqCounter = 0;
+  /** itemId → 已回放文本长度，增量补发缺失后缀（幂等 + 捕获内容更新）。 */
+  private readonly emittedTextLength = new Map<string, number>();
+  /** 已回放的 tool itemId，保证 tool_use/tool_result 只发一次。 */
+  private readonly emittedHistoryTools = new Set<string>();
 
   constructor(options: CodexAdapterOptions = {}) {
     this.executablePath = resolveCodexBinary(
@@ -231,81 +240,124 @@ export class CodexAdapter implements AgentAdapter {
     if (!historyDb) return;
 
     try {
-      const sql = `SELECT item_id, item_type, item_json FROM thread_items WHERE thread_id = '${sessionId}' ORDER BY rollout_ordinal ASC LIMIT 80;`;
-      const out = execFileSync('sqlite3', ['-json', historyDb, sql], {
-        encoding: 'utf8',
-        timeout: 2000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      const rows = JSON.parse(out || '[]') as Array<{
-        item_id?: string;
-        item_type?: string;
-        item_json?: string;
-      }>;
-      for (const row of rows) {
-        if (!row.item_json) continue;
-        try {
-          const item = JSON.parse(row.item_json) as {
-            id?: string;
-            type?: string;
-            text?: string;
-            command?: string;
-            content?: Array<{ type?: string; text?: string }>;
-          };
-          if (row.item_type === 'userMessage') {
-            const text = (item.content ?? [])
-              .map((c) => c.text ?? '')
-              .join('')
-              .trim();
-            if (text) {
-              this.emitEvent(
-                createCanonicalEvent({
-                  eventId: `cx_hist_${randomUUID()}`,
-                  agentId: 'codex',
-                  sessionId,
-                  sequence: ++this.historySeqCounter,
-                  timestamp: new Date().toISOString(),
-                  type: 'text_delta',
-                  payload: { delta: text, role: 'user' },
-                }),
-              );
+      // 增量回放：按 itemId + 已回放长度补发缺失后缀，幂等且捕获内容更新。
+      // eventId 稳定（history:sid:item:rev），配合客户端 eventId 去重。
+      const pageSize = 200;
+      for (let offset = 0; offset < 4000; offset += pageSize) {
+        const sql = `SELECT item_id, item_type, item_json, created_at_ms FROM thread_items WHERE thread_id = '${sessionId}' ORDER BY rollout_ordinal ASC LIMIT ${offset}, ${pageSize};`;
+        const out = execFileSync('sqlite3', ['-json', historyDb, sql], {
+          encoding: 'utf8',
+          timeout: 2000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const rows = JSON.parse(out || '[]') as Array<{
+          item_id?: string;
+          item_type?: string;
+          item_json?: string;
+          created_at_ms?: number;
+        }>;
+        if (rows.length === 0) break;
+
+        for (const row of rows) {
+          if (!row.item_json) continue;
+          const itemId = row.item_id ?? '';
+          try {
+            const item = JSON.parse(row.item_json) as {
+              id?: string;
+              type?: string;
+              text?: string;
+              command?: string;
+              aggregated_output?: string;
+              exit_code?: number;
+              content?: Array<{ type?: string; text?: string }>;
+            };
+            const ts = row.created_at_ms
+              ? new Date(row.created_at_ms).toISOString()
+              : new Date().toISOString();
+
+            if (row.item_type === 'userMessage') {
+              const text = (item.content ?? []).map((c) => c.text ?? '').join('').trim();
+              const emitted = this.emittedTextLength.get(itemId) ?? 0;
+              if (text.length > emitted) {
+                this.emittedTextLength.set(itemId, text.length);
+                this.emitTextDelta(sessionId, itemId, text.length, text.slice(emitted), 'user', ts);
+              }
+            } else if (row.item_type === 'agentMessage' && item.text) {
+              const text = item.text.trim();
+              const emitted = this.emittedTextLength.get(itemId) ?? 0;
+              if (text.length > emitted) {
+                this.emittedTextLength.set(itemId, text.length);
+                this.emitTextDelta(sessionId, itemId, text.length, text.slice(emitted), undefined, ts);
+              }
+            } else if (row.item_type === 'commandExecution' && item.command) {
+              const callId = item.id || itemId || `cmd_${randomUUID()}`;
+              if (!this.emittedHistoryTools.has(callId)) {
+                this.emittedHistoryTools.add(callId);
+                this.emitEvent(
+                  createCanonicalEvent({
+                    eventId: `history:${sessionId}:tool:${callId}`,
+                    streamEpoch: this.normalizer.streamEpoch,
+                    agentId: 'codex',
+                    sessionId,
+                    sequence: this.normalizer.nextSequence(sessionId),
+                    timestamp: ts,
+                    type: 'tool_use',
+                    payload: { toolCallId: callId, name: 'bash', input: { command: item.command } },
+                  }),
+                );
+                const output = item.aggregated_output ?? '';
+                if (output || typeof item.exit_code === 'number') {
+                  this.emitEvent(
+                    createCanonicalEvent({
+                      eventId: `history:${sessionId}:tool:${callId}:result`,
+                      streamEpoch: this.normalizer.streamEpoch,
+                      agentId: 'codex',
+                      sessionId,
+                      sequence: this.normalizer.nextSequence(sessionId),
+                      timestamp: ts,
+                      type: 'tool_result',
+                      payload: {
+                        toolCallId: callId,
+                        content: truncateOutput(output, DEFAULT_MAX_TOOL_OUTPUT_LENGTH),
+                        isError: (item.exit_code ?? 0) !== 0,
+                      },
+                    }),
+                  );
+                }
+              }
             }
-          } else if (row.item_type === 'agentMessage' && item.text?.trim()) {
-            this.emitEvent(
-              createCanonicalEvent({
-                eventId: `cx_hist_${randomUUID()}`,
-                agentId: 'codex',
-                sessionId,
-                sequence: ++this.historySeqCounter,
-                timestamp: new Date().toISOString(),
-                type: 'text_delta',
-                payload: { delta: `${item.text.trim()}\n` },
-              }),
-            );
-          } else if (row.item_type === 'commandExecution' && item.command) {
-            this.emitEvent(
-              createCanonicalEvent({
-                eventId: `cx_hist_${randomUUID()}`,
-                agentId: 'codex',
-                sessionId,
-                sequence: ++this.historySeqCounter,
-                timestamp: new Date().toISOString(),
-                type: 'tool_use',
-                payload: {
-                  toolCallId: item.id || row.item_id || `cmd_${++this.historySeqCounter}`,
-                  name: 'bash',
-                  input: { command: item.command },
-                },
-              }),
-            );
+          } catch {
+            // Ignore malformed item_json
           }
-        } catch {
-          // Ignore malformed item_json
         }
+        if (rows.length < pageSize) break;
       }
     } catch {
       // Ignore sqlite history read errors
     }
+  }
+
+  /** 回放文本增量：稳定 eventId + streamEpoch + partRevision，供客户端幂等去重。 */
+  private emitTextDelta(
+    sessionId: string,
+    itemId: string,
+    revision: number,
+    delta: string,
+    role: string | undefined,
+    timestamp: string,
+  ): void {
+    this.emitEvent(
+      createCanonicalEvent({
+        eventId: `history:${sessionId}:${itemId}:${revision}`,
+        streamEpoch: this.normalizer.streamEpoch,
+        agentId: 'codex',
+        sessionId,
+        sequence: this.normalizer.nextSequence(sessionId),
+        timestamp,
+        type: 'text_delta',
+        payload: { delta, partId: itemId, partRevision: revision, ...(role ? { role } : {}) },
+      }),
+    );
   }
 
   private emitEvent(event: CanonicalAgentEvent): void {

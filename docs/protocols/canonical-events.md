@@ -8,6 +8,7 @@
 {
   "version": 1,
   "eventId": "evt_123",
+  "streamEpoch": "epoch_abc",
   "machineId": "machine_123",
   "agentId": "opencode",
   "sessionId": "session_123",
@@ -104,8 +105,10 @@
 
 ## 设计要求
 
-- 事件必须可按 `sequence` 排序和去重。
-- 客户端重连后可以从最后确认的序号继续请求事件。
+- 事件必须可按 `(sessionId, streamEpoch, sequence)` 排序和去重。
+- `streamEpoch` 标识事件流实例：每次 Adapter/Bridge 启动事件流生成新 epoch，客户端按 `sessionId#streamEpoch` 记录序号，进程重启后 `sequence` 重置不会被误判为旧事件。
+- 稳定 `eventId`（如 `history:{sessionId}:{partId}:{revision}`）用于幂等去重：同一来源事件重复到达（历史补偿重放）只处理一次。
+- 客户端重连后可以从最后确认的序号继续请求事件；历史恢复按稳定 `eventId` + 增量水位只补发缺失内容，不重复追加。
 - 原始 Agent 的密钥、完整环境变量和不必要的敏感内容不能进入事件。
 - 大型工具输出必须限制大小并支持分页或单独拉取。
 - `tool_use` 和 `tool_result` 必须通过 `toolCallId` 关联。

@@ -316,3 +316,10 @@
 - **稳定历史 eventId**：`history:{sessionId}:{partId}:{revision}`，配合客户端 `eventId` 幂等去重，多次重连/重放不重复追加。
 - **手机端判重升级**：`eventId` 幂等去重（去重稳定事件 ID）+ `sessionId#streamEpoch` 感知的 sequence 判重（epoch 变化即重置）。
 - 每条历史事件带 `streamEpoch` + `partId` + `partRevision`，为后续 part-snapshot 精确恢复铺垫。
+
+### 2026-11-08 事件可靠性协议推广到 Codex / Claude Code 适配器
+
+- **修复 streamEpoch 每事件随机 bug**：`createCanonicalEvent` 不传 `streamEpoch` 时会为每个事件单独生成随机 epoch，导致 Codex/Claude Code/dsh 事件的客户端 `(sessionId, streamEpoch, sequence)` 判重全部失效。给 `CodexEventNormalizer` / `ClaudeCodeEventNormalizer` / `DshEventNormalizer` 各加实例级 `streamEpoch` + `nextSequence()`，`buildEvent` 显式盖戳，历史回放与实时事件共享同一 epoch + 单调 sequence。
+- **Codex 历史恢复升级**（`emitCodexThreadHistory`）：eventId 稳定为 `history:{sessionId}:{itemId}:{revision}`（原 `cx_hist_${randomUUID()}` 不幂等），按 itemId + 已回放长度增量补发缺失后缀（幂等 + 捕获更新），SQL 补取 `created_at_ms` 还原原始时间戳，commandExecution 补 `tool_result`（exit_code/aggregated_output）配对，分页读取。
+- **Claude Code 新增历史回放**（`emitClaudeSessionHistory`）：从 `~/.claude/projects/**/<sessionId>.jsonl` 逐行回放（原手机端打开旧会话空白），复用 assistant/user 分支映射（thinking/text/tool_use/tool_result），eventId 稳定为 `history:{sessionId}:{uuid}:{idx}`（jsonl 行 uuid），按行 uuid 去重幂等。
+- 同步 `docs/protocols/canonical-events.md`：事件信封补 `streamEpoch`，设计要求明确 `(sessionId, streamEpoch, sequence)` 判重 + 稳定 eventId 幂等语义。

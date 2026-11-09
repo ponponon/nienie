@@ -9,6 +9,7 @@ import {
   createAgentInfo,
   createCanonicalEvent,
   DEFAULT_MAX_TOOL_OUTPUT_LENGTH,
+  generateStreamEpoch,
   redactSensitiveData,
   truncateOutput,
   type AgentAdapter,
@@ -39,12 +40,15 @@ export type ClaudeCodeNormalizerOptions = {
   maxToolOutputLength?: number | undefined;
   now?: (() => Date) | undefined;
   idGenerator?: (() => string) | undefined;
+  /** 事件流实例标识；缺省时生成，历史回放与实时事件共享同一 epoch。 */
+  streamEpoch?: string | undefined;
 };
 
 type RawRecord = Record<string, unknown>;
 
 export class ClaudeCodeEventNormalizer {
   private readonly machineId: string | undefined;
+  readonly streamEpoch: string;
   private readonly maxToolOutputLength: number;
   private readonly now: () => Date;
   private readonly idGenerator: () => string;
@@ -55,9 +59,17 @@ export class ClaudeCodeEventNormalizer {
 
   constructor(options: ClaudeCodeNormalizerOptions = {}) {
     this.machineId = options.machineId;
+    this.streamEpoch = options.streamEpoch ?? generateStreamEpoch();
     this.maxToolOutputLength = options.maxToolOutputLength ?? DEFAULT_MAX_TOOL_OUTPUT_LENGTH;
     this.now = options.now ?? (() => new Date());
     this.idGenerator = options.idGenerator ?? (() => `evt_${randomUUID()}`);
+  }
+
+  /** 分配某会话的下一个 sequence（历史回放与实时事件共享同一单调序列）。 */
+  nextSequence(sessionId: string): number {
+    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
+    this.sequences.set(sessionId, nextSeq);
+    return nextSeq;
   }
 
   getClaudeSessionId(sessionId: string): string | undefined {
@@ -204,11 +216,11 @@ export class ClaudeCodeEventNormalizer {
     type: CanonicalAgentEventType,
     payload: Record<string, unknown>,
   ): CanonicalAgentEvent {
-    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
-    this.sequences.set(sessionId, nextSeq);
+    const nextSeq = this.nextSequence(sessionId);
 
     return createCanonicalEvent({
       eventId: this.idGenerator(),
+      streamEpoch: this.streamEpoch,
       machineId: this.machineId,
       agentId: 'claude-code',
       sessionId,
@@ -259,6 +271,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   private readonly activeProcesses = new Map<string, ClaudeProcessHandle>();
   private readonly discoverLocalHistory: boolean;
   private historyLoaded = false;
+  /** sessionId → 历史 jsonl 文件路径（发现时记录，供回放）。 */
+  private readonly historyFileBySession = new Map<string, string>();
+  /** 已回放的 jsonl 行 uuid，保证幂等。 */
+  private readonly emittedHistoryUuids = new Set<string>();
+  /** 已回放历史的会话（避免重复扫描）。 */
+  private readonly loadedHistorySessions = new Set<string>();
 
   constructor(options: ClaudeCodeAdapterOptions = {}) {
     this.executablePath = resolveClaudeBinary(
@@ -365,6 +383,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
             continue;
           }
           const nowIso = new Date().toISOString();
+          this.historyFileBySession.set(sessionId, join(projPath, file));
           this.sessions.set(sessionId, {
             id: sessionId,
             claudeSessionId: sessionId,
@@ -398,6 +417,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   }
 
   async loadSession(sessionId: string): Promise<AgentSession> {
+    // 首次加载：回放本地历史（幂等，按行 uuid 去重）
+    if (this.discoverLocalHistory && !this.loadedHistorySessions.has(sessionId)) {
+      this.loadedHistorySessions.add(sessionId);
+      this.emitClaudeSessionHistory(sessionId);
+    }
+
     const existing = this.sessions.get(sessionId);
     if (existing) return existing;
 
@@ -414,6 +439,103 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     };
     this.sessions.set(sessionId, record);
     return record;
+  }
+
+  /** 从 ~/.claude/projects 下的 <sessionId>.jsonl 回放历史，稳定 eventId 供幂等去重。 */
+  private emitClaudeSessionHistory(sessionId: string): void {
+    const file = this.historyFileBySession.get(sessionId);
+    if (!file || !existsSync(file)) return;
+    try {
+      const content = readFileSync(file, 'utf8');
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        let obj: {
+          uuid?: string;
+          timestamp?: string;
+          type?: string;
+          message?: {
+            content?: unknown;
+            usage?: { input_tokens?: number; output_tokens?: number };
+          };
+        };
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const uuid = obj.uuid ?? '';
+        if (uuid && this.emittedHistoryUuids.has(uuid)) continue;
+        if (uuid) this.emittedHistoryUuids.add(uuid);
+        const ts = obj.timestamp ?? new Date().toISOString();
+        const msg = obj.message;
+        if (!msg) continue;
+
+        if (obj.type === 'user') {
+          const blocks =
+            typeof msg.content === 'string'
+              ? [{ type: 'text', text: msg.content }]
+              : Array.isArray(msg.content)
+                ? (msg.content as Array<Record<string, unknown>>)
+                : [];
+          let idx = 0;
+          for (const b of blocks) {
+            if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+              this.emitHistoryEvent(sessionId, `${uuid}:${idx++}`, ts, 'text_delta', {
+                delta: b.text.trim(),
+                role: 'user',
+              });
+            } else if (b?.type === 'tool_result') {
+              this.emitHistoryEvent(sessionId, `${uuid}:result${idx++}`, ts, 'tool_result', {
+                toolCallId: (b.tool_use_id as string) ?? '',
+                content: formatHistoryContent(b.content),
+                isError: b.is_error === true,
+              });
+            }
+          }
+        } else if (obj.type === 'assistant' && Array.isArray(msg.content)) {
+          let idx = 0;
+          for (const b of msg.content as Array<Record<string, unknown>>) {
+            if (b?.type === 'thinking' && typeof b.thinking === 'string') {
+              this.emitHistoryEvent(sessionId, `${uuid}:think${idx++}`, ts, 'thinking_delta', {
+                delta: b.thinking,
+              });
+            } else if (b?.type === 'text' && typeof b.text === 'string' && b.text) {
+              this.emitHistoryEvent(sessionId, `${uuid}:text${idx++}`, ts, 'text_delta', {
+                delta: b.text,
+              });
+            } else if (b?.type === 'tool_use') {
+              this.emitHistoryEvent(sessionId, `${uuid}:tool${idx++}`, ts, 'tool_use', {
+                toolCallId: (b.id as string) ?? `call_${uuid}_${idx}`,
+                name: (b.name as string) ?? 'tool',
+                input: isRecord(b.input) ? redactSensitiveData(b.input) : {},
+              });
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore history read errors
+    }
+  }
+
+  private emitHistoryEvent(
+    sessionId: string,
+    suffix: string,
+    timestamp: string,
+    type: CanonicalAgentEventType,
+    payload: Record<string, unknown>,
+  ): void {
+    const event = createCanonicalEvent({
+      eventId: `history:${sessionId}:${suffix}`,
+      streamEpoch: this.normalizer.streamEpoch,
+      agentId: 'claude-code',
+      sessionId,
+      sequence: this.normalizer.nextSequence(sessionId),
+      timestamp,
+      type,
+      payload,
+    });
+    for (const listener of this.listeners) listener(event);
   }
 
   async sendMessage(sessionId: string, message: string): Promise<void> {
@@ -503,6 +625,26 @@ export {
 
 function isRecord(value: unknown): value is RawRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function formatHistoryContent(value: unknown): string {
+  const raw =
+    typeof value === 'string'
+      ? value
+      : value == null
+        ? ''
+        : Array.isArray(value)
+          ? value
+              .map((v) => (typeof v === 'string' ? v : isRecord(v) ? (v.text ?? '') : ''))
+              .join('')
+          : (() => {
+              try {
+                return JSON.stringify(value);
+              } catch {
+                return String(value);
+              }
+            })();
+  return truncateOutput(raw, DEFAULT_MAX_TOOL_OUTPUT_LENGTH).content;
 }
 
 function asString(value: unknown): string | undefined {

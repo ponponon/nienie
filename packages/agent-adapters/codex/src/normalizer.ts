@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   createCanonicalEvent,
   DEFAULT_MAX_TOOL_OUTPUT_LENGTH,
+  generateStreamEpoch,
   redactSensitiveData,
   truncateOutput,
 } from '@nienie/agent-events';
@@ -12,12 +13,15 @@ export type CodexNormalizerOptions = {
   maxToolOutputLength?: number | undefined;
   now?: (() => Date) | undefined;
   idGenerator?: (() => string) | undefined;
+  /** 事件流实例标识；缺省时生成，历史回放与实时事件共享同一 epoch。 */
+  streamEpoch?: string | undefined;
 };
 
 type RawRecord = Record<string, unknown>;
 
 export class CodexEventNormalizer {
   private readonly machineId: string | undefined;
+  readonly streamEpoch: string;
   private readonly maxToolOutputLength: number;
   private readonly now: () => Date;
   private readonly idGenerator: () => string;
@@ -31,9 +35,17 @@ export class CodexEventNormalizer {
 
   constructor(options: CodexNormalizerOptions = {}) {
     this.machineId = options.machineId;
+    this.streamEpoch = options.streamEpoch ?? generateStreamEpoch();
     this.maxToolOutputLength = options.maxToolOutputLength ?? DEFAULT_MAX_TOOL_OUTPUT_LENGTH;
     this.now = options.now ?? (() => new Date());
     this.idGenerator = options.idGenerator ?? (() => `evt_${randomUUID()}`);
+  }
+
+  /** 分配某会话的下一个 sequence（历史回放与实时事件共享同一单调序列）。 */
+  nextSequence(sessionId: string): number {
+    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
+    this.sequences.set(sessionId, nextSeq);
+    return nextSeq;
   }
 
   getThreadId(sessionId: string): string | undefined {
@@ -257,11 +269,11 @@ export class CodexEventNormalizer {
     type: CanonicalAgentEventType,
     payload: Record<string, unknown>,
   ): CanonicalAgentEvent {
-    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
-    this.sequences.set(sessionId, nextSeq);
+    const nextSeq = this.nextSequence(sessionId);
 
     return createCanonicalEvent({
       eventId: this.idGenerator(),
+      streamEpoch: this.streamEpoch,
       machineId: this.machineId,
       agentId: 'codex',
       sessionId,
