@@ -553,4 +553,43 @@ void main() {
     expect(find.text('AB'), findsOneWidget);
     client.dispose();
   });
+
+  testWidgets('乱序事件先缓冲，缺口补齐后按序应用，不丢失不乱序', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'hi');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+
+    Map<String, dynamic> evt(String id, int seq, String delta) => {
+      'version': 1,
+      'eventId': id,
+      'streamEpoch': 'ep1',
+      'sessionId': 'ses_alpha',
+      'sequence': seq,
+      'timestamp': '2026-11-09T10:00:0${seq}Z',
+      'type': 'text_delta',
+      'payload': {'delta': delta},
+    };
+
+    transport.emitServerEvent(evt('e1', 1, 'A'));
+    await tester.pump();
+    expect(find.text('A'), findsOneWidget);
+
+    // seq 3 先到（缺 2）：应入乱序缓冲，未立即应用
+    transport.emitServerEvent(evt('e3', 3, 'C'));
+    await tester.pump();
+    expect(find.text('AC'), findsNothing); // C 尚未应用（缺口）
+    expect(find.text('A'), findsOneWidget); // 仍是 A
+
+    // seq 2 到达：应用 2 并排空缓冲的 3，最终按 A B C 顺序
+    transport.emitServerEvent(evt('e2', 2, 'B'));
+    await tester.pump();
+    expect(find.text('ABC'), findsOneWidget);
+    client.dispose();
+  });
 }

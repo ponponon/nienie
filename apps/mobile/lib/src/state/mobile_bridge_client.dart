@@ -43,6 +43,8 @@ class MobileBridgeClient extends ChangeNotifier {
   final Map<String, String> _currentEpochBySession = {};
   // 正在回放缺口的会话，避免重复触发
   final Set<String> _gapReplayInFlight = <String>{};
+  // 乱序缓冲：epochKey → (sequence → event)，水位只表示已连续应用的最大序号
+  final Map<String, Map<int, CanonicalAgentEvent>> _pendingEventsByEpoch = {};
   // eventId 幂等去重：稳定事件 ID（如 history:sid:part:rev）重复到达只处理一次
   final Set<String> _seenEventIds = <String>{};
   static const int _maxSeenEventIds = 2000;
@@ -308,12 +310,23 @@ class MobileBridgeClient extends ChangeNotifier {
     });
     if (res['ok'] == true) {
       final data = res['data'] as Map<String, dynamic>;
-      // 服务端 epoch 已变或缓存被截断：清空本地时间线，以快照方式重建
+      final serverEpoch = data['streamEpoch'] as String? ?? '';
       final resetRequired = data['resetRequired'] == true;
       final truncated = data['truncated'] == true;
+      // 2.3 epoch 绑定：更新本地 epoch，避免一直带旧 epoch 反复 resetRequired。
+      if (serverEpoch.isNotEmpty) {
+        _currentEpochBySession[sessionId] = serverEpoch;
+      }
+      // 2.2 保守处理：resetRequired/truncated 时保留已有 timeline（不丢用户记录），
+      //    仅重置序号水位与乱序缓冲，让新事件可继续应用。完整「快照替换」留待
+      //    Part Snapshot 协议（session.snapshot）落地后再做原子重建。
       if (resetRequired || truncated) {
-        _timelineBySession.remove(sessionId);
-        _lastSequenceBySession.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
+        _lastSequenceBySession.removeWhere(
+          (k, _) => k == sessionId || k.startsWith('$sessionId#'),
+        );
+        _pendingEventsByEpoch.removeWhere(
+          (k, _) => k == sessionId || k.startsWith('$sessionId#'),
+        );
       }
       final events = data['events'] as List<dynamic>? ?? const [];
       for (final rawEvt in events) {
@@ -686,27 +699,53 @@ class MobileBridgeClient extends ChangeNotifier {
       }
     }
 
-    // 2) streamEpoch 感知的 sequence 判重：进程重启后 sequence 重置（新 epoch）
-    //    不会被误判为旧事件；同一 epoch 内按 sequence 排序去重。
+    // 2) streamEpoch 感知 + 乱序缓冲：水位只表示「已连续应用」的最大 sequence，
+    //    跳号事件先入缓冲，待缺口补齐后按序应用，避免先推进水位导致缺失事件被丢弃。
     if (event.streamEpoch.isNotEmpty) {
       _currentEpochBySession[event.sessionId] = event.streamEpoch;
     }
     final epochKey = '${event.sessionId}#${event.streamEpoch}';
-    final lastSeq = _lastSequenceBySession[epochKey] ?? 0;
-    if (event.sequence <= lastSeq) {
+    final lastApplied = _lastSequenceBySession[epochKey] ?? 0;
+    if (event.sequence <= lastApplied) {
+      return; // 重复事件
+    }
+    if (event.sequence > lastApplied + 1) {
+      // 缺口：暂存到乱序缓冲，并触发回放补齐
+      _pendingEventsByEpoch.putIfAbsent(epochKey, () => {})[event.sequence] = event;
+      if (!_gapReplayInFlight.contains(event.sessionId)) {
+        _gapReplayInFlight.add(event.sessionId);
+        unawaited(
+          replayMissedEvents(event.sessionId).whenComplete(
+            () => _gapReplayInFlight.remove(event.sessionId),
+          ),
+        );
+      }
       return;
     }
-    // 3) 序列缺口检测：sequence 跳号说明中间事件丢失，触发回放补齐
-    if (lastSeq > 0 && event.sequence > lastSeq + 1 && !_gapReplayInFlight.contains(event.sessionId)) {
-      _gapReplayInFlight.add(event.sessionId);
-      unawaited(
-        replayMissedEvents(event.sessionId).whenComplete(
-          () => _gapReplayInFlight.remove(event.sessionId),
-        ),
-      );
-    }
-    _lastSequenceBySession[epochKey] = event.sequence;
+    // 连续：应用 + 排空缓冲中的连续事件
+    _applyInOrder(epochKey, event);
 
+    notifyListeners();
+  }
+
+  /// 应用一个连续事件，并排空乱序缓冲里可连续应用的后续事件。
+  void _applyInOrder(String epochKey, CanonicalAgentEvent first) {
+    var seq = first.sequence;
+    _applyCanonicalEvent(first);
+    _lastSequenceBySession[epochKey] = seq;
+    final pending = _pendingEventsByEpoch[epochKey];
+    if (pending == null) return;
+    while (pending.containsKey(seq + 1)) {
+      final next = pending.remove(seq + 1)!;
+      _applyCanonicalEvent(next);
+      seq = next.sequence;
+      _lastSequenceBySession[epochKey] = seq;
+    }
+    if (pending.isEmpty) _pendingEventsByEpoch.remove(epochKey);
+  }
+
+  /// 将事件写入时间线（状态归约）；事件必须已按 sequence 有序调用。
+  void _applyCanonicalEvent(CanonicalAgentEvent event) {
     final items = _timelineBySession.putIfAbsent(event.sessionId, () => []);
 
     switch (event.type) {
@@ -834,8 +873,6 @@ class MobileBridgeClient extends ChangeNotifier {
         );
         break;
     }
-
-    notifyListeners();
   }
 
   String _nextRequestId() => 'mreq_${++_requestCounter}';
