@@ -3,6 +3,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../i18n/app_strings.dart';
 import '../models/protocol_models.dart';
+import '../models/timeline_items.dart';
 import '../state/mobile_bridge_client.dart';
 import 'kelivo_workspace_drawer.dart';
 import 'pairing_panel.dart';
@@ -367,6 +368,70 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     );
   }
 
+  bool _isGenerating(MobileBridgeClient client) {
+    final active = client.activeSession;
+    if (active == null) return false;
+    return client.statusFor(active.id) == 'running' ||
+        client.timelineFor(active.id).any((i) => i is PendingResponseItem);
+  }
+
+  void _stopGeneration(MobileBridgeClient client) {
+    client.cancelActiveSession();
+    // 撤回：把上次发出的 prompt 放回输入框，便于编辑后重发
+    final items = client.timelineFor(client.activeSession?.id ?? '');
+    for (final item in items.reversed) {
+      if (item is UserPromptItem) {
+        _promptController.text = item.message;
+        break;
+      }
+    }
+    setState(() {});
+  }
+
+  void _showAttachMenu(BuildContext context, MobileBridgeClient client) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text('添加附件', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+            ListTile(
+              key: const Key('btn-attach-image'),
+              leading: const Icon(LucideIcons.image, size: 20),
+              title: const Text('图片'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('图片附件：即将支持')),
+                );
+              },
+            ),
+            ListTile(
+              key: const Key('btn-attach-file'),
+              leading: const Icon(LucideIcons.file, size: 20),
+              title: const Text('文件'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('文件附件：即将支持')),
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   bool _agentSupportsModelSwitch(MobileBridgeClient client) {
     final current = client.agents
         .where((a) => a.id == (client.activeSession?.agentId ?? client.selectedAgentId))
@@ -599,119 +664,66 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
 
                   const SizedBox(height: 8),
 
-                  // Lower Deck: Agent Pills + Workspace Actions + Send Circle
+// Lower Deck: 附件 + 模型选择 | 发送/停止 切换按钮
                   SizedBox(
                     height: 32,
                     child: Row(
                       children: [
-                        // Left scrollable Agent switcher pills + tools
-                        Expanded(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children: [
-                                // Model selector：显示当前模型，点击切换
-                                // （agent 选择属于会话层，在会话头部/抽屉，不在此）
-                                // 仅当当前 Agent 支持模型切换时显示
-                                if (_agentSupportsModelSwitch(client))
-                                  InkWell(
-                                    key: const Key('btn-select-model'),
-                                    borderRadius: BorderRadius.circular(999),
-                                    onTap: () => _showModelPicker(context, client),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 5,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(999),
-                                      border: Border.all(
-                                        color: const Color(0x18000000),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const Icon(
-                                          LucideIcons.cpu,
-                                          size: 13,
-                                          color: _textSecondary,
-                                        ),
-                                        const SizedBox(width: 5),
-                                        Text(
-                                          _currentModelName(client),
-                                          style: const TextStyle(
-                                            fontSize: 11.5,
-                                            fontWeight: FontWeight.w600,
-                                            color: _textPrimary,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 3),
-                                        const Icon(
-                                          LucideIcons.chevronDown,
-                                          size: 12,
-                                          color: _textSecondary,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                                IconButton(
-                                  key: const Key('btn-capture-screen'),
-                                  visualDensity: VisualDensity.compact,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                  ),
-                                  constraints: const BoxConstraints(),
-                                  tooltip: 'Capture Desktop Screen',
-                                  onPressed: () => client.captureScreen('main'),
-                                  icon: const Icon(
-                                    LucideIcons.monitor,
-                                    size: 17,
-                                    color: _textSecondary,
-                                  ),
-                                ),
-                                IconButton(
-                                  key: const Key('btn-cancel-session'),
-                                  visualDensity: VisualDensity.compact,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                  ),
-                                  constraints: const BoxConstraints(),
-                                  tooltip: 'Cancel Session',
-                                  onPressed: client.cancelActiveSession,
-                                  icon: const Icon(
-                                    LucideIcons.circleStop,
-                                    size: 17,
-                                    color: _textSecondary,
-                                  ),
-                                ),
-                              ],
+                        IconButton(
+                          key: const Key('btn-attach'),
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          constraints: const BoxConstraints(),
+                          tooltip: '添加附件',
+                          onPressed: () => _showAttachMenu(context, client),
+                          icon: const Icon(LucideIcons.plus, size: 18, color: _textSecondary),
+                        ),
+                        if (_agentSupportsModelSwitch(client)) ...[
+                          const SizedBox(width: 4),
+                          InkWell(
+                            key: const Key('btn-select-model'),
+                            borderRadius: BorderRadius.circular(999),
+                            onTap: () => _showModelPicker(context, client),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(color: const Color(0x18000000)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(LucideIcons.cpu, size: 13, color: _textSecondary),
+                                  const SizedBox(width: 5),
+                                  Text(_currentModelName(client), style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: _textPrimary)),
+                                  const SizedBox(width: 3),
+                                  const Icon(LucideIcons.chevronDown, size: 12, color: _textSecondary),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-
+                        ],
+                        const Spacer(),
                         const SizedBox(width: 6),
-
-                        // Circular Send Button (Kelivo R32 Circle)
                         SizedBox(
                           width: 32,
                           height: 32,
                           child: IconButton.filled(
                             key: const Key('btn-send-prompt'),
                             padding: EdgeInsets.zero,
-                            style: IconButton.styleFrom(
-                              backgroundColor: _textPrimary,
-                              foregroundColor: Colors.white,
-                              shape: const CircleBorder(),
-                            ),
+                            style: IconButton.styleFrom(backgroundColor: _textPrimary, foregroundColor: Colors.white, shape: const CircleBorder()),
                             onPressed: () {
-                              final text = _promptController.text;
-                              _promptController.clear();
-                              client.sendMessage(text);
+                              if (_isGenerating(client)) {
+                                _stopGeneration(client);
+                              } else {
+                                final text = _promptController.text;
+                                if (text.trim().isEmpty) return;
+                                _promptController.clear();
+                                client.sendMessage(text);
+                              }
                             },
-                            icon: const Icon(LucideIcons.arrowUp, size: 16),
+                            icon: Icon(_isGenerating(client) ? LucideIcons.square : LucideIcons.arrowUp, size: 16),
                           ),
                         ),
                       ],

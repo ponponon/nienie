@@ -275,7 +275,8 @@ void main() {
       );
       expect(transport.registeredPushes.single['pushToken'], 'apns_mobile_tok_1');
 
-      await tester.tap(find.byKey(const Key('btn-capture-screen')));
+      // 截屏按钮已从 composer 移除（冗余），直接调用 client
+      await client.captureScreen('main');
       await tester.pumpAndSettle();
       await tester.drag(find.byType(ListView).last, const Offset(0, -300));
       await tester.pumpAndSettle();
@@ -303,7 +304,8 @@ void main() {
 
       expect(find.textContaining('1500 in · 420 out'), findsOneWidget);
 
-      await tester.tap(find.byKey(const Key('btn-cancel-session')));
+      // 终止按钮已合并进发送/停止切换，直接调用 client
+      await client.cancelActiveSession();
       await tester.pumpAndSettle();
       expect(transport.cancelledSessionIds.single, 'ses_alpha');
 
