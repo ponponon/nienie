@@ -14,6 +14,7 @@ import type {
   AgentSession,
   AgentStatus,
   CanonicalAgentEvent,
+  CanonicalAgentEventType,
   CreateSessionInput,
   ModelInfo,
   PermissionDecision,
@@ -530,6 +531,74 @@ export class OpenCodeAdapter implements AgentAdapter {
         },
       }),
     );
+  }
+
+  /** 获取会话完整快照（Part 全量状态），供 resetRequired/truncated 时原子重建。 */
+  async getSessionSnapshot(
+    sessionId: string,
+  ): Promise<{ streamEpoch: string; watermark: number; events: CanonicalAgentEvent[] }> {
+    const events: CanonicalAgentEvent[] = [];
+    if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) {
+      return { streamEpoch: this.normalizer.streamEpoch, watermark: 0, events };
+    }
+    const dbFolder = this.id === 'mimo' ? 'mimocode' : 'opencode';
+    const dbName = this.id === 'mimo' ? 'mimocode.db' : 'opencode.db';
+    const dbPath = join(homedir(), '.local/share', dbFolder, dbName);
+    if (!existsSync(dbPath)) {
+      return { streamEpoch: this.normalizer.streamEpoch, watermark: 0, events };
+    }
+    try {
+      const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT 2000;`;
+      const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
+        encoding: 'utf8',
+        timeout: 3000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const rows = JSON.parse(out || '[]') as Array<{
+        part_id?: string | null;
+        role?: string;
+        part_type?: string;
+        text?: string | null;
+        tool?: string | null;
+        call_id?: string | null;
+        tool_output?: string | null;
+      }>;
+      const push = (type: CanonicalAgentEventType, payload: Record<string, unknown>) => {
+        events.push(
+          createCanonicalEvent({
+            eventId: `snapshot:${sessionId}:${events.length}`,
+            streamEpoch: this.normalizer.streamEpoch,
+            agentId: this.id,
+            sessionId,
+            sequence: this.normalizer.nextSequence(sessionId),
+            timestamp: new Date().toISOString(),
+            type,
+            payload,
+          }),
+        );
+      };
+      for (const row of rows) {
+        const partId = row.part_id ?? `part_${events.length}`;
+        const text = row.text ?? '';
+        if (row.role === 'user' && row.part_type === 'text' && text.trim()) {
+          push('text_delta', { delta: text, partId, partRevision: text.length, role: 'user' });
+        } else if (row.role === 'assistant' && row.part_type === 'text' && text) {
+          push('text_delta', { delta: text, partId, partRevision: text.length });
+        } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
+          const callId = row.call_id || partId;
+          push('tool_use', { toolCallId: callId, name: row.tool, input: {} });
+          const output = row.tool_output ?? '';
+          if (output) {
+            push('tool_result', { toolCallId: callId, content: output, isError: false });
+          }
+        }
+      }
+      const watermark = events.length > 0 ? events[events.length - 1]!.sequence : 0;
+      return { streamEpoch: this.normalizer.streamEpoch, watermark, events };
+    } catch {
+      this.emitDiagnosticWarning(`snapshot build failed for ${sessionId}`);
+      return { streamEpoch: this.normalizer.streamEpoch, watermark: 0, events };
+    }
   }
 
   async getSessionDiff(sessionId: string): Promise<SessionFileDiff[]> {

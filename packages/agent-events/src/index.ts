@@ -25,6 +25,10 @@ export type AgentAdapter = {
   createSession?(input?: CreateSessionInput): Promise<AgentSession>;
   loadSession?(sessionId: string): Promise<AgentSession>;
   getSessionDiff?(sessionId: string): Promise<SessionFileDiff[]>;
+  /** 获取会话完整快照（Part 状态），供 resetRequired 时原子重建。 */
+  getSessionSnapshot?(
+    sessionId: string,
+  ): Promise<{ streamEpoch: string; watermark: number; events: CanonicalAgentEvent[] }>;
   sendMessage(sessionId: string, message: string, options?: { modelId?: string | undefined }): Promise<void>;
   replyPermission?(
     sessionId: string,

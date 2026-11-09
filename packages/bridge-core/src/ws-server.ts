@@ -695,6 +695,19 @@ export class BridgeServer {
         };
       }
 
+      case 'session.snapshot': {
+        if (!bypassAuth) this.requireAuthenticated(client);
+        const session = await this.resolveSession(request.sessionId);
+        const adapter = this.registry.get(session.agentId);
+        if (!adapter?.getSessionSnapshot) {
+          throw new BridgeCommandError(
+            'SNAPSHOT_UNAVAILABLE',
+            `Agent ${session.agentId} does not support session snapshot`,
+          );
+        }
+        return await adapter.getSessionSnapshot(session.id);
+      }
+
       case 'screen.capture': {
         if (!bypassAuth) this.requireAuthenticated(client);
         if (!this.screenCaptureProvider) {

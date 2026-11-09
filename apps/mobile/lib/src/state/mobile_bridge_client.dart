@@ -319,16 +319,10 @@ class MobileBridgeClient extends ChangeNotifier {
       if (serverEpoch.isNotEmpty) {
         _currentEpochBySession[sessionId] = serverEpoch;
       }
-      // 2.2 保守处理：resetRequired/truncated 时保留已有 timeline（不丢用户记录），
-      //    仅重置序号水位与乱序缓冲，让新事件可继续应用。完整「快照替换」留待
-      //    Part Snapshot 协议（session.snapshot）落地后再做原子重建。
+      // 2.2 resetRequired/truncated：调用 session.snapshot 原子重建（不再丢数据）
       if (resetRequired || truncated) {
-        _lastSequenceBySession.removeWhere(
-          (k, _) => k == sessionId || k.startsWith('$sessionId#'),
-        );
-        _pendingEventsByEpoch.removeWhere(
-          (k, _) => k == sessionId || k.startsWith('$sessionId#'),
-        );
+        await loadSessionSnapshot(sessionId);
+        return;
       }
       final events = data['events'] as List<dynamic>? ?? const [];
       for (final rawEvt in events) {
@@ -337,6 +331,39 @@ class MobileBridgeClient extends ChangeNotifier {
           'event': rawEvt,
         });
       }
+    }
+  }
+
+  /// 会话快照：resetRequired/truncated 时拉完整 Part 状态，原子替换本地时间线。
+  Future<void> loadSessionSnapshot(String sessionId) async {
+    final res = await transport.sendRequest({
+      'type': 'session.snapshot',
+      'requestId': _nextRequestId(),
+      'sessionId': sessionId,
+    });
+    if (res['ok'] != true) return;
+    final data = res['data'] as Map<String, dynamic>;
+    final epoch = data['streamEpoch'] as String? ?? '';
+    final watermark = data['watermark'] as int? ?? 0;
+    final events = data['events'] as List<dynamic>? ?? const [];
+    // 原子安装：先对齐 epoch、清空本地状态，再按序应用快照
+    if (epoch.isNotEmpty) _currentEpochBySession[sessionId] = epoch;
+    _timelineBySession.remove(sessionId);
+    _lastSequenceBySession.removeWhere(
+      (k, _) => k == sessionId || k.startsWith('$sessionId#'),
+    );
+    _pendingEventsByEpoch.removeWhere(
+      (k, _) => k == sessionId || k.startsWith('$sessionId#'),
+    );
+    _seenEventIds.removeWhere((k) => k.startsWith('$sessionId#'));
+    for (final rawEvt in events) {
+      _handleServerMessage({
+        'type': 'session.event',
+        'event': rawEvt,
+      });
+    }
+    if (epoch.isNotEmpty) {
+      _lastSequenceBySession['$sessionId#$epoch'] = watermark;
     }
   }
 
@@ -692,19 +719,38 @@ class MobileBridgeClient extends ChangeNotifier {
 
     final event = CanonicalAgentEvent.fromJson(Map<String, dynamic>.from(eventMap));
 
-    // 1) eventId 幂等去重：稳定事件 ID 重复到达（历史补偿重放）只处理一次
+    // 1) eventId 幂等去重（含 sessionId+epoch）：同一历史事件在不同 epoch 可有相同
+    //    eventId，故去重键必须带 epoch，避免跨 epoch 误判为重复。
     if (event.eventId.isNotEmpty) {
-      if (_seenEventIds.contains(event.eventId)) return;
-      _seenEventIds.add(event.eventId);
+      final dedupeKey = '${event.sessionId}#${event.streamEpoch}#${event.eventId}';
+      if (_seenEventIds.contains(dedupeKey)) return;
+      _seenEventIds.add(dedupeKey);
       if (_seenEventIds.length > _maxSeenEventIds) {
         _seenEventIds.remove(_seenEventIds.first);
       }
     }
 
-    // 2) streamEpoch 感知 + 乱序缓冲：水位只表示「已连续应用」的最大 sequence，
-    //    跳号事件先入缓冲，待缺口补齐后按序应用，避免先推进水位导致缺失事件被丢弃。
-    if (event.streamEpoch.isNotEmpty) {
+    // 2) epoch 切换：新事件流的第一条（seq=1，如 Bridge 重启）切换 epoch 并应用；
+    //    旧 epoch 迟到事件（seq>1 且 epoch 不同）不混排、不切换，触发 replay 同步。
+    final currentEpoch = _currentEpochBySession[event.sessionId];
+    if (currentEpoch == null || currentEpoch.isEmpty) {
       _currentEpochBySession[event.sessionId] = event.streamEpoch;
+    } else if (event.streamEpoch.isNotEmpty && event.streamEpoch != currentEpoch) {
+      if (event.sequence <= 1) {
+        // 新事件流起点：切换 epoch（sequence 也重置）
+        _currentEpochBySession[event.sessionId] = event.streamEpoch;
+      } else {
+        // 旧 epoch 迟到事件：丢弃 + 触发 replay 拿正确 epoch/事件
+        if (!_gapReplayInFlight.contains(event.sessionId)) {
+          _gapReplayInFlight.add(event.sessionId);
+          unawaited(
+            replayMissedEvents(event.sessionId).whenComplete(
+              () => _gapReplayInFlight.remove(event.sessionId),
+            ),
+          );
+        }
+        return;
+      }
     }
     final epochKey = '${event.sessionId}#${event.streamEpoch}';
     final lastApplied = _lastSequenceBySession[epochKey] ?? 0;

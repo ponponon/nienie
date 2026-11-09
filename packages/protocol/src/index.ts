@@ -262,10 +262,26 @@ export type BridgeRequest =
       afterSequence: number;
     }
   | {
+      type: 'session.snapshot';
+      requestId: string;
+      sessionId: string;
+      streamEpoch?: string | undefined;
+    }
+  | {
       type: 'screen.capture';
       requestId: string;
       displayId?: string | undefined;
     };
+
+/** 会话快照结果：完整 Part 状态，供客户端原子重建时间线。 */
+export type SessionSnapshotResult = {
+  sessionId: string;
+  streamEpoch: string;
+  /** 快照覆盖到的最大 sequence，客户端安装后从 watermark 之后收增量。 */
+  watermark: number;
+  /** 完整历史事件（按 sequence 有序）。 */
+  events: CanonicalAgentEvent[];
+};
 
 /** 事件回放结果：按 (sessionId, streamEpoch) 定位，标注截断与是否需快照重置。 */
 export type EventsReplayResult = {
@@ -636,6 +652,25 @@ export function parseBridgeRequest(
           sessionId: obj.sessionId,
           ...(obj.streamEpoch ? { streamEpoch: obj.streamEpoch } : {}),
           afterSequence: obj.afterSequence,
+        },
+      };
+    }
+
+    case 'session.snapshot': {
+      if (typeof obj.sessionId !== 'string' || !obj.sessionId.trim()) {
+        return {
+          ok: false,
+          requestId,
+          error: { code: 'BAD_REQUEST', message: 'Invalid sessionId' },
+        };
+      }
+      return {
+        ok: true,
+        request: {
+          type: 'session.snapshot',
+          requestId,
+          sessionId: obj.sessionId,
+          ...(typeof obj.streamEpoch === 'string' ? { streamEpoch: obj.streamEpoch } : {}),
         },
       };
     }
