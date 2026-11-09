@@ -237,6 +237,29 @@ export class BridgeServer {
       return;
     }
 
+    if (req.method === 'GET' && req.url === '/diagnostics') {
+      const sessionEventCounts: Record<string, number> = {};
+      for (const [sessionId, events] of this.eventHistoryBySession) {
+        sessionEventCounts[sessionId] = events.length;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          protocolVersion: PROTOCOL_VERSION,
+          machineId: this.machineId,
+          connectedClients: this.clients.size,
+          eventHistory: {
+            sessions: this.eventHistoryBySession.size,
+            maxEventsPerSession: this.maxEventsPerSession,
+            counts: sessionEventCounts,
+          },
+          adapters: this.registry.getDiagnostics(),
+        }),
+      );
+      return;
+    }
+
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'Not Found' }));
   }

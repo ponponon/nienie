@@ -300,3 +300,11 @@
 - 替换 Electron「关于」页图标，并设置 macOS Dock、BrowserWindow 图标；提供 PNG、ICO、ICNS 多尺寸资源。
 - 替换 Flutter 手机端页眉图标，并生成 iOS 全尺寸 AppIcon、Android 密度图标和 Android adaptive icon。
 - 将 Android 与 iOS 启动画面同步为小猫图案和匹配的蜜桃背景；平台启动器图标由操作系统应用圆角遮罩，界面内小图标按组件尺寸裁切。
+
+### 2026-11-08 抽象 AgentEventConnectionManager + SSE 自动重连与历史补偿 + 链路诊断
+
+- **`AgentEventConnectionManager`**（`packages/agent-events/src/connections.ts`，transport-agnostic）：统一管理事件流的「建立 / 去重 / 断线重连 / 释放」，输入 `AsyncIterable<unknown>`（SSE 解析流、子进程 stdout 行流、SQLite 历史流通用）。特性：per-key（directory）连接、in-flight 去重、断线指数退避+抖动自动重连、`onReconnect` 钩子、`status()` 诊断、`dispose` 生命周期。OpenCode/MiMo 适配器复用；后续 Codex/Claude Code 亦可接入。
+- **SSE 自动重连**：断线后不再等下次 `sendMessage` 才重连，后台按退避自动重建，正在生成的回复不再因瞬断丢失。
+- **事件历史补偿**：`emitSqliteSessionHistory` 改增量回放（`p.rowid > 水位`，幂等），`onReconnect` 触发对已加载会话的增量补发；历史与实时事件共享 normalizer 的单调 sequence（`nextSequence`）避免撞号。
+- **Bridge `/diagnostics` 路由**（`ws-server.ts`）：聚合 machineId / connectedClients / 每会话事件缓冲计数 / 各适配器 SSE 连接状态（连接数、重连次数、最后事件时间）。
+- **B 诊断脚本升级为链路自检表**（`scripts/diag-opencode-sse.mjs`）：新增「OpenCode Health → Create Session → Session Directory → SSE HTTP → SSE Connected → Prompt HTTP → Session Status → Assistant Text Delta → Session Idle」全链路逐步状态表，一键定位「后台生成但不显示」断在哪一环。

@@ -4,7 +4,12 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { createAgentInfo, createCanonicalEvent, type AgentAdapter } from '@nienie/agent-events';
+import {
+  createAgentInfo,
+  createCanonicalEvent,
+  AgentEventConnectionManager,
+  type AgentAdapter,
+} from '@nienie/agent-events';
 import type {
   AgentSession,
   AgentStatus,
@@ -79,15 +84,12 @@ export class OpenCodeAdapter implements AgentAdapter {
   private readonly normalizer: OpenCodeEventNormalizer;
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
 
-  private readonly sseConnections = new Map<
-    string,
-    { controller: AbortController; ready: Promise<void>; loop?: Promise<void> | undefined }
-  >();
-  private disposed = false;
+  private readonly eventManager: AgentEventConnectionManager<unknown>;
   private managedServerProcess: ChildProcess | undefined;
   private readonly sessionDirectories = new Map<string, string>();
   private readonly loadedHistorySessions = new Set<string>();
   private historySeqCounter = 0;
+  private readonly historyHighWater = new Map<string, number>();
 
   constructor(
     options: OpenCodeAdapterOptions & {
@@ -122,6 +124,15 @@ export class OpenCodeAdapter implements AgentAdapter {
     this.detectTimeoutMs = options.detectTimeoutMs ?? DEFAULT_DETECT_TIMEOUT_MS;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.normalizer = new OpenCodeEventNormalizer({ ...options, agentId: this.id });
+    this.eventManager = new AgentEventConnectionManager<unknown>({
+      connect: (key, signal) => this.connectEventStream(key, signal),
+      onEvent: (raw) => {
+        for (const event of this.normalizer.normalize(raw)) {
+          this.emit(event);
+        }
+      },
+      onReconnect: (key) => this.compensateHistoryForKey(key),
+    });
   }
 
   async detect() {
@@ -373,13 +384,16 @@ export class OpenCodeAdapter implements AgentAdapter {
     if (!existsSync(dbPath)) return;
 
     try {
-      const sql = `SELECT json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, substr(json_extract(p.data, '$.state.output'), 1, 500) AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.time_created ASC LIMIT 120;`;
+      // 增量回放：只取 rowid > 已回放水位的行，天然幂等（重连补偿不会重复已发内容）
+      const highWater = this.historyHighWater.get(sessionId) ?? 0;
+      const sql = `SELECT p.rowid AS rid, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, substr(json_extract(p.data, '$.state.output'), 1, 500) AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND p.rowid > ${highWater} AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT 200;`;
       const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
         encoding: 'utf8',
         timeout: 2000,
         stdio: ['ignore', 'pipe', 'ignore'],
       });
       const rows = JSON.parse(out || '[]') as Array<{
+        rid: number;
         role?: string;
         part_type?: string;
         text?: string | null;
@@ -389,6 +403,9 @@ export class OpenCodeAdapter implements AgentAdapter {
       }>;
 
       for (const row of rows) {
+        if (typeof row.rid === 'number' && row.rid > highWater) {
+          this.historyHighWater.set(sessionId, row.rid);
+        }
         const text = (row.text ?? '').trim();
         if (
           text.startsWith('<system-reminder>') ||
@@ -396,13 +413,15 @@ export class OpenCodeAdapter implements AgentAdapter {
         ) {
           continue;
         }
+        // 历史与实时事件共享 normalizer 的单调 sequence，避免撞号
+        const seq = this.normalizer.nextSequence(sessionId);
         if (row.role === 'user' && row.part_type === 'text' && text) {
           this.emit(
             createCanonicalEvent({
               eventId: `hist_${randomUUID()}`,
               agentId: this.id,
               sessionId,
-              sequence: ++this.historySeqCounter,
+              sequence: seq,
               timestamp: new Date().toISOString(),
               type: 'text_delta',
               payload: { delta: text, role: 'user' },
@@ -414,7 +433,7 @@ export class OpenCodeAdapter implements AgentAdapter {
               eventId: `hist_${randomUUID()}`,
               agentId: this.id,
               sessionId,
-              sequence: ++this.historySeqCounter,
+              sequence: seq,
               timestamp: new Date().toISOString(),
               type: 'text_delta',
               payload: { delta: `${text}\n` },
@@ -427,7 +446,7 @@ export class OpenCodeAdapter implements AgentAdapter {
               eventId: `hist_${randomUUID()}`,
               agentId: this.id,
               sessionId,
-              sequence: ++this.historySeqCounter,
+              sequence: seq,
               timestamp: new Date().toISOString(),
               type: 'tool_use',
               payload: { toolCallId: callId, name: row.tool, input: {} },
@@ -439,7 +458,7 @@ export class OpenCodeAdapter implements AgentAdapter {
                 eventId: `hist_${randomUUID()}`,
                 agentId: this.id,
                 sessionId,
-                sequence: ++this.historySeqCounter,
+                sequence: this.normalizer.nextSequence(sessionId),
                 timestamp: new Date().toISOString(),
                 type: 'tool_result',
                 payload: {
@@ -548,92 +567,50 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async connectEvents(directory?: string): Promise<void> {
-    const effectiveDir = directory ?? this.directory;
-    const key = effectiveDir ?? '';
-    const existing = this.sseConnections.get(key);
-    if (existing) {
-      // 复用已建立 / 建立中的连接，避免并发重复建连
-      return existing.ready;
+    const key = directory ?? this.directory ?? '';
+    await this.eventManager.ensure(key);
+  }
+
+  /** 建立某 directory（key）的 SSE 事件流，返回 raw 事件的 AsyncIterable。 */
+  private async connectEventStream(
+    key: string,
+    signal: AbortSignal,
+  ): Promise<AsyncIterable<unknown>> {
+    const effectiveDir = key === '' ? undefined : key;
+    const response = await this.fetchImpl(
+      this.buildUrl('/event', effectiveDir ? { directory: effectiveDir } : undefined),
+      {
+        method: 'GET',
+        headers: this.buildHeaders({
+          accept: 'text/event-stream',
+          ...(effectiveDir ? { 'x-opencode-directory': effectiveDir } : {}),
+        }),
+        signal,
+      },
+    );
+    if (!response.ok || !response.body) {
+      throw new Error(`Failed to connect to OpenCode SSE stream (${response.status})`);
     }
-    if (this.disposed) {
-      return;
-    }
+    return parseSseStream(response.body);
+  }
 
-    const controller = new AbortController();
-    const entry: {
-      controller: AbortController;
-      ready: Promise<void>;
-      loop?: Promise<void> | undefined;
-    } = { controller, ready: Promise.resolve() };
-    // 先登记 entry，使 dispose 能中止「建立中」的连接
-    this.sseConnections.set(key, entry);
-
-    entry.ready = (async () => {
-      try {
-        const response = await this.fetchImpl(
-          this.buildUrl('/event', effectiveDir ? { directory: effectiveDir } : undefined),
-          {
-            method: 'GET',
-            headers: this.buildHeaders({
-              accept: 'text/event-stream',
-              ...(effectiveDir ? { 'x-opencode-directory': effectiveDir } : {}),
-            }),
-            signal: controller.signal,
-          },
-        );
-
-        if (this.disposed) {
-          controller.abort();
-          throw new Error('OpenCode adapter disposed');
-        }
-        if (!response.ok || !response.body) {
-          controller.abort();
-          throw new Error(`Failed to connect to OpenCode SSE stream (${response.status})`);
-        }
-
-        const stream = response.body;
-        entry.loop = (async () => {
-          try {
-            for await (const rawEvent of parseSseStream(stream)) {
-              if (controller.signal.aborted) break;
-              const normalized = this.normalizer.normalize(rawEvent);
-              for (const event of normalized) {
-                this.emit(event);
-              }
-            }
-          } catch {
-            // Ignore stream abort or disconnect errors when disposing
-          } finally {
-            if (this.sseConnections.get(key) === entry) {
-              this.sseConnections.delete(key);
-            }
-          }
-        })();
-      } catch (error) {
-        // 建立失败：移除 entry 以便后续重试
-        if (this.sseConnections.get(key) === entry) {
-          this.sseConnections.delete(key);
-        }
-        throw error;
+  /** 断线重连后，对已加载的会话做事件历史补偿（增量回放，幂等）。 */
+  private compensateHistoryForKey(key: string): void {
+    for (const sessionId of this.loadedHistorySessions) {
+      const dir = this.sessionDirectories.get(sessionId) ?? this.directory ?? '';
+      if (dir === key) {
+        this.emitSqliteSessionHistory(sessionId);
       }
-    })();
+    }
+  }
 
-    return entry.ready;
+  /** 暴露 SSE 连接诊断（供 Bridge /diagnostics 聚合）。 */
+  getDiagnostics() {
+    return this.eventManager.status();
   }
 
   async dispose(): Promise<void> {
-    this.disposed = true;
-    const connections = [...this.sseConnections.values()];
-    this.sseConnections.clear();
-    for (const { controller } of connections) {
-      controller.abort();
-    }
-    for (const { ready } of connections) {
-      await ready.catch(() => undefined);
-    }
-    for (const { loop } of connections) {
-      await loop?.catch(() => undefined);
-    }
+    await this.eventManager.dispose();
     if (this.managedServerProcess) {
       this.managedServerProcess.kill('SIGTERM');
       this.managedServerProcess = undefined;

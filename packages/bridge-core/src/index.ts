@@ -61,6 +61,21 @@ export class AgentRegistry {
     return () => this.listeners.delete(listener);
   }
 
+  /** 聚合各适配器的事件流连接诊断。 */
+  getDiagnostics(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [id, adapter] of this.adapters) {
+      if (typeof adapter.getDiagnostics === 'function') {
+        try {
+          out[id] = adapter.getDiagnostics();
+        } catch {
+          out[id] = { error: 'diagnostics unavailable' };
+        }
+      }
+    }
+    return out;
+  }
+
   async dispose(): Promise<void> {
     for (const unsubscribe of this.unsubscribers.values()) {
       unsubscribe();

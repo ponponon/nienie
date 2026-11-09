@@ -44,6 +44,13 @@ export class OpenCodeEventNormalizer {
     return this.sessionStatuses.get(sessionId);
   }
 
+  /** 分配某会话的下一个 sequence（历史回放与实时事件共享同一单调序列，避免撞号）。 */
+  nextSequence(sessionId: string): number {
+    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
+    this.sequences.set(sessionId, nextSeq);
+    return nextSeq;
+  }
+
   normalize(rawInput: unknown): CanonicalAgentEvent[] {
     const raw = unwrapGlobalEvent(rawInput);
     if (!raw || typeof raw.type !== 'string') {
@@ -422,8 +429,7 @@ export class OpenCodeEventNormalizer {
     type: CanonicalAgentEventType,
     payload: Record<string, unknown>,
   ): CanonicalAgentEvent {
-    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
-    this.sequences.set(sessionId, nextSeq);
+    const nextSeq = this.nextSequence(sessionId);
 
     return createCanonicalEvent({
       eventId: this.idGenerator(),

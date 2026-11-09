@@ -12,6 +12,8 @@ import {
   type SessionFileDiff,
 } from '@nienie/protocol';
 
+export * from './connections.js';
+
 export type AgentAdapter = {
   readonly id: AgentId;
   readonly name: string;
@@ -31,6 +33,8 @@ export type AgentAdapter = {
   cancel(sessionId: string): Promise<void>;
   dispose(): Promise<void>;
   onEvent(listener: (event: CanonicalAgentEvent) => void): () => void;
+  /** 可选：暴露事件流连接诊断（供 Bridge /diagnostics 聚合）。 */
+  getDiagnostics?(): unknown;
 };
 
 export function createAgentInfo(

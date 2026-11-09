@@ -116,6 +116,129 @@ async function runCombo(label, createWithDir, subscribeUrl) {
   return { label, total: sub.count, meaningful: mine.length, types };
 }
 
+/** 链路自检：追踪一次「建会话→订阅→发 Prompt→收事件」的全链路，逐步报告状态。 */
+async function runLinkCheck() {
+  const steps = [];
+  const add = (name, result) => steps.push({ name, result });
+
+  // 1. Health
+  let version = 'unknown';
+  try {
+    const health = await fetch(`${BASE}/global/health`).then((r) => (r.ok ? r.json() : null));
+    version = health?.version ?? 'unknown';
+    add('OpenCode Health', health ? `OK (v${version})` : 'FAIL');
+  } catch (e) {
+    add('OpenCode Health', `FAIL (${e.message})`);
+  }
+
+  // 2. Create Session（带 directory）
+  let sesId = '';
+  try {
+    const res = await fetch(`${BASE}/session?directory=${encodeURIComponent(DIR)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'nienie-link-check' }),
+    });
+    const ses = await res.json();
+    sesId = ses.id;
+    add('Create Session', res.ok ? `OK (${sesId})` : `FAIL (${res.status})`);
+    add('Session Directory', ses.directory ? `${ses.directory}` : '(未记录)');
+  } catch (e) {
+    add('Create Session', `FAIL (${e.message})`);
+    return reportLink(steps);
+  }
+
+  // 3. 订阅 /event?directory=X
+  const ctrl = new AbortController();
+  const seen = [];
+  let sseHttp = 'FAIL';
+  let sseConnected = '否';
+  let sseReadError = '';
+  const esPromise = (async () => {
+    try {
+      const res = await fetch(`${BASE}/event?directory=${encodeURIComponent(DIR)}`, {
+        headers: { accept: 'text/event-stream' },
+        signal: ctrl.signal,
+      });
+      sseHttp = `${res.status}`;
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value);
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const l of lines) {
+          if (!l.startsWith('data: ')) continue;
+          try {
+            const evt = JSON.parse(l.slice(6));
+            seen.push(evt);
+            if (evt.type === 'server.connected') sseConnected = 'OK';
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    } catch (e) {
+      if (!sseHttp.startsWith('2')) sseReadError = e.message;
+    }
+  })();
+  // 等一下让 server.connected 到达
+  await new Promise((r) => setTimeout(r, 400));
+  add('SSE HTTP', sseHttp);
+  add('SSE Connected', sseConnected + (sseReadError ? ` (${sseReadError})` : ''));
+
+  // 4. 发 Prompt
+  let promptHttp = 'FAIL';
+  try {
+    const res = await fetch(
+      `${BASE}/session/${sesId}/prompt_async?directory=${encodeURIComponent(DIR)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-opencode-directory': DIR },
+        body: JSON.stringify({ parts: [{ type: 'text', text: '只回答两个字：收到' }] }),
+      },
+    );
+    promptHttp = `${res.status}`;
+  } catch (e) {
+    promptHttp = `FAIL (${e.message})`;
+  }
+  add('Prompt HTTP', promptHttp);
+
+  // 5. 等待事件
+  await new Promise((r) => setTimeout(r, WAIT_MS));
+  ctrl.abort();
+  await esPromise.catch(() => {});
+
+  const mine = seen.filter((e) => e.properties?.sessionID === sesId);
+  const types = new Set(mine.map((e) => e.type));
+  add('Session Status (busy)', types.has('session.status') ? 'OK' : '(未见)');
+  const delta = mine.find((e) => e.type === 'message.part.delta');
+  add('Assistant Text Delta', delta ? `OK ("${(delta.properties?.delta ?? '').slice(0, 20)}")` : '(未收到)');
+  add('Session Idle', types.has('session.idle') ? 'OK' : '(未见)');
+
+  return reportLink(steps);
+}
+
+function reportLink(steps) {
+  console.log(`\n链路自检表：`);
+  console.log(`| 环节 | 结果 |`);
+  console.log(`|------|------|`);
+  for (const s of steps) {
+    console.log(`| ${s.name} | ${s.result} |`);
+  }
+  const failed = steps.filter((s) => /FAIL/.test(s.result));
+  if (failed.length > 0) {
+    console.log(`\n✗ 链路在 [${failed.map((s) => s.name).join(', ')}] 处失败。`);
+    return false;
+  }
+  const ok = steps.some((s) => s.name === 'Assistant Text Delta' && /^OK/.test(s.result));
+  console.log(ok ? '\n✓ 全链路通畅，事件回流正常。' : '\n△ 链路部分通畅但未收到回复文本。');
+  return ok;
+}
+
 async function main() {
   // 健康检查
   try {
@@ -132,6 +255,11 @@ async function main() {
   console.log(`  项目目录: ${DIR}`);
   console.log(`  每组合等待: ${WAIT_MS}ms\n`);
 
+  // ① 全链路自检表
+  await runLinkCheck();
+
+  // ② 四组合订阅矩阵
+  console.log(`\n订阅矩阵对比:`);
   const combos = [
     await runCombo('建会话无dir + 订阅全局/event        ', false, `${BASE}/event`),
     await runCombo('建会话无dir + 订阅/event?directory  ', false, `${BASE}/event?directory=${encodeURIComponent(DIR)}`),
