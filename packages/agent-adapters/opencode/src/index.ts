@@ -539,7 +539,11 @@ export class OpenCodeAdapter implements AgentAdapter {
     });
   }
 
-  async sendMessage(sessionId: string, message: string): Promise<void> {
+  async sendMessage(
+    sessionId: string,
+    message: string,
+    options?: { modelId?: string | undefined },
+  ): Promise<void> {
     if (this.autoStartServer) {
       await this.ensureManagedServerRunning();
     }
@@ -549,6 +553,25 @@ export class OpenCodeAdapter implements AgentAdapter {
 
     const encodedId = encodeURIComponent(sessionId);
     const query = knownDir ? { directory: knownDir } : undefined;
+    // modelId 格式为 `${providerId}/${modelId}`，拆开传给 OpenCode（否则用默认模型）
+    const body: Record<string, unknown> = {
+      parts: [
+        {
+          type: 'text',
+          text: message,
+        },
+      ],
+    };
+    const modelId = options?.modelId;
+    if (modelId) {
+      const slash = modelId.indexOf('/');
+      const providerID = slash > 0 ? modelId.slice(0, slash) : undefined;
+      const modelID = slash > 0 ? modelId.slice(slash + 1) : modelId;
+      body.model = {
+        ...(providerID ? { providerID } : {}),
+        modelID,
+      };
+    }
     const response = await this.fetchImpl(
       this.buildUrl(`/session/${encodedId}/prompt_async`, query),
       {
@@ -557,14 +580,7 @@ export class OpenCodeAdapter implements AgentAdapter {
           'content-type': 'application/json',
           ...(knownDir ? { 'x-opencode-directory': knownDir } : {}),
         }),
-        body: JSON.stringify({
-          parts: [
-            {
-              type: 'text',
-              text: message,
-            },
-          ],
-        }),
+        body: JSON.stringify(body),
       },
     );
 

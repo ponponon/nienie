@@ -25,7 +25,7 @@ export type AgentAdapter = {
   createSession?(input?: CreateSessionInput): Promise<AgentSession>;
   loadSession?(sessionId: string): Promise<AgentSession>;
   getSessionDiff?(sessionId: string): Promise<SessionFileDiff[]>;
-  sendMessage(sessionId: string, message: string): Promise<void>;
+  sendMessage(sessionId: string, message: string, options?: { modelId?: string | undefined }): Promise<void>;
   replyPermission?(
     sessionId: string,
     permissionId: string,

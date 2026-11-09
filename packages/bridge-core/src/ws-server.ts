@@ -641,7 +641,7 @@ export class BridgeServer {
       case 'session.send': {
         if (!bypassAuth) this.requireAuthenticated(client);
         const session = await this.resolveSession(request.sessionId, request.agentId);
-        await this.router.sendMessage(session, request.message);
+        await this.router.sendMessage(session, request.message, request.modelId);
         return { accepted: true, sessionId: session.id };
       }
 

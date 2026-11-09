@@ -122,12 +122,12 @@ export class SessionRouter {
     return adapter.getSessionDiff(session.id);
   }
 
-  async sendMessage(session: AgentSession, message: string): Promise<void> {
+  async sendMessage(session: AgentSession, message: string, modelId?: string): Promise<void> {
     const adapter = this.registry.get(session.agentId);
     if (!adapter) {
       throw new Error(`No adapter registered for agent: ${session.agentId}`);
     }
-    await adapter.sendMessage(session.id, message);
+    await adapter.sendMessage(session.id, message, modelId ? { modelId } : undefined);
   }
 
   async cancel(session: AgentSession): Promise<void> {
