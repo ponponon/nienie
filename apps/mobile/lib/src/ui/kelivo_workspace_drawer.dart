@@ -150,6 +150,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                     final agent = client.agents[index];
                     final isSelected = client.selectedAgentId == agent.id;
                     return InkWell(
+                      key: Key('chip-agent-${agent.id}'),
                       borderRadius: BorderRadius.circular(10),
                       onTap: () => client.selectAgent(agent.id),
                       child: Container(

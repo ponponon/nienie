@@ -3,7 +3,6 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../i18n/app_strings.dart';
 import '../state/mobile_bridge_client.dart';
-import 'agent_brand_logo.dart';
 import 'kelivo_workspace_drawer.dart';
 import 'pairing_panel.dart';
 import 'timeline_card_list.dart';
@@ -367,6 +366,54 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     );
   }
 
+  String _currentModelName(MobileBridgeClient client) {
+    if (client.models.isEmpty) return 'Model';
+    final selected = client.models
+        .where((m) => m.id == client.selectedModelId)
+        .firstOrNull;
+    return (selected ?? client.models.first).name;
+  }
+
+  void _showModelPicker(BuildContext context, MobileBridgeClient client) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  '选择模型',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ),
+              for (final model in client.models)
+                ListTile(
+                  key: Key('model-option-${model.id}'),
+                  leading: const Icon(LucideIcons.cpu, size: 18),
+                  title: Text(model.name),
+                  trailing: model.id == client.selectedModelId
+                      ? const Icon(LucideIcons.check, size: 18, color: _weTypeGreen)
+                      : null,
+                  onTap: () {
+                    client.selectModel(model.id);
+                    Navigator.of(ctx).pop();
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildKelivoConnectedBody(
     BuildContext context,
     MobileBridgeClient client,
@@ -375,28 +422,6 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
 
     return Column(
       children: [
-        // Optional Model Picker Chip Strip (when models are loaded)
-        if (client.models.isNotEmpty)
-          Container(
-            height: 32,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: client.models.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 6),
-              itemBuilder: (context, index) {
-                final model = client.models[index];
-                return ChoiceChip(
-                  key: Key('chip-model-${model.id}'),
-                  visualDensity: VisualDensity.compact,
-                  label: Text(model.name, style: const TextStyle(fontSize: 11)),
-                  selected: client.selectedModelId == model.id,
-                  onSelected: (_) => client.selectModel(model.id),
-                );
-              },
-            ),
-          ),
-
         // Pure Kelivo Chat Canvas (100% clean white space when no messages yet)
         Expanded(
           child: active == null
@@ -459,57 +484,51 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                             scrollDirection: Axis.horizontal,
                             child: Row(
                               children: [
-                                for (final agent in client.agents)
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: 6),
-                                    child: InkWell(
-                                      key: Key('chip-agent-${agent.id}'),
+                                // Model selector：显示当前模型，点击切换
+                                // （agent 选择属于会话层，在会话头部/抽屉，不在此）
+                                InkWell(
+                                  key: const Key('btn-select-model'),
+                                  borderRadius: BorderRadius.circular(999),
+                                  onTap: () => _showModelPicker(context, client),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 5,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
                                       borderRadius: BorderRadius.circular(999),
-                                      onTap: () => client.selectAgent(agent.id),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: client.selectedAgentId ==
-                                                  agent.id
-                                              ? Colors.white
-                                              : Colors.transparent,
-                                          borderRadius:
-                                              BorderRadius.circular(999),
-                                          border: Border.all(
-                                            color: client.selectedAgentId ==
-                                                    agent.id
-                                                ? const Color(0x18000000)
-                                                : Colors.transparent,
-                                          ),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            AgentBrandLogo(
-                                              agentId: agent.id,
-                                              size: 13,
-                                            ),
-                                            const SizedBox(width: 5),
-                                            Text(
-                                              agent.name,
-                                              style: TextStyle(
-                                                fontSize: 11.5,
-                                                fontWeight:
-                                                    client.selectedAgentId ==
-                                                            agent.id
-                                                        ? FontWeight.w600
-                                                        : FontWeight.w500,
-                                                color: _textPrimary,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
+                                      border: Border.all(
+                                        color: const Color(0x18000000),
                                       ),
                                     ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          LucideIcons.cpu,
+                                          size: 13,
+                                          color: _textSecondary,
+                                        ),
+                                        const SizedBox(width: 5),
+                                        Text(
+                                          _currentModelName(client),
+                                          style: const TextStyle(
+                                            fontSize: 11.5,
+                                            fontWeight: FontWeight.w600,
+                                            color: _textPrimary,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 3),
+                                        const Icon(
+                                          LucideIcons.chevronDown,
+                                          size: 12,
+                                          color: _textSecondary,
+                                        ),
+                                      ],
+                                    ),
                                   ),
+                                ),
                                 IconButton(
                                   key: const Key('btn-capture-screen'),
                                   visualDensity: VisualDensity.compact,

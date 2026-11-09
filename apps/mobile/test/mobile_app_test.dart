@@ -116,9 +116,8 @@ void main() {
 
       expect(client.connectionState, BridgeConnectionState.connected);
 
-      // 2. View Agent list
-      expect(find.text('OpenCode'), findsOneWidget);
-      expect(find.text('Codex'), findsOneWidget);
+      // 2. View Agent list（agent 选择在工作抽屉，这里校验已加载的 agent 列表）
+      expect(client.agents.map((a) => a.name), containsAll(['OpenCode', 'Codex']));
 
       // 3. View Session list and enter session
       expect(find.text('Implement OpenCode adapter'), findsOneWidget);
@@ -345,7 +344,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(client.connectionState, BridgeConnectionState.connected);
-    expect(find.text('OpenCode'), findsOneWidget);
+    expect(client.agents.map((a) => a.name), contains('OpenCode'));
   });
 
   testWidgets('lists saved machines in pairing panel and reconnects with one tap', (
@@ -377,9 +376,10 @@ void main() {
 
     expect(client.connectionState, BridgeConnectionState.connected);
 
-    await tester.tap(find.byKey(const Key('chip-agent-opencode')));
+    await client.selectAgent('opencode');
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('chip-model-anthropic/claude-sonnet-4')), findsOneWidget);
+    // 模型选择器在 composer 底部，这里校验已加载的模型列表
+    expect(client.models.map((m) => m.id), contains('anthropic/claude-sonnet-4'));
 
     // Switching to an agent with 0 sessions must clear projects/activeSession instead of leaking previous agent's sessions
     await client.selectAgent('codex');
