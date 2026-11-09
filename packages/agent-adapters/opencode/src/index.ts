@@ -10,6 +10,7 @@ import {
   AgentEventConnectionManager,
   type AgentAdapter,
 } from '@nienie/agent-events';
+import { SESSION_SNAPSHOT_SCHEMA_VERSION } from '@nienie/protocol';
 import type {
   AgentSession,
   AgentStatus,
@@ -19,6 +20,8 @@ import type {
   ModelInfo,
   PermissionDecision,
   SessionFileDiff,
+  SessionSnapshot,
+  SessionSnapshotPart,
 } from '@nienie/protocol';
 import { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
 import { parseSseStream } from './sse.js';
@@ -540,24 +543,33 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   /** 获取会话完整快照（Part 全量状态），供 resetRequired/truncated 时原子重建。 */
-  async getSessionSnapshot(
-    sessionId: string,
-  ): Promise<{ streamEpoch: string; watermark: number; events: CanonicalAgentEvent[] }> {
-    const events: CanonicalAgentEvent[] = [];
-    if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) {
-      return { streamEpoch: this.normalizer.streamEpoch, watermark: 0, events };
-    }
+  async getSessionSnapshot(sessionId: string): Promise<SessionSnapshot> {
+    const empty: SessionSnapshot = {
+      schemaVersion: SESSION_SNAPSHOT_SCHEMA_VERSION,
+      snapshotId: `snap_${Date.now()}`,
+      sessionId,
+      agentId: this.id,
+      streamEpoch: this.normalizer.streamEpoch,
+      watermark: this.normalizer.peekSequence(sessionId),
+      capturedAt: new Date().toISOString(),
+      complete: true,
+      hasMore: false,
+      totalParts: 0,
+      parts: [],
+    };
+    if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) return empty;
     const dbFolder = this.id === 'mimo' ? 'mimocode' : 'opencode';
     const dbName = this.id === 'mimo' ? 'mimocode.db' : 'opencode.db';
     const dbPath = join(homedir(), '.local/share', dbFolder, dbName);
     if (!existsSync(dbPath)) {
-      return { streamEpoch: this.normalizer.streamEpoch, watermark: 0, events };
+      // 数据库不可用：绝不返回空成功（那会误清空手机历史），明确报错
+      throw new Error(`OpenCode session database unavailable for snapshot: ${sessionId}`);
     }
     try {
-      const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT 2000;`;
+      const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT 5000;`;
       const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
         encoding: 'utf8',
-        timeout: 3000,
+        timeout: 5000,
         stdio: ['ignore', 'pipe', 'ignore'],
       });
       const rows = JSON.parse(out || '[]') as Array<{
@@ -569,41 +581,40 @@ export class OpenCodeAdapter implements AgentAdapter {
         call_id?: string | null;
         tool_output?: string | null;
       }>;
-      const push = (type: CanonicalAgentEventType, payload: Record<string, unknown>) => {
-        events.push(
-          createCanonicalEvent({
-            eventId: `snapshot:${sessionId}:${events.length}`,
-            streamEpoch: this.normalizer.streamEpoch,
-            agentId: this.id,
-            sessionId,
-            sequence: this.normalizer.nextSequence(sessionId),
-            timestamp: new Date().toISOString(),
-            type,
-            payload,
-          }),
-        );
-      };
+      const parts: SessionSnapshotPart[] = [];
+      let ordinal = 0;
+      const ts = new Date().toISOString();
       for (const row of rows) {
-        const partId = row.part_id ?? `part_${events.length}`;
+        const partId = row.part_id ?? `part_${ordinal}`;
         const text = row.text ?? '';
+        const base = { partId, ordinal: ordinal++, revision: 1, createdAt: ts, updatedAt: ts };
         if (row.role === 'user' && row.part_type === 'text' && text.trim()) {
-          push('text_delta', { delta: text, partId, partRevision: text.length, role: 'user' });
+          parts.push({ ...base, kind: 'message', role: 'user', content: [{ type: 'text', text }] });
         } else if (row.role === 'assistant' && row.part_type === 'text' && text) {
-          push('text_delta', { delta: text, partId, partRevision: text.length });
+          parts.push({ ...base, kind: 'message', role: 'assistant', content: [{ type: 'text', text }] });
         } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
-          const callId = row.call_id || partId;
-          push('tool_use', { toolCallId: callId, name: row.tool, input: {} });
           const output = row.tool_output ?? '';
-          if (output) {
-            push('tool_result', { toolCallId: callId, content: output, isError: false });
-          }
+          parts.push({
+            ...base,
+            kind: 'tool_call',
+            toolCallId: row.call_id || partId,
+            name: row.tool,
+            input: {},
+            status: output ? 'completed' : 'running',
+            ...(output ? { output } : {}),
+          });
         }
       }
-      const watermark = events.length > 0 ? events[events.length - 1]!.sequence : 0;
-      return { streamEpoch: this.normalizer.streamEpoch, watermark, events };
-    } catch {
+      return {
+        ...empty,
+        snapshotId: `snap_${Date.now()}_${sessionId}`,
+        parts,
+        totalParts: parts.length,
+      };
+    } catch (error) {
       this.emitDiagnosticWarning(`snapshot build failed for ${sessionId}`);
-      return { streamEpoch: this.normalizer.streamEpoch, watermark: 0, events };
+      // 读取失败绝不返回空成功
+      throw new Error(`Failed to build session snapshot: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

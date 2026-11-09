@@ -50,6 +50,11 @@ export class OpenCodeEventNormalizer {
   }
 
   /** 分配某会话的下一个 sequence（历史回放与实时事件共享同一单调序列，避免撞号）。 */
+  /** 只读某会话当前 sequence（不递增），供 Snapshot watermark 使用。 */
+  peekSequence(sessionId: string): number {
+    return this.sequences.get(sessionId) ?? 0;
+  }
+
   nextSequence(sessionId: string): number {
     const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
     this.sequences.set(sessionId, nextSeq);

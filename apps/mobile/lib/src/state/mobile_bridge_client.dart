@@ -335,36 +335,75 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   /// 会话快照：resetRequired/truncated 时拉完整 Part 状态，原子替换本地时间线。
+  /// Snapshot 是「状态」不是「事件」：临时构建 Timeline → 校验 → 同步一次性替换。
   Future<void> loadSessionSnapshot(String sessionId) async {
     final res = await transport.sendRequest({
       'type': 'session.snapshot',
       'requestId': _nextRequestId(),
       'sessionId': sessionId,
     });
-    if (res['ok'] != true) return;
+    if (res['ok'] != true) {
+      // 读取失败绝不清空旧 Timeline，只提示
+      errorMessage = '快照恢复失败，已保留当前记录';
+      notifyListeners();
+      return;
+    }
     final data = res['data'] as Map<String, dynamic>;
     final epoch = data['streamEpoch'] as String? ?? '';
-    final watermark = data['watermark'] as int? ?? 0;
-    final events = data['events'] as List<dynamic>? ?? const [];
-    // 原子安装：先对齐 epoch、清空本地状态，再按序应用快照
+    final watermark = (data['watermark'] as num?)?.toInt() ?? 0;
+    final parts = (data['parts'] as List<dynamic>? ?? const []);
+    // 阶段二：独立构建临时 Timeline（不修改现有状态）
+    final nextTimeline = <SessionTimelineItem>[];
+    for (final raw in parts) {
+      final p = Map<String, dynamic>.from(raw as Map);
+      final kind = p['kind'] as String?;
+      if (kind == 'message') {
+        final role = p['role'] as String?;
+        final content = (p['content'] as List<dynamic>? ?? const [])
+            .map((b) => Map<String, dynamic>.from(b as Map))
+            .where((b) => b['type'] == 'text')
+            .map((b) => b['text'] as String? ?? '')
+            .join();
+        if (content.isEmpty) continue;
+        if (role == 'user') {
+          nextTimeline.add(UserPromptItem(content));
+        } else {
+          nextTimeline.add(StreamingTextItem(text: content, isThinking: false));
+        }
+      } else if (kind == 'thinking') {
+        nextTimeline.add(StreamingTextItem(text: p['content'] as String? ?? '', isThinking: true));
+      } else if (kind == 'tool_call') {
+        nextTimeline.add(ToolCallCardItem(
+          toolCallId: p['toolCallId'] as String? ?? '',
+          name: p['name'] as String? ?? 'tool',
+          input: Map<String, dynamic>.from(p['input'] as Map? ?? const {}),
+          resultContent: p['output'] as String?,
+          isError: p['isError'] as bool? ?? false,
+        ));
+      } else if (kind == 'error') {
+        nextTimeline.add(ErrorCardItem(
+          code: p['code'] as String? ?? 'ERROR',
+          message: p['message'] as String? ?? 'Error',
+          retryable: p['retryable'] as bool? ?? false,
+        ));
+      } else if (kind == 'usage') {
+        nextTimeline.add(UsageSummaryItem(
+          inputTokens: (p['inputTokens'] as num?)?.toInt() ?? 0,
+          outputTokens: (p['outputTokens'] as num?)?.toInt() ?? 0,
+          costUsd: (p['costUsd'] as num?)?.toDouble() ?? 0.0,
+        ));
+      }
+    }
+    // 阶段三/四：同步原子替换（不 await），一次 notify
     if (epoch.isNotEmpty) _currentEpochBySession[sessionId] = epoch;
-    _timelineBySession.remove(sessionId);
-    _lastSequenceBySession.removeWhere(
-      (k, _) => k == sessionId || k.startsWith('$sessionId#'),
-    );
-    _pendingEventsByEpoch.removeWhere(
-      (k, _) => k == sessionId || k.startsWith('$sessionId#'),
-    );
+    _timelineBySession[sessionId] = nextTimeline;
+    _lastSequenceBySession.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
+    if (epoch.isNotEmpty) _lastSequenceBySession['$sessionId#$epoch'] = watermark;
+    _pendingEventsByEpoch.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
     _seenEventIds.removeWhere((k) => k.startsWith('$sessionId#'));
-    for (final rawEvt in events) {
-      _handleServerMessage({
-        'type': 'session.event',
-        'event': rawEvt,
-      });
-    }
-    if (epoch.isNotEmpty) {
-      _lastSequenceBySession['$sessionId#$epoch'] = watermark;
-    }
+    notifyListeners();
+    // 阶段五：接续 watermark 之后的增量
+    await replayMissedEvents(sessionId);
   }
 
   Future<void> replyPermission({

@@ -273,14 +273,126 @@ export type BridgeRequest =
       displayId?: string | undefined;
     };
 
-/** 会话快照结果：完整 Part 状态，供客户端原子重建时间线。 */
-export type SessionSnapshotResult = {
+/** 会话快照 V2：Snapshot 是「状态」不是「事件」，与 CanonicalAgentEvent 严格分离。 */
+export const SESSION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+
+export type SnapshotContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mimeType?: string | undefined; uri?: string | undefined; alt?: string | undefined }
+  | { type: 'resource'; uri: string; name?: string | undefined; mimeType?: string | undefined };
+
+export type SnapshotPartBase = {
+  /** Session 内稳定唯一（源 Agent 的 ID 或稳定派生）。 */
+  partId: string;
+  /** 时间线排序位置。 */
+  ordinal: number;
+  /** 状态版本，同 partId 下严格单调递增（不是文本长度）。 */
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SnapshotMessagePart = SnapshotPartBase & {
+  kind: 'message';
+  messageId?: string | undefined;
+  role: 'user' | 'assistant';
+  content: SnapshotContentBlock[];
+};
+
+export type SnapshotThinkingPart = SnapshotPartBase & {
+  kind: 'thinking';
+  content: string;
+};
+
+export type SnapshotToolCallPart = SnapshotPartBase & {
+  kind: 'tool_call';
+  toolCallId: string;
+  name: string;
+  input: Record<string, unknown>;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  output?: string | undefined;
+  isError?: boolean | undefined;
+  truncated?: boolean | undefined;
+  omittedChars?: number | undefined;
+  exitCode?: number | undefined;
+};
+
+export type SnapshotPermissionPart = SnapshotPartBase & {
+  kind: 'permission';
+  permissionId: string;
+  permission: string;
+  detail: string;
+  patterns: string[];
+  decision?: 'allow_once' | 'allow_always' | 'reject' | undefined;
+};
+
+export type SnapshotUsagePart = SnapshotPartBase & {
+  kind: 'usage';
+  usageId: string;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens?: number | undefined;
+  costUsd: number;
+};
+
+export type SnapshotErrorPart = SnapshotPartBase & {
+  kind: 'error';
+  errorId: string;
+  code: string;
+  message: string;
+  retryable: boolean;
+};
+
+export type SnapshotFileChangePart = SnapshotPartBase & {
+  kind: 'file_change';
+  diffId: string;
+  file: string;
+  before: string;
+  after: string;
+  additions: number;
+  deletions: number;
+};
+
+export type SessionSnapshotPart =
+  | SnapshotMessagePart
+  | SnapshotThinkingPart
+  | SnapshotToolCallPart
+  | SnapshotPermissionPart
+  | SnapshotUsagePart
+  | SnapshotErrorPart
+  | SnapshotFileChangePart;
+
+/** Adapter 内部完整状态快照（不允许部分数据）。 */
+export type SessionSnapshot = {
+  schemaVersion: typeof SESSION_SNAPSHOT_SCHEMA_VERSION;
+  snapshotId: string;
   sessionId: string;
+  agentId: AgentId;
   streamEpoch: string;
-  /** 快照覆盖到的最大 sequence，客户端安装后从 watermark 之后收增量。 */
+  /** Snapshot 完整覆盖的最后一条已应用 CanonicalAgentEvent.sequence。 */
   watermark: number;
-  /** 完整历史事件（按 sequence 有序）。 */
-  events: CanonicalAgentEvent[];
+  capturedAt: string;
+  complete: true;
+  hasMore: false;
+  totalParts: number;
+  parts: SessionSnapshotPart[];
+  sessionStatus?: AgentStatus | undefined;
+};
+
+/** Bridge 网络传输分页（允许部分数据，客户端只在 complete 时安装）。 */
+export type SessionSnapshotPage = {
+  schemaVersion: typeof SESSION_SNAPSHOT_SCHEMA_VERSION;
+  snapshotId: string;
+  sessionId: string;
+  agentId: AgentId;
+  streamEpoch: string;
+  watermark: number;
+  capturedAt: string;
+  parts: SessionSnapshotPart[];
+  complete: boolean;
+  hasMore: boolean;
+  nextCursor?: string | undefined;
+  totalParts: number;
 };
 
 /** 事件回放结果：按 (sessionId, streamEpoch) 定位，标注截断与是否需快照重置。 */
