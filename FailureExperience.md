@@ -929,3 +929,27 @@ MiMo 适配器复用同一 `OpenCodeAdapter` 类，自动受益。
 ### 后续建议（ChatGPT，待做）
 
 P2：SSE 自动重连 + 指数退避、目录连接引用计数/闲置回收、事件历史恢复、`AgentEventConnectionManager` 统一管理 SSE 生命周期（供各适配器复用）。
+
+---
+
+## SSE 事件流管理器的五个 P0/P1 语义缺陷（ChatGPT 第二轮复盘）
+
+在抽象出 AgentEventConnectionManager 后再请 ChatGPT review，它指出了几个「测试能过、生产有隐患」的 API 语义缺陷。核心教训：**「首次连接成功」不等于「当前连接可用」**。
+
+### 1. ensure() 复用首次连接的旧 Promise（会让原 bug 复现）
+`entry.ready` 只在首次连接 resolve，之后即使断线重连中，`ensure` 也返回旧的已 resolve Promise，`sendMessage` 于是误以为 SSE 就绪、继续发 Prompt → 「生成了但手机收不到回复」重现。修复：拆出 `waitUntilConnected(key)`，用**每次连接独立的 Deferred**（断线即换新），`connectEvents` 改为 `ensure` + `waitUntilConnected` 强一致。**教训：连接就绪判定必须反映「当前」状态，不能复用历史 Promise。**
+
+### 2. dispose()/close() 没等后台 supervisor 真正退出
+`setTimeout(0)` 只让出一次事件循环，不等于后台任务结束。修复：`entry.supervisor` 保存后台任务，`dispose`/`close` 用 `await Promise.all(supervisor)` 真正等待退出。
+
+### 3. mock 流不遵守 AbortSignal → dispose 卡死
+管理器依赖 `for await` 在 abort 时退出。若底层 AsyncIterable 不响应 AbortSignal（测试 mock 就是），`for await` 永久阻塞，`dispose` await supervisor 卡死。修复：mock 流的 `next()` 需 `signal.addEventListener('abort', ...)` 唤醒；真实适配器靠 fetch signal 天然遵守。**教训：连接管理器的取消语义依赖传输层遵守 AbortSignal 约定，测试必须模拟这一点。**
+
+### 4. 建连期间被 close/dispose 后仍会置为 connected
+`await connect()` 返回后未复查 `disposed/closed/aborted`，已关闭的连接可能「复活」为 connected。修复：`await connect()` 后立即复查三者。另 `ensure()` 在已 dispose 时应抛 DisposedError 而非静默成功。
+
+### 5. /diagnostics 无鉴权泄露本机环境信息
+HTTP 直出项目路径/Session ID/machineId。修复：仅允许 localhost 访问 + `Cache-Control: no-store` + 目录 key 折叠为 basename 脱敏。
+
+### 未做（ChatGPT 建议的 P0，留待后续）
+SQLite rowid 水位无法发现已有 part 的 UPDATE（需 partId+revision 复合水位）；事件协议缺 streamEpoch（Bridge/重启后 sequence 重置会让手机误丢事件）；手机 Retry 需查电脑端实时状态而非本地缓存。这三个是「事件可靠性协议」级改造，ChatGPT 建议作为下一个独立提交重点做。

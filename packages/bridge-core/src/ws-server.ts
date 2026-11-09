@@ -21,6 +21,24 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_CLIENT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 500;
 
+/** 诊断脱敏：把诊断里的目录 key 折叠为 basename，避免泄露完整本机路径。 */
+function redactDiagnosticKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactDiagnosticKeys);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (k === 'key' && typeof v === 'string') {
+        const base = v.split('/').filter(Boolean).pop();
+        out[k] = base ?? '(root)';
+      } else {
+        out[k] = redactDiagnosticKeys(v);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
 export type ScreenCaptureProvider = (
   displayId?: string,
 ) => Promise<ScreenCaptureFrame>;
@@ -238,11 +256,22 @@ export class BridgeServer {
     }
 
     if (req.method === 'GET' && req.url === '/diagnostics') {
+      // 仅允许本机访问，避免暴露项目路径 / Session ID 等环境信息
+      const remote = req.socket.remoteAddress ?? '';
+      const isLocal = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+      if (!isLocal) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Forbidden' }));
+        return;
+      }
       const sessionEventCounts: Record<string, number> = {};
       for (const [sessionId, events] of this.eventHistoryBySession) {
         sessionEventCounts[sessionId] = events.length;
       }
-      res.writeHead(200, { 'content-type': 'application/json' });
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      });
       res.end(
         JSON.stringify({
           ok: true,
@@ -254,7 +283,7 @@ export class BridgeServer {
             maxEventsPerSession: this.maxEventsPerSession,
             counts: sessionEventCounts,
           },
-          adapters: this.registry.getDiagnostics(),
+          adapters: redactDiagnosticKeys(this.registry.getDiagnostics()),
         }),
       );
       return;

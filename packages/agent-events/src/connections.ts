@@ -52,6 +52,22 @@ export interface AgentEventConnectionManagerOptions<T> {
   sleep?: ((ms: number, signal: AbortSignal) => Promise<void>) | undefined;
 }
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 interface Entry {
   key: string;
   controller: AbortController;
@@ -61,7 +77,9 @@ interface Entry {
   reconnects: number;
   receivedEvents: number;
   lastError?: string | undefined;
-  ready: Promise<void>;
+  /** 当前/下一次连接的结果；连接断开时会换新，供 waitUntilConnected 等待。 */
+  connectionOutcome: Deferred<void>;
+  supervisor: Promise<void>;
   closed: boolean;
 }
 
@@ -109,12 +127,10 @@ export class AgentEventConnectionManager<T> {
    * 确保某 key 的事件流已建立。去重并发调用；重复调用已连接的 key 直接返回。
    * 首次建立失败会抛出（供 sendMessage 强一致使用）；建立后断线由后台自动重连。
    */
-  async ensure(key: string): Promise<void> {
-    if (this.disposed) return;
+  /** 同步获取/创建 entry 并启动 supervisor，返回 entry（供捕获 connectionOutcome）。 */
+  private getOrCreateEntry(key: string): Entry {
     const existing = this.entries.get(key);
-    if (existing) {
-      return existing.ready;
-    }
+    if (existing) return existing;
 
     const controller = new AbortController();
     const entry: Entry = {
@@ -123,63 +139,86 @@ export class AgentEventConnectionManager<T> {
       state: 'connecting',
       reconnects: 0,
       receivedEvents: 0,
-      ready: Promise.resolve(),
+      connectionOutcome: createDeferred<void>(),
+      supervisor: Promise.resolve(),
       closed: false,
     };
     // 先登记 entry，使 dispose/close 能中止「建立中」的连接
     this.entries.set(key, entry);
+    entry.supervisor = this.supervise(entry);
+    return entry;
+  }
 
-    // ready 只反映「首次建立」成功与否；后续重连在 supervisor 里后台进行
-    let firstResolve!: () => void;
-    let firstReject!: (e: unknown) => void;
-    const first = new Promise<void>((resolve, reject) => {
-      firstResolve = resolve;
-      firstReject = reject;
-    });
-    entry.ready = first;
+  async ensure(key: string): Promise<void> {
+    if (this.disposed) {
+      throw new Error('AgentEventConnectionManager disposed');
+    }
+    this.getOrCreateEntry(key);
+  }
 
-    void this.supervise(entry, firstResolve, firstReject);
-    return first;
+  /**
+   * 等待某 key「当前」处于已连接状态。断线重连期间调用会一直等到重连成功，
+   * 而非复用首次连接的旧 Promise（避免 sendMessage 在重连中误发 Prompt）。
+   */
+  async waitUntilConnected(key: string): Promise<void> {
+    if (this.disposed) {
+      throw new Error('AgentEventConnectionManager disposed');
+    }
+    // 同步捕获 connectionOutcome，避免 await 期间 supervisor 失败移除 entry
+    const entry = this.getOrCreateEntry(key);
+    if (entry.state === 'connected') return;
+    return entry.connectionOutcome.promise;
+  }
+
+  isConnected(key: string): boolean {
+    return this.entries.get(key)?.state === 'connected';
   }
 
   /** 后台连接监督：建立 → 消费事件 → 断线后指数退避重连。 */
-  private async supervise(
-    entry: Entry,
-    firstResolve: () => void,
-    firstReject: (e: unknown) => void,
-  ): Promise<void> {
+  private async supervise(entry: Entry): Promise<void> {
     let attempt = 0;
-    let firstSettled = false;
+    let everConnected = false;
 
     while (!this.disposed && !entry.closed) {
       try {
         entry.state = attempt === 0 ? 'connecting' : 'reconnecting';
         const stream = await this.options.connect(entry.key, entry.controller.signal);
+
+        // 建连期间可能被 close/dispose，需复查
+        if (this.disposed || entry.closed || entry.controller.signal.aborted) {
+          return;
+        }
+
         entry.state = 'connected';
         entry.connectedAt = this.now();
         entry.lastError = undefined;
-        if (!firstSettled) {
-          firstSettled = true;
-          firstResolve();
-        }
-        if (attempt > 0) {
+        entry.connectionOutcome.resolve();
+        if (everConnected) {
           entry.reconnects++;
-          this.options.onReconnect?.(entry.key);
+          try {
+            await this.options.onReconnect?.(entry.key);
+          } catch {
+            // 历史补偿失败不应中断实时事件消费
+          }
         }
+        everConnected = true;
 
         for await (const raw of stream) {
           if (entry.controller.signal.aborted) return;
           entry.receivedEvents++;
           entry.lastEventAt = this.now();
-          this.options.onEvent(raw, entry.key);
+          try {
+            this.options.onEvent(raw, entry.key);
+          } catch {
+            // 事件处理异常不应触发传输层重连
+          }
         }
         // 流正常结束（非 abort）—— 视为断线，走重连
         entry.lastError = 'stream ended';
       } catch (error) {
         entry.lastError = error instanceof Error ? error.message : String(error);
-        if (!firstSettled) {
-          firstSettled = true;
-          firstReject(error);
+        entry.connectionOutcome.reject(error);
+        if (!everConnected) {
           // 首次建立失败：移除 entry，让后续 ensure 可重试
           if (this.entries.get(entry.key) === entry) {
             this.entries.delete(entry.key);
@@ -192,6 +231,10 @@ export class AgentEventConnectionManager<T> {
       if (this.disposed || entry.closed || entry.controller.signal.aborted) {
         return;
       }
+
+      // 进入退避前先更新状态，让诊断看到 reconnecting；换新 outcome 供等待者
+      entry.state = 'reconnecting';
+      entry.connectionOutcome = createDeferred<void>();
 
       attempt++;
       if (attempt > this.retry.maxReconnects) {
@@ -248,6 +291,7 @@ export class AgentEventConnectionManager<T> {
     entry.controller.abort();
     this.entries.delete(key);
     entry.state = 'closed';
+    await entry.supervisor.catch(() => undefined);
   }
 
   /** 释放所有连接，停止重连。 */
@@ -259,8 +303,8 @@ export class AgentEventConnectionManager<T> {
       entry.closed = true;
       entry.controller.abort();
     }
-    // 让 supervisor 循环退出（sleep 被 abort）
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 等待后台 supervisor 循环真正退出（而非仅让出一次事件循环）
+    await Promise.all(entries.map((entry) => entry.supervisor.catch(() => undefined)));
     for (const entry of entries) {
       entry.state = 'closed';
     }
