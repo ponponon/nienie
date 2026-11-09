@@ -3,6 +3,7 @@ import type { Readable, Writable } from 'node:stream';
 import {
   createAgentInfo,
   createCanonicalEvent,
+  generateStreamEpoch,
   type AgentAdapter,
 } from '@nienie/agent-events';
 import type {
@@ -41,6 +42,7 @@ export type PtySessionHandle = {
 export type PtyFallbackAdapterOptions = {
   machineId?: string | undefined;
   spawnPty?: ((cwd: string) => PtySessionHandle) | undefined;
+  streamEpoch?: string | undefined;
 };
 
 export class PtyFallbackAdapter implements AgentAdapter {
@@ -54,9 +56,11 @@ export class PtyFallbackAdapter implements AgentAdapter {
   private readonly sessions = new Map<string, AgentSession>();
   private readonly handles = new Map<string, PtySessionHandle>();
   private readonly sequences = new Map<string, number>();
+  readonly streamEpoch: string;
 
   constructor(options: PtyFallbackAdapterOptions = {}) {
     this.machineId = options.machineId;
+    this.streamEpoch = options.streamEpoch ?? generateStreamEpoch();
     this.spawnPty = options.spawnPty;
   }
 
@@ -145,6 +149,7 @@ export class PtyFallbackAdapter implements AgentAdapter {
     const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
     this.sequences.set(sessionId, nextSeq);
     const evt = createCanonicalEvent({
+      streamEpoch: this.streamEpoch,
       eventId: `evt_${randomUUID()}`,
       machineId: this.machineId,
       agentId: 'pty',

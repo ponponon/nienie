@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import {
   createAgentInfo,
   createCanonicalEvent,
+  generateStreamEpoch,
   DEFAULT_MAX_TOOL_OUTPUT_LENGTH,
   redactSensitiveData,
   truncateOutput,
@@ -35,6 +36,7 @@ export type PiNormalizerOptions = {
   maxToolOutputLength?: number | undefined;
   now?: (() => Date) | undefined;
   idGenerator?: (() => string) | undefined;
+  streamEpoch?: string | undefined;
 };
 
 type RawRecord = Record<string, unknown>;
@@ -45,9 +47,11 @@ export class PiEventNormalizer {
   private readonly now: () => Date;
   private readonly idGenerator: () => string;
   private readonly sequences = new Map<string, number>();
+  readonly streamEpoch: string;
 
   constructor(options: PiNormalizerOptions = {}) {
     this.machineId = options.machineId;
+    this.streamEpoch = options.streamEpoch ?? generateStreamEpoch();
     this.maxToolOutputLength = options.maxToolOutputLength ?? DEFAULT_MAX_TOOL_OUTPUT_LENGTH;
     this.now = options.now ?? (() => new Date());
     this.idGenerator = options.idGenerator ?? (() => `evt_${randomUUID()}`);
@@ -158,6 +162,7 @@ export class PiEventNormalizer {
     this.sequences.set(sessionId, nextSeq);
 
     return createCanonicalEvent({
+      streamEpoch: this.streamEpoch,
       eventId: this.idGenerator(),
       machineId: this.machineId,
       agentId: 'pi',

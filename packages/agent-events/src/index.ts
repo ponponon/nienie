@@ -54,8 +54,8 @@ export function createAgentInfo(
 
 export type CreateCanonicalEventInput = {
   eventId: string;
-  /** 事件流实例标识；缺省时由 createCanonicalEvent 生成。 */
-  streamEpoch?: string | undefined;
+  /** 事件流实例标识（必填）：每个 Adapter 实例固定一个，客户端按 (sessionId, streamEpoch, sequence) 判重。 */
+  streamEpoch: string;
   machineId?: string | undefined;
   agentId?: AgentId | undefined;
   sessionId: string;
@@ -74,7 +74,7 @@ export function createCanonicalEvent(input: CreateCanonicalEventInput): Canonica
   return {
     version: PROTOCOL_VERSION,
     eventId: input.eventId,
-    streamEpoch: input.streamEpoch ?? generateStreamEpoch(),
+    streamEpoch: input.streamEpoch,
     ...(input.machineId ? { machineId: input.machineId } : {}),
     ...(input.agentId ? { agentId: input.agentId } : {}),
     sessionId: input.sessionId,

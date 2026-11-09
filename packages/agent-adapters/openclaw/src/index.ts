@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   createAgentInfo,
   createCanonicalEvent,
+  generateStreamEpoch,
   redactSensitiveData,
   type AgentAdapter,
 } from '@nienie/agent-events';
@@ -27,6 +28,7 @@ export type OpenClawAdapterOptions = {
   baseUrl?: string | undefined;
   machineId?: string | undefined;
   fetch?: typeof globalThis.fetch | undefined;
+  streamEpoch?: string | undefined;
 };
 
 export class OpenClawAdapter implements AgentAdapter {
@@ -39,6 +41,7 @@ export class OpenClawAdapter implements AgentAdapter {
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sequences = new Map<string, number>();
+  readonly streamEpoch: string;
 
   constructor(options: OpenClawAdapterOptions = {}) {
     this.baseUrl = (
@@ -47,6 +50,7 @@ export class OpenClawAdapter implements AgentAdapter {
       'http://127.0.0.1:4310'
     ).replace(/\/+$/, '');
     this.machineId = options.machineId;
+    this.streamEpoch = options.streamEpoch ?? generateStreamEpoch();
     this.fetchImpl = options.fetch ?? globalThis.fetch;
   }
 
@@ -137,6 +141,7 @@ export class OpenClawAdapter implements AgentAdapter {
       const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
       this.sequences.set(sessionId, nextSeq);
       const evt = createCanonicalEvent({
+        streamEpoch: this.streamEpoch,
         eventId: `evt_${randomUUID()}`,
         machineId: this.machineId,
         agentId: 'openclaw',
