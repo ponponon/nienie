@@ -461,7 +461,7 @@ export class OpenCodeAdapter implements AgentAdapter {
                 }),
               );
             }
-            // tool_result 独立增量：工具异步产出 output，延迟/增长的 result 可补发
+            // tool_result：发全量内容（手机端是覆盖语义，增量会导致只留后缀）
             const output = row.tool_output ?? '';
             const resultEmitted = this.emittedToolResultLength.get(callId) ?? -1;
             if (output.length > resultEmitted) {
@@ -477,7 +477,7 @@ export class OpenCodeAdapter implements AgentAdapter {
                   type: 'tool_result',
                   payload: {
                     toolCallId: callId,
-                    content: output.slice(Math.max(0, resultEmitted)),
+                    content: output,
                     isError: false,
                   },
                 }),

@@ -108,3 +108,16 @@ describe('agent event contracts', () => {
     expect(sanitized).toContain('[REDACTED]');
   });
 });
+
+describe('truncateOutput 契约（防 content 类型 bug）', () => {
+  it('truncateOutput 返回 content 为 string，供 tool_result 直接用作字符串', () => {
+    const short = truncateOutput('hello', 100);
+    expect(typeof short.content).toBe('string');
+    expect(short.content).toBe('hello');
+    expect(short.truncated).toBe(false);
+
+    const long = truncateOutput('x'.repeat(50), 10);
+    expect(typeof long.content).toBe('string');
+    expect(long.truncated).toBe(true);
+  });
+});

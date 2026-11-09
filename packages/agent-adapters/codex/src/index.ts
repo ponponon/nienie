@@ -315,11 +315,12 @@ export class CodexAdapter implements AgentAdapter {
                   }),
                 );
               }
-              // tool_result 独立增量：延迟/增长的 result 可补发
+              // tool_result：发全量内容（手机端是覆盖语义，增量会导致只留后缀）
               const output = item.aggregated_output ?? '';
               const resultEmitted = this.emittedToolResultLength.get(callId) ?? -1;
               if (output.length > resultEmitted) {
                 this.emittedToolResultLength.set(callId, output.length);
+                const result = truncateOutput(output, DEFAULT_MAX_TOOL_OUTPUT_LENGTH);
                 this.emitEvent(
                   createCanonicalEvent({
                     eventId: `history:${sessionId}:tool:${callId}:result:${output.length}`,
@@ -331,11 +332,9 @@ export class CodexAdapter implements AgentAdapter {
                     type: 'tool_result',
                     payload: {
                       toolCallId: callId,
-                      content: truncateOutput(
-                        output.slice(Math.max(0, resultEmitted)),
-                        DEFAULT_MAX_TOOL_OUTPUT_LENGTH,
-                      ),
+                      content: result.content,
                       isError: (item.exit_code ?? 0) !== 0,
+                      truncated: result.truncated,
                     },
                   }),
                 );
