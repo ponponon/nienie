@@ -154,10 +154,12 @@ export class CustomJsonlAdapter implements AgentAdapter {
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sessions = new Map<string, AgentSession>();
   private readonly sequences = new Map<string, number>();
+  readonly streamEpoch: string;
   private eventCounter = 0;
 
   constructor(options: CustomJsonlAdapterOptions) {
     this.id = options.id;
+    this.streamEpoch = generateStreamEpoch();
     this.name = options.name;
     this.machineId = options.machineId;
     this.runPrompt = options.runPrompt;
@@ -299,6 +301,7 @@ export class CustomJsonlAdapter implements AgentAdapter {
     this.sequences.set(sessionId, seq);
     const evt = createCanonicalEvent({
       eventId: `cevt_${++this.eventCounter}`,
+      streamEpoch: this.streamEpoch,
       machineId: this.machineId,
       agentId: this.id,
       sessionId,

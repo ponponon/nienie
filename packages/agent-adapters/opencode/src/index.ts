@@ -91,8 +91,12 @@ export class OpenCodeAdapter implements AgentAdapter {
   private historySeqCounter = 0;
   /** partId → 已回放的文本长度，用于增量补发缺失后缀（幂等 + 捕获 UPDATE）。 */
   private readonly emittedPartLength = new Map<string, number>();
-  /** 已回放的 tool callId，保证 tool_use/tool_result 只发一次。 */
-  private readonly emittedToolCalls = new Set<string>();
+  /** 已回放的 tool callId（tool_use 只发一次）。 */
+  private readonly emittedToolUse = new Set<string>();
+  /** callId → 已回放的 tool_result 内容长度，延迟/增长的 result 增量补发。 */
+  private readonly emittedToolResultLength = new Map<string, number>();
+  /** 历史恢复告警/失败记录，暴露到诊断。 */
+  private readonly historyRecoveryErrors: string[] = [];
 
   constructor(
     options: OpenCodeAdapterOptions & {
@@ -390,8 +394,11 @@ export class OpenCodeAdapter implements AgentAdapter {
       // 增量回放：按 partId + 已回放长度只补发缺失后缀，幂等且能捕获 UPDATE。
       // 不用 rowid 水位（rowid 无法发现已有行的内容更新）。
       const pageSize = 200;
-      for (let offset = 0; offset < 2000; offset += pageSize) {
-        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, substr(json_extract(p.data, '$.state.output'), 1, 500) AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
+      // 完整分页：循环到取尽，不用硬上限静默截断；超大安全上限才告警。
+      const maxRows = 20000;
+      let totalRead = 0;
+      for (let offset = 0; ; offset += pageSize) {
+        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
         const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
           encoding: 'utf8',
           timeout: 2000,
@@ -407,6 +414,7 @@ export class OpenCodeAdapter implements AgentAdapter {
           tool_output?: string | null;
         }>;
         if (rows.length === 0) break;
+        totalRead += rows.length;
 
         for (const row of rows) {
           const partId = row.part_id ?? `part_${++this.historySeqCounter}`;
@@ -437,8 +445,9 @@ export class OpenCodeAdapter implements AgentAdapter {
             }
           } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
             const callId = row.call_id || `call_${++this.historySeqCounter}`;
-            if (!this.emittedToolCalls.has(callId)) {
-              this.emittedToolCalls.add(callId);
+            // tool_use 只发一次
+            if (!this.emittedToolUse.has(callId)) {
+              this.emittedToolUse.add(callId);
               this.emit(
                 createCanonicalEvent({
                   eventId: `history:${sessionId}:tool:${callId}`,
@@ -451,27 +460,48 @@ export class OpenCodeAdapter implements AgentAdapter {
                   payload: { toolCallId: callId, name: row.tool, input: {} },
                 }),
               );
-              if (row.tool_output) {
-                this.emit(
-                  createCanonicalEvent({
-                    eventId: `history:${sessionId}:tool:${callId}:result`,
-                    streamEpoch: this.normalizer.streamEpoch,
-                    agentId: this.id,
-                    sessionId,
-                    sequence: this.normalizer.nextSequence(sessionId),
-                    timestamp: new Date().toISOString(),
-                    type: 'tool_result',
-                    payload: { toolCallId: callId, content: row.tool_output, isError: false },
-                  }),
-                );
-              }
+            }
+            // tool_result 独立增量：工具异步产出 output，延迟/增长的 result 可补发
+            const output = row.tool_output ?? '';
+            const resultEmitted = this.emittedToolResultLength.get(callId) ?? -1;
+            if (output.length > resultEmitted) {
+              this.emittedToolResultLength.set(callId, output.length);
+              this.emit(
+                createCanonicalEvent({
+                  eventId: `history:${sessionId}:tool:${callId}:result:${output.length}`,
+                  streamEpoch: this.normalizer.streamEpoch,
+                  agentId: this.id,
+                  sessionId,
+                  sequence: this.normalizer.nextSequence(sessionId),
+                  timestamp: new Date().toISOString(),
+                  type: 'tool_result',
+                  payload: {
+                    toolCallId: callId,
+                    content: output.slice(Math.max(0, resultEmitted)),
+                    isError: false,
+                  },
+                }),
+              );
             }
           }
         }
         if (rows.length < pageSize) break;
+        if (totalRead >= maxRows) {
+          // 安全上限：超大 session 保护，不静默——记录并停止
+          this.emitDiagnosticWarning(`history replay truncated at ${maxRows} rows for ${sessionId}`);
+          break;
+        }
       }
     } catch {
       // Ignore sqlite history read errors
+    }
+  }
+
+  /** 记录历史恢复告警（截断/失败），供诊断暴露，不静默。 */
+  private emitDiagnosticWarning(message: string): void {
+    this.historyRecoveryErrors.push(`${new Date().toISOString()}: ${message}`);
+    if (this.historyRecoveryErrors.length > 50) {
+      this.historyRecoveryErrors.shift();
     }
   }
 
@@ -634,7 +664,10 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   /** 暴露 SSE 连接诊断（供 Bridge /diagnostics 聚合）。 */
   getDiagnostics() {
-    return this.eventManager.status();
+    return {
+      connections: this.eventManager.status(),
+      historyRecoveryErrors: [...this.historyRecoveryErrors],
+    };
   }
 
   async dispose(): Promise<void> {

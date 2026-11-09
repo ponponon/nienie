@@ -78,8 +78,12 @@ export class CodexAdapter implements AgentAdapter {
   private historyLoaded = false;
   /** itemId → 已回放文本长度，增量补发缺失后缀（幂等 + 捕获内容更新）。 */
   private readonly emittedTextLength = new Map<string, number>();
-  /** 已回放的 tool itemId，保证 tool_use/tool_result 只发一次。 */
-  private readonly emittedHistoryTools = new Set<string>();
+  /** 已回放的 tool（tool_use 只发一次）。 */
+  private readonly emittedToolUse = new Set<string>();
+  /** callId → 已回放 tool_result 长度，延迟/增长的 result 增量补发。 */
+  private readonly emittedToolResultLength = new Map<string, number>();
+  /** 历史恢复告警/失败记录，暴露到诊断。 */
+  private readonly historyRecoveryErrors: string[] = [];
 
   constructor(options: CodexAdapterOptions = {}) {
     this.executablePath = resolveCodexBinary(
@@ -243,7 +247,10 @@ export class CodexAdapter implements AgentAdapter {
       // 增量回放：按 itemId + 已回放长度补发缺失后缀，幂等且捕获内容更新。
       // eventId 稳定（history:sid:item:rev），配合客户端 eventId 去重。
       const pageSize = 200;
-      for (let offset = 0; offset < 4000; offset += pageSize) {
+      // 完整分页，不硬上限静默截断
+      const maxRows = 20000;
+      let totalRead = 0;
+      for (let offset = 0; ; offset += pageSize) {
         const sql = `SELECT item_id, item_type, item_json, created_at_ms FROM thread_items WHERE thread_id = '${sessionId}' ORDER BY rollout_ordinal ASC LIMIT ${offset}, ${pageSize};`;
         const out = execFileSync('sqlite3', ['-json', historyDb, sql], {
           encoding: 'utf8',
@@ -257,6 +264,7 @@ export class CodexAdapter implements AgentAdapter {
           created_at_ms?: number;
         }>;
         if (rows.length === 0) break;
+        totalRead += rows.length;
 
         for (const row of rows) {
           if (!row.item_json) continue;
@@ -291,8 +299,9 @@ export class CodexAdapter implements AgentAdapter {
               }
             } else if (row.item_type === 'commandExecution' && item.command) {
               const callId = item.id || itemId || `cmd_${randomUUID()}`;
-              if (!this.emittedHistoryTools.has(callId)) {
-                this.emittedHistoryTools.add(callId);
+              // tool_use 只发一次
+              if (!this.emittedToolUse.has(callId)) {
+                this.emittedToolUse.add(callId);
                 this.emitEvent(
                   createCanonicalEvent({
                     eventId: `history:${sessionId}:tool:${callId}`,
@@ -305,25 +314,31 @@ export class CodexAdapter implements AgentAdapter {
                     payload: { toolCallId: callId, name: 'bash', input: { command: item.command } },
                   }),
                 );
-                const output = item.aggregated_output ?? '';
-                if (output || typeof item.exit_code === 'number') {
-                  this.emitEvent(
-                    createCanonicalEvent({
-                      eventId: `history:${sessionId}:tool:${callId}:result`,
-                      streamEpoch: this.normalizer.streamEpoch,
-                      agentId: 'codex',
-                      sessionId,
-                      sequence: this.normalizer.nextSequence(sessionId),
-                      timestamp: ts,
-                      type: 'tool_result',
-                      payload: {
-                        toolCallId: callId,
-                        content: truncateOutput(output, DEFAULT_MAX_TOOL_OUTPUT_LENGTH),
-                        isError: (item.exit_code ?? 0) !== 0,
-                      },
-                    }),
-                  );
-                }
+              }
+              // tool_result 独立增量：延迟/增长的 result 可补发
+              const output = item.aggregated_output ?? '';
+              const resultEmitted = this.emittedToolResultLength.get(callId) ?? -1;
+              if (output.length > resultEmitted) {
+                this.emittedToolResultLength.set(callId, output.length);
+                this.emitEvent(
+                  createCanonicalEvent({
+                    eventId: `history:${sessionId}:tool:${callId}:result:${output.length}`,
+                    streamEpoch: this.normalizer.streamEpoch,
+                    agentId: 'codex',
+                    sessionId,
+                    sequence: this.normalizer.nextSequence(sessionId),
+                    timestamp: ts,
+                    type: 'tool_result',
+                    payload: {
+                      toolCallId: callId,
+                      content: truncateOutput(
+                        output.slice(Math.max(0, resultEmitted)),
+                        DEFAULT_MAX_TOOL_OUTPUT_LENGTH,
+                      ),
+                      isError: (item.exit_code ?? 0) !== 0,
+                    },
+                  }),
+                );
               }
             }
           } catch {
@@ -331,10 +346,29 @@ export class CodexAdapter implements AgentAdapter {
           }
         }
         if (rows.length < pageSize) break;
+        if (totalRead >= maxRows) {
+          this.emitDiagnosticWarning(`history replay truncated at ${maxRows} rows for ${sessionId}`);
+          break;
+        }
       }
     } catch {
       // Ignore sqlite history read errors
     }
+  }
+
+  /** 记录历史恢复告警（截断/失败），供诊断暴露，不静默。 */
+  private emitDiagnosticWarning(message: string): void {
+    this.historyRecoveryErrors.push(`${new Date().toISOString()}: ${message}`);
+    if (this.historyRecoveryErrors.length > 50) {
+      this.historyRecoveryErrors.shift();
+    }
+  }
+
+  /** 暴露历史恢复诊断（供 Bridge /diagnostics 聚合）。 */
+  getDiagnostics() {
+    return {
+      historyRecoveryErrors: [...this.historyRecoveryErrors],
+    };
   }
 
   /** 回放文本增量：稳定 eventId + streamEpoch + partRevision，供客户端幂等去重。 */
