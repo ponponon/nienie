@@ -378,36 +378,59 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.white,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Text(
-                  '选择模型',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.5,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    '选择模型',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
                 ),
-              ),
-              for (final model in client.models)
-                ListTile(
-                  key: Key('model-option-${model.id}'),
-                  leading: const Icon(LucideIcons.cpu, size: 18),
-                  title: Text(model.name),
-                  trailing: model.id == client.selectedModelId
-                      ? const Icon(LucideIcons.check, size: 18, color: _weTypeGreen)
-                      : null,
-                  onTap: () {
-                    client.selectModel(model.id);
-                    Navigator.of(ctx).pop();
-                  },
+                Flexible(
+                  child: client.models.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Text(
+                            '暂无可用模型',
+                            style: TextStyle(fontSize: 13, color: _textSecondary),
+                          ),
+                        )
+                      : ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: client.models.length,
+                          itemBuilder: (context, index) {
+                            final model = client.models[index];
+                            return ListTile(
+                              key: Key('model-option-${model.id}'),
+                              leading: const Icon(LucideIcons.cpu, size: 18),
+                              title: Text(model.name),
+                              trailing: model.id == client.selectedModelId
+                                  ? const Icon(LucideIcons.check,
+                                      size: 18, color: _weTypeGreen)
+                                  : null,
+                              onTap: () {
+                                client.selectModel(model.id);
+                                Navigator.of(ctx).pop();
+                              },
+                            );
+                          },
+                        ),
                 ),
-              const SizedBox(height: 8),
-            ],
+                const SizedBox(height: 8),
+              ],
+            ),
           ),
         );
       },

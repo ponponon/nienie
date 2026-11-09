@@ -217,6 +217,7 @@ class MobileBridgeClient extends ChangeNotifier {
       if (activeSession == null && sessions.isNotEmpty) {
         activeSession = sessions.first;
         selectedAgentId = activeSession!.agentId;
+        await loadModels(selectedAgentId);
       }
       notifyListeners();
     } catch (e) {
@@ -292,6 +293,7 @@ class MobileBridgeClient extends ChangeNotifier {
     } else if (sessions.isNotEmpty) {
       activeSession = sessions.first;
       selectedAgentId = activeSession!.agentId;
+      await loadModels(selectedAgentId);
     }
     notifyListeners();
   }
