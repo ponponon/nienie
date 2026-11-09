@@ -29,6 +29,8 @@ export interface EventStreamDiagnostics {
   reconnects: number;
   receivedEvents: number;
   lastError?: string | undefined;
+  /** 最近一次历史补偿（onReconnect）的失败原因，便于诊断。 */
+  recoveryError?: string | undefined;
 }
 
 export interface RetryPolicy {
@@ -65,6 +67,9 @@ function createDeferred<T>(): Deferred<T> {
     resolve = res;
     reject = rej;
   });
+  // 预挂空 catch，避免「无人 await 时 reject」触发 UnhandledPromiseRejection；
+  // await promise 的调用方仍会正常收到 reject。
+  void promise.catch(() => undefined);
   return { promise, resolve, reject };
 }
 
@@ -77,6 +82,7 @@ interface Entry {
   reconnects: number;
   receivedEvents: number;
   lastError?: string | undefined;
+  recoveryError?: string | undefined;
   /** 当前/下一次连接的结果；连接断开时会换新，供 waitUntilConnected 等待。 */
   connectionOutcome: Deferred<void>;
   supervisor: Promise<void>;
@@ -174,6 +180,16 @@ export class AgentEventConnectionManager<T> {
     return this.entries.get(key)?.state === 'connected';
   }
 
+  /** 结算当前 connectionOutcome（resolve/reject 各只生效一次，重复调用被 Promise 忽略）。 */
+  private settle(entry: Entry, outcome: 'connected' | 'failed' | 'closed', error?: unknown): void {
+    const deferred = entry.connectionOutcome;
+    if (outcome === 'connected') {
+      deferred.resolve();
+    } else {
+      deferred.reject(error instanceof Error ? error : new Error(String(error ?? outcome)));
+    }
+  }
+
   /** 后台连接监督：建立 → 消费事件 → 断线后指数退避重连。 */
   private async supervise(entry: Entry): Promise<void> {
     let attempt = 0;
@@ -186,19 +202,22 @@ export class AgentEventConnectionManager<T> {
 
         // 建连期间可能被 close/dispose，需复查
         if (this.disposed || entry.closed || entry.controller.signal.aborted) {
+          this.settle(entry, 'closed', new Error('connection closed'));
           return;
         }
 
         entry.state = 'connected';
         entry.connectedAt = this.now();
         entry.lastError = undefined;
-        entry.connectionOutcome.resolve();
+        this.settle(entry, 'connected');
         if (everConnected) {
           entry.reconnects++;
           try {
             await this.options.onReconnect?.(entry.key);
-          } catch {
-            // 历史补偿失败不应中断实时事件消费
+            entry.recoveryError = undefined;
+          } catch (error) {
+            // 历史补偿失败不中断实时事件消费，但记录到诊断
+            entry.recoveryError = error instanceof Error ? error.message : String(error);
           }
         }
         everConnected = true;
@@ -213,32 +232,37 @@ export class AgentEventConnectionManager<T> {
             // 事件处理异常不应触发传输层重连
           }
         }
-        // 流正常结束（非 abort）—— 视为断线，走重连
+        // 流正常结束（非 abort）—— 视为断线；为下一代连接换新 Deferred
         entry.lastError = 'stream ended';
+        entry.connectionOutcome = createDeferred<void>();
       } catch (error) {
         entry.lastError = error instanceof Error ? error.message : String(error);
-        entry.connectionOutcome.reject(error);
         if (!everConnected) {
-          // 首次建立失败：移除 entry，让后续 ensure 可重试
+          // 首次建立失败：结算等待者 + 移除 entry，让后续可重试
+          this.settle(entry, 'failed', error);
           if (this.entries.get(entry.key) === entry) {
             this.entries.delete(entry.key);
           }
           entry.state = 'failed';
           return;
         }
+        // 重连暂时失败：保持当前 Deferred pending，继续重试（不提前 reject 等待者）
       }
 
       if (this.disposed || entry.closed || entry.controller.signal.aborted) {
+        this.settle(entry, 'closed', new Error('connection closed'));
         return;
       }
 
-      // 进入退避前先更新状态，让诊断看到 reconnecting；换新 outcome 供等待者
       entry.state = 'reconnecting';
-      entry.connectionOutcome = createDeferred<void>();
-
       attempt++;
       if (attempt > this.retry.maxReconnects) {
         entry.state = 'failed';
+        this.settle(
+          entry,
+          'failed',
+          new Error(`reconnect attempts exhausted (${this.retry.maxReconnects})`),
+        );
         return;
       }
       const delay = Math.min(
@@ -249,6 +273,7 @@ export class AgentEventConnectionManager<T> {
       try {
         await this.sleep(delay + jitter, entry.controller.signal);
       } catch {
+        this.settle(entry, 'closed', new Error('connection closed'));
         return; // aborted
       }
       // 重连用新 controller（旧流已结束）
@@ -256,9 +281,8 @@ export class AgentEventConnectionManager<T> {
         entry.controller = new AbortController();
       }
     }
-    if (entry.state !== 'failed') {
-      entry.state = 'closed';
-    }
+    entry.state = entry.state === 'failed' ? 'failed' : 'closed';
+    this.settle(entry, entry.state === 'failed' ? 'failed' : 'closed', new Error('connection closed'));
   }
 
   /** 全部连接的诊断信息。 */
@@ -280,6 +304,7 @@ export class AgentEventConnectionManager<T> {
       reconnects: entry.reconnects,
       receivedEvents: entry.receivedEvents,
       lastError: entry.lastError,
+      recoveryError: entry.recoveryError,
     };
   }
 
@@ -291,6 +316,7 @@ export class AgentEventConnectionManager<T> {
     entry.controller.abort();
     this.entries.delete(key);
     entry.state = 'closed';
+    this.settle(entry, 'closed', new Error(`event stream closed: ${key}`));
     await entry.supervisor.catch(() => undefined);
   }
 
@@ -302,6 +328,7 @@ export class AgentEventConnectionManager<T> {
     for (const entry of entries) {
       entry.closed = true;
       entry.controller.abort();
+      this.settle(entry, 'closed', new Error('AgentEventConnectionManager disposed'));
     }
     // 等待后台 supervisor 循环真正退出（而非仅让出一次事件循环）
     await Promise.all(entries.map((entry) => entry.supervisor.catch(() => undefined)));

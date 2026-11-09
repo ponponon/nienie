@@ -44,9 +44,11 @@ function deferredSleep() {
   const waits: Array<{ ms: number; resolve: () => void }> = [];
   return {
     waits,
-    sleep: (ms: number) =>
-      new Promise<void>((resolve) => {
+    sleep: (ms: number, signal?: AbortSignal) =>
+      new Promise<void>((resolve, reject) => {
         waits.push({ ms, resolve });
+        // 遵守 AbortSignal（对齐生产 defaultSleep），否则 close/dispose 会卡在 await supervisor
+        signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
       }),
     flush() {
       while (waits.length > 0) waits.shift()!.resolve();
@@ -247,6 +249,162 @@ describe('AgentEventConnectionManager', () => {
     expect(byKey.b).toEqual(['from-b']);
     expect(mgr.status().length).toBe(2);
 
+    await mgr.dispose();
+  });
+});
+
+describe('连接生命周期闭合（ChatGPT 第三轮 P1 验收）', () => {
+  it('重连过程中连续失败，等待者不提前 reject，最终等到成功连接', async () => {
+    let attempt = 0;
+    const sources = [makeSource(), makeSource()];
+    const ds = deferredSleep();
+    const mgr = new AgentEventConnectionManager<unknown>({
+      connect: async (key, signal) => {
+        attempt++;
+        if (attempt === 2 || attempt === 3) throw new Error('transient'); // 第2、3次重连失败
+        return sources[attempt === 1 ? 0 : 1]!.stream(signal);
+      },
+      onEvent: () => {},
+      retry: { initialDelayMs: 10, factor: 1 },
+      sleep: ds.sleep,
+    });
+
+    // 第一次连接成功
+    await mgr.waitUntilConnected('k');
+    // 断开 → 进入重连（第2、3次失败，第4次成功）
+    sources[0]!.end();
+    await new Promise((r) => setTimeout(r, 5));
+
+    let settled = false;
+    let rejected = false;
+    const waiting = mgr
+      .waitUntilConnected('k')
+      .then(() => (settled = true))
+      .catch(() => (rejected = true));
+
+    // 反复 flush 退避，让第2、3次失败、第4次成功
+    for (let i = 0; i < 6; i++) {
+      ds.flush();
+      await new Promise((r) => setTimeout(r, 5));
+      if (settled) break;
+    }
+    await waiting;
+    // 关键：等待者最终 resolve（不因中间失败而 reject）
+    expect(settled).toBe(true);
+    expect(rejected).toBe(false);
+    await mgr.dispose();
+  });
+
+  it('达到 maxReconnects 后等待者收到 terminal error，不永久等待', async () => {
+    let attempt = 0;
+    const first = makeSource();
+    const ds = deferredSleep();
+    const mgr = new AgentEventConnectionManager<unknown>({
+      connect: async (key, signal) => {
+        attempt++;
+        if (attempt === 1) return first.stream(signal); // 首次成功
+        throw new Error('always fail'); // 之后全失败
+      },
+      onEvent: () => {},
+      retry: { initialDelayMs: 10, factor: 1, maxReconnects: 2 },
+      sleep: ds.sleep,
+    });
+
+    await mgr.waitUntilConnected('k');
+    first.end(); // 断开 → 触发重连（重连全失败）
+    await new Promise((r) => setTimeout(r, 5));
+
+    let gotError: Error | null = null;
+    const waiting = mgr.waitUntilConnected('k').catch((e: Error) => (gotError = e));
+    // 反复 flush 退避，让重连失败直到 maxReconnects
+    for (let i = 0; i < 8; i++) {
+      ds.flush();
+      await new Promise((r) => setTimeout(r, 5));
+      if (gotError) break;
+    }
+    await waiting;
+    expect(gotError).not.toBeNull();
+    expect(gotError!.message).toMatch(/exhausted/i);
+    await mgr.dispose();
+  });
+
+  it('close 时正在等待的 waitUntilConnected 会被结束', async () => {
+    const source = makeSource();
+    const ds = deferredSleep();
+    const mgr = new AgentEventConnectionManager<unknown>({
+      connect: async (key, signal) => source.stream(signal),
+      onEvent: () => {},
+      sleep: ds.sleep,
+    });
+
+    await mgr.waitUntilConnected('k');
+    source.end(); // 断开，进入重连（backoff 等待中）
+    await new Promise((r) => setTimeout(r, 5));
+
+    let rejected = false;
+    const waiting = mgr.waitUntilConnected('k').catch(() => (rejected = true));
+    await mgr.close('k'); // close 应结束等待者
+    await waiting;
+    expect(rejected).toBe(true);
+    await mgr.dispose();
+  });
+
+  it('dispose 时正在等待的 waitUntilConnected 会被结束', async () => {
+    const source = makeSource();
+    const ds = deferredSleep();
+    const mgr = new AgentEventConnectionManager<unknown>({
+      connect: async (key, signal) => source.stream(signal),
+      onEvent: () => {},
+      sleep: ds.sleep,
+    });
+
+    await mgr.waitUntilConnected('k');
+    source.end();
+    await new Promise((r) => setTimeout(r, 5));
+
+    let rejected = false;
+    const waiting = mgr.waitUntilConnected('k').catch(() => (rejected = true));
+    await mgr.dispose();
+    await waiting;
+    expect(rejected).toBe(true);
+  });
+
+  it('onReconnect 失败记录到 diagnostics.recoveryError，不静默吞掉', async () => {
+    let connectCount = 0;
+    const sources = [makeSource(), makeSource()];
+    const ds = deferredSleep();
+    const mgr = new AgentEventConnectionManager<unknown>({
+      connect: async (key, signal) => sources[connectCount++]!.stream(signal),
+      onEvent: () => {},
+      onReconnect: () => {
+        throw new Error('history recovery failed');
+      },
+      retry: { initialDelayMs: 10 },
+      sleep: ds.sleep,
+    });
+
+    await mgr.waitUntilConnected('k');
+    sources[0]!.end();
+    await new Promise((r) => setTimeout(r, 5));
+    ds.flush();
+    await new Promise((r) => setTimeout(r, 5));
+
+    const diag = mgr.statusFor('k');
+    expect(diag?.reconnects).toBeGreaterThanOrEqual(1);
+    expect(diag?.recoveryError).toContain('history recovery failed');
+    await mgr.dispose();
+  });
+
+  it('首次连接立即失败不产生 unhandled rejection（Deferred 预挂 catch）', async () => {
+    const mgr = new AgentEventConnectionManager<unknown>({
+      connect: async () => {
+        throw new Error('boom');
+      },
+      onEvent: () => {},
+    });
+    // 即便无人 await，也不应触发 unhandledRejection（createDeferred 已预挂 catch）
+    void mgr.ensure('k');
+    await new Promise((r) => setTimeout(r, 20));
     await mgr.dispose();
   });
 });

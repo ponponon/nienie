@@ -594,9 +594,8 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   async connectEvents(directory?: string): Promise<void> {
     const key = directory ?? this.directory ?? '';
-    await this.eventManager.ensure(key);
-    // 强一致：必须等到当前连接真正可用（而非复用首次连接的旧 Promise），
-    // 否则断线重连期间发 Prompt 会重现「生成了但手机收不到回复」。
+    // waitUntilConnected 内部会按需启动 supervisor，并等待「当前」连接真正可用，
+    // 避免 ensure + wait 双调用在失败时产生重复建连的竞态窗口。
     await this.eventManager.waitUntilConnected(key);
   }
 
