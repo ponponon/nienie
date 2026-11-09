@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../i18n/app_strings.dart';
+import '../models/protocol_models.dart';
 import '../state/mobile_bridge_client.dart';
 import 'kelivo_workspace_drawer.dart';
 import 'pairing_panel.dart';
@@ -375,6 +376,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   }
 
   void _showModelPicker(BuildContext context, MobileBridgeClient client) {
+    String query = '';
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.white,
@@ -383,55 +385,149 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        return SafeArea(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(ctx).size.height * 0.5,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: Text(
-                    '选择模型',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
+        return StatefulBuilder(
+          builder: (ctx, setState) {
+            final q = query.trim().toLowerCase();
+            final filtered = client.models.where((m) {
+              if (q.isEmpty) return true;
+              return m.name.toLowerCase().contains(q) ||
+                  m.providerName.toLowerCase().contains(q);
+            }).toList();
+            // 按 providerName 分组（保持出现顺序）
+            final grouped = <String, List<ModelInfo>>{};
+            for (final m in filtered) {
+              grouped.putIfAbsent(m.providerName, () => []).add(m);
+            }
+
+            return SafeArea(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(ctx).size.height * 0.62,
                 ),
-                Flexible(
-                  child: client.models.isEmpty
-                      ? const Padding(
-                          padding: EdgeInsets.all(24),
-                          child: Text(
-                            '暂无可用模型',
-                            style: TextStyle(fontSize: 13, color: _textSecondary),
-                          ),
-                        )
-                      : ListView.builder(
-                          shrinkWrap: true,
-                          itemCount: client.models.length,
-                          itemBuilder: (context, index) {
-                            final model = client.models[index];
-                            return ListTile(
-                              key: Key('model-option-${model.id}'),
-                              leading: const Icon(LucideIcons.cpu, size: 18),
-                              title: Text(model.name),
-                              trailing: model.id == client.selectedModelId
-                                  ? const Icon(LucideIcons.check,
-                                      size: 18, color: _weTypeGreen)
-                                  : null,
-                              onTap: () {
-                                client.selectModel(model.id);
-                                Navigator.of(ctx).pop();
-                              },
-                            );
-                          },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                      child: Text(
+                        '选择模型',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
                         ),
+                      ),
+                    ),
+                    // 搜索框
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: TextField(
+                        onChanged: (v) => setState(() => query = v),
+                        style: const TextStyle(fontSize: 14),
+                        decoration: InputDecoration(
+                          hintText: '搜索模型',
+                          hintStyle: const TextStyle(
+                            fontSize: 14,
+                            color: _textSecondary,
+                          ),
+                          prefixIcon: const Icon(
+                            LucideIcons.search,
+                            size: 18,
+                            color: _textSecondary,
+                          ),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          filled: true,
+                          fillColor: const Color(0xFFF3F4F6),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                    ),
+                    // 按 provider 分组的模型列表
+                    Flexible(
+                      child: filtered.isEmpty
+                          ? const Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Text(
+                                '暂无可用模型',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: _textSecondary,
+                                ),
+                              ),
+                            )
+                          : ListView(
+                              shrinkWrap: true,
+                              padding: const EdgeInsets.only(bottom: 8),
+                              children: [
+                                for (final entry in grouped.entries) ...[
+                                  // Provider 分组头
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      10,
+                                      16,
+                                      4,
+                                    ),
+                                    child: Text(
+                                      entry.key,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: _textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                  for (final model in entry.value)
+                                    ListTile(
+                                      key: Key('model-option-${model.id}'),
+                                      dense: true,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                      ),
+                                      title: Text(
+                                        model.name,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight:
+                                              model.id == client.selectedModelId
+                                                  ? FontWeight.w600
+                                                  : FontWeight.w400,
+                                          color:
+                                              model.id == client.selectedModelId
+                                                  ? _weTypeGreen
+                                                  : _textPrimary,
+                                        ),
+                                      ),
+                                      trailing:
+                                          model.id == client.selectedModelId
+                                              ? const Icon(
+                                                  LucideIcons.check,
+                                                  size: 18,
+                                                  color: _weTypeGreen,
+                                                )
+                                              : null,
+                                      onTap: () {
+                                        client.selectModel(model.id);
+                                        Navigator.of(ctx).pop();
+                                      },
+                                    ),
+                                ],
+                              ],
+                            ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                 ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );

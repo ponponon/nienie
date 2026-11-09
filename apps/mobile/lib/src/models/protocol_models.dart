@@ -80,12 +80,14 @@ class ModelInfo {
   final String id;
   final String name;
   final String providerId;
+  final String providerName;
   final bool isDefault;
 
   const ModelInfo({
     required this.id,
     required this.name,
     required this.providerId,
+    required this.providerName,
     required this.isDefault,
   });
 
@@ -94,6 +96,7 @@ class ModelInfo {
       id: json['id'] as String,
       name: json['name'] as String? ?? json['id'] as String,
       providerId: json['providerId'] as String? ?? '',
+      providerName: json['providerName'] as String? ?? json['providerId'] as String? ?? '',
       isDefault: json['isDefault'] as bool? ?? false,
     );
   }
