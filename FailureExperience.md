@@ -984,3 +984,13 @@ ChatGPT 明确：远程 Agent 控制应追求 **At-least-once delivery + Idempot
 
 ### 附带构建 bug
 Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源只允许 a-z0-9_），导致 `flutter build` 失败；XML 引用的是 `niebie_launch_image`（下划线）。重命名文件对齐即可。
+
+---
+
+## 2026-11-10 官网静态页与桌面端各自维护图标，占位圆点直接上线
+
+- 现象：用户手机浏览器打开官网，「支持的 Agent」区 OpenAI Codex / Xiaomi MiMo Code / DeepSeek Harness 三张卡片只显示蓝/橙/蓝纯色圆点，而桌面客户端同款 Agent 已能正确显示官方品牌图标；用户以为是「图标加载失败」。
+- 原因：官网 `website/index.html` 是独立静态页，这三张卡片当初手写的是占位 `<svg><circle r="9"/></svg>`；桌面端后来在 `apps/desktop/src/ui/AgentBrandIcons.tsx` 补齐了 5 个官方 SVG，但没有回流到官网。不是资源 404、不是 CSP、也不是缓存——两份代码各自维护，压根没同步过。
+- 经验：**同一套品牌资产在多端出现时，必须明确单一来源**；桌面端补齐图标后要回头检查官网、README、文档等其它展示面。静态官网优先内联 SVG（不依赖外部资源），并做一次无头浏览器渲染验证，不能只看 HTML 文本对不对。
+- 处理：脚本从桌面端组件提取 5 段官方 SVG，把 JSX 属性（`fillRule` / `stopColor` 等）转成 HTML 属性后内联进官网卡片；本地与线上截图 MD5 完全一致，重新部署 Cloudflare Pages 生产环境。
+- 关联：同轮发现 `FEATURE.md` 把官网地址写成 `https://nienie.quniv.cn`（该域名从未配 DNS），被 boss_host 项目卡片照抄成死链。文档里的「规划 URL」要标注状态，或直接写当前真实可访问地址；外链发布前必须实际访问验证。

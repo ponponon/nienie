@@ -240,7 +240,7 @@
 - 历史会话聊天记录同步回放与空会话自动创建（`emitSqliteSessionHistory` / `emitCodexThreadHistory` in `packages/agent-adapters/*` & `openSession` / `sendMessage` in `apps/mobile`）：
   - 在手机端抽屉点击 OpenCode、MiMo Code 或 Codex 的任意历史会话时，`loadSession` 自动从本机 `opencode.db`、`mimocode.db`（`part JOIN message`）及 `thread_history_*.sqlite`（`thread_items`）读取过往的用户提问、Agent 回复与工具调用记录并渲染到手机主对话页面
   - 主对话页面底部 `R22` 输入舱常驻显示，当在空白新对话状态下直接输入指令发送时，自动创建当前选中 Agent 的新会话并发送消息
-- Nienie 官方网站上线与双端安装包分发（`website/index.html` & `https://nienie.quniv.cn`）：
+- Nienie 官方网站上线与双端安装包分发（`website/index.html` & `https://nienie-web.pages.dev`）：
   - 对齐 `openctrlc` 暖米白编辑感设计体系（`--page-bg: #f6f5f1`、`--page-ink: #1f2521`、自动深浅色模式与中英双语切换），无任何含用户隐私的真机截图
   - 构建 Android 发布版安装包（`Nienie-v0.1.0-android.apk`）与 macOS Apple Silicon 桌面客户端（`Nienie-v0.1.0-macos-arm64.zip`）并上传至京东云 MinIO（`https://file.quniv.cn/resource/nienie/`）
   - 官网托管于 **Cloudflare Pages**（`https://nienie-web.pages.dev`，`wrangler pages deploy`），双端安装包大文件则分发于京东云 MinIO（`https://file.quniv.cn/resource/nienie/`）；提供直链下载、短链重定向与手机浏览器扫码下载二维码
@@ -323,3 +323,10 @@
 - **Codex 历史恢复升级**（`emitCodexThreadHistory`）：eventId 稳定为 `history:{sessionId}:{itemId}:{revision}`（原 `cx_hist_${randomUUID()}` 不幂等），按 itemId + 已回放长度增量补发缺失后缀（幂等 + 捕获更新），SQL 补取 `created_at_ms` 还原原始时间戳，commandExecution 补 `tool_result`（exit_code/aggregated_output）配对，分页读取。
 - **Claude Code 新增历史回放**（`emitClaudeSessionHistory`）：从 `~/.claude/projects/**/<sessionId>.jsonl` 逐行回放（原手机端打开旧会话空白），复用 assistant/user 分支映射（thinking/text/tool_use/tool_result），eventId 稳定为 `history:{sessionId}:{uuid}:{idx}`（jsonl 行 uuid），按行 uuid 去重幂等。
 - 同步 `docs/protocols/canonical-events.md`：事件信封补 `streamEpoch`，设计要求明确 `(sessionId, streamEpoch, sequence)` 判重 + 稳定 eventId 幂等语义。
+
+### 2026-11-10 官网 Agent 卡片同步桌面端官方品牌图标
+
+- **修复官网 5 个 Agent 图标显示**（`website/index.html`）：官网「支持的 Agent」卡片原本把 OpenAI Codex、Xiaomi MiMo Code、DeepSeek Harness 画成纯色圆点占位（`<circle r="9"/>`），只有 OpenCode / Claude Code 是品牌 SVG；桌面端 `apps/desktop/src/ui/AgentBrandIcons.tsx` 早已内置 5 个官方 SVG，但官网是独立静态页从未同步。
+- 用脚本从 `AgentBrandIcons.tsx` 提取 5 段官方 SVG（含 Codex 渐变、MiMo 字标、DeepSeek 鲸鱼），把 JSX 属性转成 HTML 属性后内联进官网卡片，尺寸统一 22×22 并加 `aria-hidden="true"`；不引入外部图片或 CDN 依赖，不受 CSP 与资源缓存影响。
+- 本地无头 Chrome 与线上 `https://nienie-web.pages.dev` 截图像素完全一致，5 个图标均正常显示；已用 `wrangler pages deploy website --project-name=nienie-web --branch=main` 发布到生产环境。
+- 同步修正文档里的官网地址：`https://nienie.quniv.cn` 从未配置 DNS（死链），官网实际地址为 `https://nienie-web.pages.dev`。
