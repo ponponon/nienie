@@ -331,7 +331,13 @@ export class OpenCodeAdapter implements AgentAdapter {
       }
     }
 
-    return models;
+    // 应用 OpenCode Desktop 的模型可见性（用户配置的显示/隐藏），与桌面端对齐
+    const visibility = this.readModelVisibility();
+    const filtered = visibility
+      ? models.filter((m) => visibility[m.id] !== 'hide')
+      : models;
+
+    return filtered;
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {
@@ -598,6 +604,44 @@ export class OpenCodeAdapter implements AgentAdapter {
     } catch {
       this.emitDiagnosticWarning(`snapshot build failed for ${sessionId}`);
       return { streamEpoch: this.normalizer.streamEpoch, watermark: 0, events };
+    }
+  }
+
+  /** 读 OpenCode Desktop 的模型可见性（drafts.sqlite: opencode.global.dat:model）。 */
+  private readModelVisibility(): Record<string, string> | null {
+    try {
+      const dbPath = join(
+        homedir(),
+        'Library',
+        'Application Support',
+        'ai.opencode.desktop',
+        'drafts.sqlite',
+      );
+      if (!existsSync(dbPath)) return null;
+      const out = execFileSync(
+        'sqlite3',
+        [
+          '-json',
+          dbPath,
+          "SELECT value FROM state WHERE name='opencode.global.dat' AND key='model';",
+        ],
+        { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      const rows = JSON.parse(out || '[]') as Array<{ value?: string }>;
+      const raw = rows[0]?.value;
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as {
+        user?: Array<{ providerID?: string; modelID?: string; visibility?: string }>;
+      };
+      const map: Record<string, string> = {};
+      for (const u of parsed.user ?? []) {
+        if (u.providerID && u.modelID && u.visibility) {
+          map[`${u.providerID}/${u.modelID}`] = u.visibility;
+        }
+      }
+      return map;
+    } catch {
+      return null;
     }
   }
 

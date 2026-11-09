@@ -58,20 +58,24 @@ class AgentInfo {
   final String name;
   final bool available;
   final String? version;
+  final bool modelSwitch;
 
   const AgentInfo({
     required this.id,
     required this.name,
     required this.available,
     this.version,
+    this.modelSwitch = true,
   });
 
   factory AgentInfo.fromJson(Map<String, dynamic> json) {
+    final caps = json['capabilities'] as Map<String, dynamic>? ?? const {};
     return AgentInfo(
       id: json['id'] as String,
       name: json['name'] as String,
       available: json['available'] as bool? ?? false,
       version: json['version'] as String?,
+      modelSwitch: caps['modelSwitch'] as bool? ?? true,
     );
   }
 }

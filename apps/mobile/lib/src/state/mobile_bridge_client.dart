@@ -508,12 +508,17 @@ class MobileBridgeClient extends ChangeNotifier {
     }).toList();
   }
 
+  int _modelRequestGeneration = 0;
+
   Future<void> loadModels(String agentId) async {
+    final generation = ++_modelRequestGeneration;
     final res = await transport.sendRequest({
       'type': 'models.list',
       'requestId': _nextRequestId(),
       'agentId': agentId,
     });
+    // 请求代际保护：快速切换 Agent 时，旧响应不能覆盖新 Agent 的模型列表
+    if (generation != _modelRequestGeneration) return;
     if (res['ok'] == true) {
       final list = (res['data'] as Map<String, dynamic>)['models'] as List<dynamic>? ?? const [];
       models = list
@@ -572,12 +577,14 @@ class MobileBridgeClient extends ChangeNotifier {
     sessions = [created, ...sessions.where((s) => s.id != created.id)];
     selectedAgentId = created.agentId;
     activeSession = created;
+    await loadModels(created.agentId);
     notifyListeners();
     return created;
   }
 
   Future<void> openSession(AgentSession session) async {
     selectedAgentId = session.agentId;
+    await loadModels(session.agentId);
     final res = await transport.sendRequest({
       'type': 'session.load',
       'requestId': _nextRequestId(),

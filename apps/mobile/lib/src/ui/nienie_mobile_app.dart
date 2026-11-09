@@ -367,6 +367,13 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     );
   }
 
+  bool _agentSupportsModelSwitch(MobileBridgeClient client) {
+    final current = client.agents
+        .where((a) => a.id == (client.activeSession?.agentId ?? client.selectedAgentId))
+        .firstOrNull;
+    return current?.modelSwitch ?? true;
+  }
+
   String _currentModelName(MobileBridgeClient client) {
     if (client.models.isEmpty) return 'Model';
     final selected = client.models
@@ -605,14 +612,16 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                               children: [
                                 // Model selector：显示当前模型，点击切换
                                 // （agent 选择属于会话层，在会话头部/抽屉，不在此）
-                                InkWell(
-                                  key: const Key('btn-select-model'),
-                                  borderRadius: BorderRadius.circular(999),
-                                  onTap: () => _showModelPicker(context, client),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 5,
+                                // 仅当当前 Agent 支持模型切换时显示
+                                if (_agentSupportsModelSwitch(client))
+                                  InkWell(
+                                    key: const Key('btn-select-model'),
+                                    borderRadius: BorderRadius.circular(999),
+                                    onTap: () => _showModelPicker(context, client),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 5,
                                     ),
                                     decoration: BoxDecoration(
                                       color: Colors.white,
