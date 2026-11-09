@@ -594,4 +594,20 @@ void main() {
     expect(find.text('ABC'), findsOneWidget);
     client.dispose();
   });
+  testWidgets('撤回：点停止后最后一条用户消息从对话列表移除并回填输入框', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '原始问题');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+    expect(find.text('原始问题'), findsOneWidget); // 已发出，在列表里
+
+    // 撤回：从对话列表移除 + 放回输入框
+    final recalled = client.recallLastUserPrompt('ses_alpha');
+    expect(recalled, '原始问题');
+    await tester.pump();
+    expect(find.text('原始问题'), findsNothing); // 已从列表撤回
+  });
 }

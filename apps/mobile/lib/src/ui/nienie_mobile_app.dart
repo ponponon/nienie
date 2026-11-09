@@ -377,13 +377,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
 
   void _stopGeneration(MobileBridgeClient client) {
     client.cancelActiveSession();
-    // 撤回：把上次发出的 prompt 放回输入框，便于编辑后重发
-    final items = client.timelineFor(client.activeSession?.id ?? '');
-    for (final item in items.reversed) {
-      if (item is UserPromptItem) {
-        _promptController.text = item.message;
-        break;
-      }
+    // 撤回：把最后一条用户消息从对话列表移除（真撤回），放回输入框供编辑重发
+    final sessionId = client.activeSession?.id ?? '';
+    final recalled = client.recallLastUserPrompt(sessionId);
+    if (recalled != null) {
+      _promptController.text = recalled;
     }
     setState(() {});
   }

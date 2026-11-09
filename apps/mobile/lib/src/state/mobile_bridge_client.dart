@@ -406,6 +406,26 @@ class MobileBridgeClient extends ChangeNotifier {
     await replayMissedEvents(sessionId);
   }
 
+  /// 撤回最后一条用户消息：从时间线移除（真撤回），返回其内容供输入框编辑重发。
+  String? recallLastUserPrompt(String sessionId) {
+    final items = _timelineBySession[sessionId];
+    if (items == null || items.isEmpty) return null;
+    for (int i = items.length - 1; i >= 0; i--) {
+      if (items[i] is UserPromptItem) {
+        final msg = (items[i] as UserPromptItem).message;
+        items.removeAt(i);
+        // 一并清掉其后未完成的占位（并取消计时器），保持时间线干净
+        while (items.isNotEmpty && items.last is PendingResponseItem) {
+          final p = items.removeLast() as PendingResponseItem;
+          _pendingTimers.remove(p)?.cancel();
+        }
+        notifyListeners();
+        return msg;
+      }
+    }
+    return null;
+  }
+
   Future<void> replyPermission({
     required String sessionId,
     required String permissionId,
