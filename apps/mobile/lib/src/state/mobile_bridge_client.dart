@@ -399,6 +399,7 @@ class MobileBridgeClient extends ChangeNotifier {
           final role = raw['role'];
           if (content is! List) return false;
           if (role != 'user' && role != 'assistant') return false;
+          if (raw['messageId'] != null && raw['messageId'] is! String) return false;
           for (final b in content) {
             if (b is! Map<String, dynamic> || b['type'] != 'text' || b['text'] is! String) {
               return false; // 非 text block 或 text 类型错 → 拒绝（不静默过滤）
@@ -413,13 +414,21 @@ class MobileBridgeClient extends ChangeNotifier {
           if (raw['input'] is! Map) return false;
           if (raw['status'] != 'pending' && raw['status'] != 'running' &&
               raw['status'] != 'completed' && raw['status'] != 'failed') return false;
+          if (raw['output'] != null && raw['output'] is! String) return false;
+          if (raw['isError'] != null && raw['isError'] is! bool) return false;
           break;
         case 'permission':
           if (raw['permissionId'] is! String || raw['permission'] is! String) return false;
-          if (raw['patterns'] is! List) return false;
+          if (raw['detail'] is! String) return false;
+          final patterns = raw['patterns'];
+          if (patterns is! List || patterns.any((e) => e is! String)) return false;
+          final dec = raw['decision'];
+          if (dec != null && dec != 'allow_once' && dec != 'allow_always' && dec != 'reject') return false;
           break;
         case 'usage':
-          if (raw['inputTokens'] is! int || raw['outputTokens'] is! int || raw['costUsd'] is! num) return false;
+          if (raw['inputTokens'] is! int || raw['outputTokens'] is! int) return false;
+          final cost = raw['costUsd'];
+          if (cost is! num || cost < 0 || !cost.isFinite) return false;
           break;
         case 'error':
           if (raw['errorId'] is! String || raw['code'] is! String || raw['message'] is! String) return false;
@@ -427,6 +436,7 @@ class MobileBridgeClient extends ChangeNotifier {
           break;
         case 'file_change':
           if (raw['diffId'] is! String || raw['file'] is! String) return false;
+          if (raw['before'] is! String || raw['after'] is! String) return false;
           if (raw['additions'] is! int || raw['deletions'] is! int) return false;
           break;
       }

@@ -730,7 +730,7 @@ void main() {
     expect(find.text('保留'), findsOneWidget);
     client.dispose();
   });
-  testWidgets('J0.1 machineId 真缺失时拒绝重连；未知 Part / watermark 缺失时拒绝快照', (WidgetTester tester) async {
+  testWidgets('J0.1 machineId 真缺失拒绝；未知 Part / watermark 缺失拒绝（真正测校验）', (WidgetTester tester) async {
     final store = InMemoryCredentialStore();
     await store.save(
       const SavedDeviceCredential(
@@ -748,27 +748,30 @@ void main() {
     await expectLater(client.reconnectWithSavedCredential('machine_mac'), throwsA(isA<StateError>()));
     transport.omitHelloMachineId = false;
 
-    // 未支持 Part（file_change 等已支持；这里测真正未知 kind）→ 拒绝
-    // 用可查到的会话（ses_alpha）来真正测 Part/watermark 校验（而非因 session 查不到被拒）
-    // 直接用假快照校验：未知 kind 会拒绝（保 timeline）
+    // 先成功建立连接、加载会话（这样 _findSession 才能命中，真正测 Part/watermark 校验）
+    await client.reconnectWithSavedCredential('machine_mac');
+    final sid = client.sessions.isNotEmpty ? client.sessions.first.id : 'ses_alpha';
+
+    // 未知 Part kind → 拒绝
     transport.snapshotResponse = {
-      'schemaVersion': 1, 'snapshotId': 's', 'sessionId': 'ses_none', 'agentId': 'opencode',
-      'streamEpoch': 'e', 'watermark': 1, 'capturedAt': 'x', 'complete': true, 'hasMore': false,
+      'schemaVersion': 1, 'snapshotId': 's', 'sessionId': sid, 'agentId': client.sessions.isNotEmpty ? client.sessions.first.agentId : 'opencode',
+      'streamEpoch': 'e', 'watermark': 1, 'capturedAt': '2026-11-10T00:00:00Z', 'complete': true, 'hasMore': false,
       'totalParts': 1,
-      'parts': [{'kind': 'unknown_kind', 'partId': 'p1', 'ordinal': 0, 'revision': 1}],
+      'parts': [{'kind': 'unknown_kind', 'partId': 'p1', 'ordinal': 0, 'revision': 1, 'createdAt': 'x', 'updatedAt': 'x'}],
     };
-    final before = client.timelineFor('ses_alpha').length;
-    await client.loadSessionSnapshot('ses_alpha');
-    expect(client.timelineFor('ses_alpha').length, before); // 未知 Part 拒绝，未被清空/安装
+    final before = client.timelineFor(sid).length;
+    await client.loadSessionSnapshot(sid);
+    expect(client.timelineFor(sid).length, before); // 未知 Part 拒绝
 
     // watermark 缺失 → 拒绝
     transport.snapshotResponse = {
-      'schemaVersion': 1, 'snapshotId': 's', 'sessionId': 'ses_none', 'agentId': 'opencode',
-      'streamEpoch': 'e', 'capturedAt': 'x', 'complete': true, 'hasMore': false,
+      'schemaVersion': 1, 'snapshotId': 's', 'sessionId': sid, 'agentId': client.sessions.isNotEmpty ? client.sessions.first.agentId : 'opencode',
+      'streamEpoch': 'e', 'capturedAt': '2026-11-10T00:00:00Z', 'complete': true, 'hasMore': false,
       'totalParts': 0, 'parts': [],
     };
-    await client.loadSessionSnapshot('ses_alpha');
-    expect(client.timelineFor('ses_alpha').length, before);
+    await client.loadSessionSnapshot(sid);
+    expect(client.timelineFor(sid).length, before); // watermark 缺失拒绝
     client.dispose();
   });
+
 }
