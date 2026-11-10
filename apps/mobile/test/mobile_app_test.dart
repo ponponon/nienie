@@ -364,7 +364,7 @@ void main() {
     final store = InMemoryCredentialStore();
     await store.save(
       const SavedDeviceCredential(
-        machineId: 'macbook_saved',
+        machineId: 'machine_mac',
         wsUrl: 'ws://127.0.0.1:4100',
         deviceId: 'dev_saved_1',
         deviceToken: 'ntk_saved_token_1',
@@ -381,8 +381,8 @@ void main() {
     await tester.pumpWidget(NienieMobileApp(client: client));
     await tester.pumpAndSettle();
 
-    expect(find.text('macbook_saved'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('btn-reconnect-machine-macbook_saved')));
+    expect(find.text('machine_mac'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('btn-reconnect-machine-machine_mac')));
     await tester.pumpAndSettle();
 
     expect(client.connectionState, BridgeConnectionState.connected);
@@ -401,9 +401,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(client.connectionState, BridgeConnectionState.disconnected);
 
-    await tester.tap(find.byKey(const Key('btn-remove-machine-macbook_saved')));
+    await tester.tap(find.byKey(const Key('btn-remove-machine-machine_mac')));
     await tester.pumpAndSettle();
-    expect(find.text('macbook_saved'), findsNothing);
+    expect(find.text('machine_mac'), findsNothing);
   });
 
   testWidgets('supports switching between Chinese, English, Japanese, and Korean in mobile UI', (

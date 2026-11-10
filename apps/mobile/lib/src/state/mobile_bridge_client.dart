@@ -283,6 +283,15 @@ class MobileBridgeClient extends ChangeNotifier {
       notifyListeners();
       throw StateError(errorMessage!);
     }
+    // 安全校验：对端 machineId 必须匹配，防止旧 IP 被其他设备占用而连错 Bridge
+    final helloData = res['data'] as Map<String, dynamic>?;
+    final peerMachineId = helloData?['machineId'] as String?;
+    if (peerMachineId != null && peerMachineId != saved.machineId) {
+      connectionState = BridgeConnectionState.error;
+      errorMessage = '连接的电脑不匹配（$peerMachineId ≠ ${saved.machineId}）';
+      notifyListeners();
+      throw StateError(errorMessage!);
+    }
 
     // 不覆盖 saved.wsUrl：回退到 Relay/USB 成功也不能丢失原始 LAN 地址，
     // 否则后续无法优先尝试局域网直连（ChatGPT P0）。仅在原 wsUrl 为空时才记录。

@@ -566,44 +566,50 @@ export class OpenCodeAdapter implements AgentAdapter {
       throw new Error(`OpenCode session database unavailable for snapshot: ${sessionId}`);
     }
     try {
-      const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT 5000;`;
-      const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
-        encoding: 'utf8',
-        timeout: 5000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      const rows = JSON.parse(out || '[]') as Array<{
-        part_id?: string | null;
-        role?: string;
-        part_type?: string;
-        text?: string | null;
-        tool?: string | null;
-        call_id?: string | null;
-        tool_output?: string | null;
-      }>;
+      // 分页读全（不再 LIMIT 5000 谎报 complete）：循环取尽所有 Part
+      const pageSize = 500;
       const parts: SessionSnapshotPart[] = [];
       let ordinal = 0;
       const ts = new Date().toISOString();
-      for (const row of rows) {
-        const partId = row.part_id ?? `part_${ordinal}`;
-        const text = row.text ?? '';
-        const base = { partId, ordinal: ordinal++, revision: 1, createdAt: ts, updatedAt: ts };
-        if (row.role === 'user' && row.part_type === 'text' && text.trim()) {
-          parts.push({ ...base, kind: 'message', role: 'user', content: [{ type: 'text', text }] });
-        } else if (row.role === 'assistant' && row.part_type === 'text' && text) {
-          parts.push({ ...base, kind: 'message', role: 'assistant', content: [{ type: 'text', text }] });
-        } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
-          const output = row.tool_output ?? '';
-          parts.push({
-            ...base,
-            kind: 'tool_call',
-            toolCallId: row.call_id || partId,
-            name: row.tool,
-            input: {},
-            status: output ? 'completed' : 'running',
-            ...(output ? { output } : {}),
-          });
+      for (let offset = 0; offset < 100000; offset += pageSize) {
+        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
+        const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
+          encoding: 'utf8',
+          timeout: 5000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const rows = JSON.parse(out || '[]') as Array<{
+          part_id?: string | null;
+          role?: string;
+          part_type?: string;
+          text?: string | null;
+          tool?: string | null;
+          call_id?: string | null;
+          tool_output?: string | null;
+        }>;
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          const partId = row.part_id ?? `part_${ordinal}`;
+          const text = row.text ?? '';
+          const base = { partId, ordinal: ordinal++, revision: 1, createdAt: ts, updatedAt: ts };
+          if (row.role === 'user' && row.part_type === 'text' && text.trim()) {
+            parts.push({ ...base, kind: 'message', role: 'user', content: [{ type: 'text', text }] });
+          } else if (row.role === 'assistant' && row.part_type === 'text' && text) {
+            parts.push({ ...base, kind: 'message', role: 'assistant', content: [{ type: 'text', text }] });
+          } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
+            const output = row.tool_output ?? '';
+            parts.push({
+              ...base,
+              kind: 'tool_call',
+              toolCallId: row.call_id || partId,
+              name: row.tool,
+              input: {},
+              status: output ? 'completed' : 'running',
+              ...(output ? { output } : {}),
+            });
+          }
         }
+        if (rows.length < pageSize) break;
       }
       return {
         ...empty,
