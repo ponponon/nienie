@@ -749,7 +749,7 @@ void main() {
     transport.omitHelloMachineId = false;
 
     // 未支持 Part（file_change 等已支持；这里测真正未知 kind）→ 拒绝
-    await client.loadSessionSnapshot('ses_none'); // 无会话，走默认
+    // 用可查到的会话（ses_alpha）来真正测 Part/watermark 校验（而非因 session 查不到被拒）
     // 直接用假快照校验：未知 kind 会拒绝（保 timeline）
     transport.snapshotResponse = {
       'schemaVersion': 1, 'snapshotId': 's', 'sessionId': 'ses_none', 'agentId': 'opencode',
@@ -757,9 +757,9 @@ void main() {
       'totalParts': 1,
       'parts': [{'kind': 'unknown_kind', 'partId': 'p1', 'ordinal': 0, 'revision': 1}],
     };
-    final before = client.timelineFor('ses_none').length;
-    await client.loadSessionSnapshot('ses_none');
-    expect(client.timelineFor('ses_none').length, before); // 未被清空/安装
+    final before = client.timelineFor('ses_alpha').length;
+    await client.loadSessionSnapshot('ses_alpha');
+    expect(client.timelineFor('ses_alpha').length, before); // 未知 Part 拒绝，未被清空/安装
 
     // watermark 缺失 → 拒绝
     transport.snapshotResponse = {
@@ -767,8 +767,8 @@ void main() {
       'streamEpoch': 'e', 'capturedAt': 'x', 'complete': true, 'hasMore': false,
       'totalParts': 0, 'parts': [],
     };
-    await client.loadSessionSnapshot('ses_none');
-    expect(client.timelineFor('ses_none').length, before);
+    await client.loadSessionSnapshot('ses_alpha');
+    expect(client.timelineFor('ses_alpha').length, before);
     client.dispose();
   });
 }

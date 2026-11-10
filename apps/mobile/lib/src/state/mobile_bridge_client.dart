@@ -360,9 +360,18 @@ class MobileBridgeClient extends ChangeNotifier {
     }
   }
 
+  /// 按 sessionId 定位会话（快照身份校验用，不能用 activeSession——可能是别的会话）。
+  AgentSession? _findSession(String sessionId) {
+    for (final s in sessions) {
+      if (s.id == sessionId) return s;
+    }
+    return activeSession?.id == sessionId ? activeSession : null;
+  }
+
   /// 严格校验快照 Part 结构：未知 kind 拒绝（不静默丢弃），partId 唯一、revision 合法。
   bool _allPartsWellFormed(List<dynamic> parts) {
     final seenIds = <String>{};
+    final seenOrdinals = <int>{};
     const knownKinds = {
       'message',
       'thinking',
@@ -376,24 +385,50 @@ class MobileBridgeClient extends ChangeNotifier {
       if (raw is! Map<String, dynamic>) return false;
       final id = raw['partId'];
       final kind = raw['kind'];
+      final ordinal = raw['ordinal'];
       if (id is! String || id.isEmpty) return false;
       if (!seenIds.add(id)) return false; // partId 重复
+      if (ordinal is! int || ordinal < 0 || !seenOrdinals.add(ordinal)) return false;
       final rev = raw['revision'];
       if (rev is! int || rev < 1) return false;
-      if (raw['ordinal'] is! int) return false;
+      if (raw['createdAt'] is! String || raw['updatedAt'] is! String) return false;
       if (kind is! String || !knownKinds.contains(kind)) return false; // 未知 Part 拒绝
-      if (kind == 'message') {
-        final content = raw['content'];
-        if (content is! List) return false;
-        // 只支持 text block；image/resource 等暂不支持，拒绝而非静默过滤
-        for (final b in content) {
-          if (b is! Map<String, dynamic> || b['type'] != 'text') return false;
-        }
-      } else if (kind == 'thinking' && raw['content'] is! String) {
-        return false;
-      } else if (kind == 'tool_call' &&
-          (raw['toolCallId'] is! String || raw['name'] is! String)) {
-        return false;
+      switch (kind) {
+        case 'message':
+          final content = raw['content'];
+          final role = raw['role'];
+          if (content is! List) return false;
+          if (role != 'user' && role != 'assistant') return false;
+          for (final b in content) {
+            if (b is! Map<String, dynamic> || b['type'] != 'text' || b['text'] is! String) {
+              return false; // 非 text block 或 text 类型错 → 拒绝（不静默过滤）
+            }
+          }
+          break;
+        case 'thinking':
+          if (raw['content'] is! String) return false;
+          break;
+        case 'tool_call':
+          if (raw['toolCallId'] is! String || raw['name'] is! String) return false;
+          if (raw['input'] is! Map) return false;
+          if (raw['status'] != 'pending' && raw['status'] != 'running' &&
+              raw['status'] != 'completed' && raw['status'] != 'failed') return false;
+          break;
+        case 'permission':
+          if (raw['permissionId'] is! String || raw['permission'] is! String) return false;
+          if (raw['patterns'] is! List) return false;
+          break;
+        case 'usage':
+          if (raw['inputTokens'] is! int || raw['outputTokens'] is! int || raw['costUsd'] is! num) return false;
+          break;
+        case 'error':
+          if (raw['errorId'] is! String || raw['code'] is! String || raw['message'] is! String) return false;
+          if (raw['retryable'] is! bool) return false;
+          break;
+        case 'file_change':
+          if (raw['diffId'] is! String || raw['file'] is! String) return false;
+          if (raw['additions'] is! int || raw['deletions'] is! int) return false;
+          break;
       }
     }
     return true;
@@ -418,12 +453,12 @@ class MobileBridgeClient extends ChangeNotifier {
     // 未知 Part 或 Content Block 一律拒绝，绝不静默丢弃或部分安装。
     final snapshotParts = data['parts'];
     final existingItems = _timelineBySession[sessionId] ?? const <SessionTimelineItem>[];
-    final session = activeSession;
+    final target = _findSession(sessionId);
     final wm = data['watermark'];
     final valid = data['schemaVersion'] == 1 &&
         (data['snapshotId'] is String && (data['snapshotId'] as String).isNotEmpty) &&
         data['sessionId'] == sessionId &&
-        (session == null || data['agentId'] == session.agentId) &&
+        (target != null && data['agentId'] == target.agentId) &&
         (data['streamEpoch'] is String && (data['streamEpoch'] as String).isNotEmpty) &&
         wm is int &&
         wm >= 0 &&
@@ -431,7 +466,9 @@ class MobileBridgeClient extends ChangeNotifier {
         data['complete'] == true &&
         data['hasMore'] == false &&
         snapshotParts is List &&
-        ((data['totalParts'] as num?)?.toInt() ?? -1) == snapshotParts.length &&
+        data['totalParts'] is int &&
+        (data['totalParts'] as int) >= 0 &&
+        (data['totalParts'] as int) == snapshotParts.length &&
         _allPartsWellFormed(snapshotParts) &&
         !(snapshotParts.isEmpty && existingItems.isNotEmpty);
     if (!valid) {
