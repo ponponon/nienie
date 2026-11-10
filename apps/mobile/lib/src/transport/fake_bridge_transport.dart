@@ -11,6 +11,7 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<Map<String, String>> permissionReplies = [];
   final List<Map<String, String>> registeredPushes = [];
   Map<String, dynamic>? snapshotResponse;
+  String? helloMachineId;
 
   @override
   Stream<Map<String, dynamic>> get incomingMessages => _incomingController.stream;
@@ -32,7 +33,7 @@ class FakeBridgeTransport implements BridgeTransport {
           'data': {
             'deviceId': 'dev_mobile_1',
             'deviceToken': 'ntk_fake_token_1234567890',
-            'machineId': 'machine_mac',
+            'machineId': helloMachineId ?? 'machine_mac',
             'pairedAt': '2026-11-04T10:00:00Z',
           },
         };
@@ -43,7 +44,7 @@ class FakeBridgeTransport implements BridgeTransport {
           'ok': true,
           'data': {
             'protocolVersion': PROTOCOL_VERSION,
-            'machineId': 'machine_mac',
+            'machineId': helloMachineId ?? 'machine_mac',
             'authenticated': true,
           },
         };

@@ -571,7 +571,10 @@ export class OpenCodeAdapter implements AgentAdapter {
       const parts: SessionSnapshotPart[] = [];
       let ordinal = 0;
       const ts = new Date().toISOString();
-      for (let offset = 0; offset < 100000; offset += pageSize) {
+      const safetyMaxRows = 100000;
+      let sawUnhandled = false;
+      let truncated = false;
+      for (let offset = 0; offset < safetyMaxRows; offset += pageSize) {
         const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
         const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
           encoding: 'utf8',
@@ -607,9 +610,22 @@ export class OpenCodeAdapter implements AgentAdapter {
               status: output ? 'completed' : 'running',
               ...(output ? { output } : {}),
             });
+          } else {
+            // 未知/未支持 Part：不能静默丢弃并谎报 complete（J0-8）
+            sawUnhandled = true;
           }
         }
         if (rows.length < pageSize) break;
+        if (offset + pageSize >= safetyMaxRows && rows.length === pageSize) {
+          truncated = true;
+        }
+      }
+      if (sawUnhandled) {
+        throw new Error('Snapshot contains unsupported part types; refusing to report complete');
+      }
+      if (truncated) {
+        // 命中安全上限：绝不谎报 complete（J0-6/J0-7）
+        throw new Error(`Snapshot exceeded ${safetyMaxRows} rows; refusing to report complete`);
       }
       return {
         ...empty,

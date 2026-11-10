@@ -283,12 +283,13 @@ class MobileBridgeClient extends ChangeNotifier {
       notifyListeners();
       throw StateError(errorMessage!);
     }
-    // 安全校验：对端 machineId 必须匹配，防止旧 IP 被其他设备占用而连错 Bridge
+    // 安全校验（强制身份验证）：对端 machineId 缺失或不匹配都拒绝，防止旧 IP 被占连错 Bridge
     final helloData = res['data'] as Map<String, dynamic>?;
     final peerMachineId = helloData?['machineId'] as String?;
-    if (peerMachineId != null && peerMachineId != saved.machineId) {
+    if (peerMachineId == null || peerMachineId.isEmpty || peerMachineId != saved.machineId) {
+      await transport.close();
       connectionState = BridgeConnectionState.error;
-      errorMessage = '连接的电脑不匹配（$peerMachineId ≠ ${saved.machineId}）';
+      errorMessage = '电脑身份验证失败（${peerMachineId ?? '未返回 machineId'} ≠ ${saved.machineId}）';
       notifyListeners();
       throw StateError(errorMessage!);
     }
@@ -374,15 +375,24 @@ class MobileBridgeClient extends ChangeNotifier {
       return;
     }
     final data = res['data'] as Map<String, dynamic>;
-    // 完整性校验：不完整的快照绝不覆盖现有 Timeline（防数据丢失，ChatGPT P0）
-    if (data['complete'] != true || data['hasMore'] == true) {
-      errorMessage = '快照不完整，已保留当前记录';
+    // 完整性白名单校验（ChatGPT J0-4/J0-5）：字段缺失、totalParts 不符、
+    // 空 parts 却已有历史，都判定为不可信快照，绝不清空现有 Timeline。
+    final snapshotParts = data['parts'];
+    final existingItems = _timelineBySession[sessionId] ?? const <SessionTimelineItem>[];
+    final valid = data['schemaVersion'] == 1 &&
+        data['complete'] == true &&
+        data['hasMore'] == false &&
+        snapshotParts is List &&
+        ((data['totalParts'] as num?)?.toInt() ?? -1) == snapshotParts.length &&
+        !(snapshotParts.isEmpty && existingItems.isNotEmpty);
+    if (!valid) {
+      errorMessage = '快照不完整或不可信，已保留当前记录';
       notifyListeners();
       return;
     }
     final epoch = data['streamEpoch'] as String? ?? '';
     final watermark = (data['watermark'] as num?)?.toInt() ?? 0;
-    final parts = (data['parts'] as List<dynamic>? ?? const []);
+    final parts = (snapshotParts as List<dynamic>? ?? const []);
     // 阶段二：独立构建临时 Timeline（不修改现有状态）
     final nextTimeline = <SessionTimelineItem>[];
     for (final raw in parts) {
