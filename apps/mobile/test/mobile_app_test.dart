@@ -197,7 +197,16 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('bash'), findsOneWidget);
+      // 工具结果默认折叠：未展开时不可见
+      expect(find.textContaining('All 19 tests passed'), findsNothing);
+      // 点击工具名展开
+      await tester.tap(find.text('bash'));
+      await tester.pump();
       expect(find.textContaining('All 19 tests passed'), findsOneWidget);
+      // 再点收起（回归：之前缩不回去）
+      await tester.tap(find.text('bash'));
+      await tester.pump();
+      expect(find.textContaining('All 19 tests passed'), findsNothing);
 
       // 7. Render structured error card
       transport.emitServerEvent({
@@ -597,7 +606,6 @@ void main() {
   testWidgets('撤回：点停止后最后一条用户消息从对话列表移除并回填输入框', (WidgetTester tester) async {
     await pumpToSession(tester);
     final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
-    final transport = client.transport as FakeBridgeTransport;
 
     await tester.enterText(find.byKey(const Key('input-session-prompt')), '原始问题');
     await tester.tap(find.byKey(const Key('btn-send-prompt')));

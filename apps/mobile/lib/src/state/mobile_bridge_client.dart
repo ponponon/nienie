@@ -133,6 +133,7 @@ class MobileBridgeClient extends ChangeNotifier {
     await pairAndConnect(
       wsUrl: payload.wsUrl,
       pairingCode: payload.pairingCode,
+      relayUrl: payload.relayUrl,
       deviceName: deviceName,
       platform: platform,
       allowLocalhostFallback: true,
@@ -142,6 +143,7 @@ class MobileBridgeClient extends ChangeNotifier {
   Future<void> pairAndConnect({
     required String wsUrl,
     required String pairingCode,
+    String? relayUrl,
     String? deviceName,
     String? platform,
     bool allowLocalhostFallback = false,
@@ -205,6 +207,7 @@ class MobileBridgeClient extends ChangeNotifier {
           wsUrl: effectiveWsUrl,
           deviceId: data['deviceId'] as String,
           deviceToken: data['deviceToken'] as String,
+          relayUrl: relayUrl,
         ),
       );
       activeMachineId = machineId;
@@ -238,22 +241,32 @@ class MobileBridgeClient extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
 
-    String effectiveWsUrl = saved.wsUrl;
-    try {
-      await transport.connect(saved.wsUrl);
-    } catch (_) {
-      final parsedUri = Uri.tryParse(saved.wsUrl);
-      if (parsedUri != null &&
-          parsedUri.host != '127.0.0.1' &&
-          parsedUri.host != 'localhost' &&
-          parsedUri.hasPort) {
-        effectiveWsUrl = 'ws://127.0.0.1:${parsedUri.port}';
-        await transport.connect(effectiveWsUrl);
-      } else {
-        connectionState = BridgeConnectionState.disconnected;
-        notifyListeners();
-        rethrow;
+    // 多候选连接：LAN → Relay（稳定，IP 变化时兜底）→ USB(127.0.0.1)。
+    // 解决「LAN IP 一变就掉回配对页」——不再只依赖单一 wsUrl。
+    final parsedWs = Uri.tryParse(saved.wsUrl);
+    final usbUrl = (parsedWs != null && parsedWs.hasPort)
+        ? 'ws://127.0.0.1:${parsedWs.port}'
+        : null;
+    final candidates = <String>[
+      saved.wsUrl,
+      if (saved.relayUrl != null && saved.relayUrl!.isNotEmpty) saved.relayUrl!,
+      if (usbUrl != null && usbUrl != saved.wsUrl) usbUrl,
+    ];
+    String? connectedUrl;
+    Object? lastError;
+    for (final url in candidates) {
+      try {
+        await transport.connect(url);
+        connectedUrl = url;
+        break;
+      } catch (e) {
+        lastError = e;
       }
+    }
+    if (connectedUrl == null) {
+      connectionState = BridgeConnectionState.disconnected;
+      notifyListeners();
+      throw StateError('无法连接电脑：${lastError ?? '所有地址均不可达'}');
     }
 
     final res = await transport.sendRequest({
@@ -271,13 +284,14 @@ class MobileBridgeClient extends ChangeNotifier {
       throw StateError(errorMessage!);
     }
 
-    if (effectiveWsUrl != saved.wsUrl) {
+    if (connectedUrl != saved.wsUrl) {
       await credentialStore.save(
         SavedDeviceCredential(
           machineId: saved.machineId,
-          wsUrl: effectiveWsUrl,
+          wsUrl: connectedUrl,
           deviceId: saved.deviceId,
           deviceToken: saved.deviceToken,
+          relayUrl: saved.relayUrl,
         ),
       );
       savedMachines = await credentialStore.listMachines();
@@ -424,6 +438,34 @@ class MobileBridgeClient extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  /// 首条消息后，把「新任务」这类占位标题更新为消息内容（对齐 GPT「输入啥就是啥」）。
+  void _maybeRenameSessionAfterFirstMessage(AgentSession session, String message) {
+    final t = session.title.trim();
+    final isGeneric = t.isEmpty ||
+        t == '新对话' ||
+        t.endsWith('新任务') ||
+        t.endsWith(' Workspace') ||
+        t == session.agentId;
+    if (!isGeneric) return;
+    final newTitle = message.length > 28 ? message.substring(0, 28) : message;
+    final updated = AgentSession(
+      id: session.id,
+      agentId: session.agentId,
+      title: newTitle,
+      projectPath: session.projectPath,
+      status: session.status,
+    );
+    final idx = sessions.indexWhere((s) => s.id == session.id);
+    if (idx >= 0) {
+      sessions = [...sessions]..[idx] = updated;
+    } else {
+      sessions = [updated, ...sessions];
+    }
+    if (activeSession?.id == session.id) {
+      activeSession = updated;
+    }
   }
 
   Future<void> replyPermission({
@@ -696,6 +738,9 @@ class MobileBridgeClient extends ChangeNotifier {
     final pending = PendingResponseItem(promptText: trimmed);
     items.add(pending);
     _startPendingTimer(current.id, pending);
+    // 首条消息后，将会话标题更新为消息内容（对齐 GPT「输入啥就是啥」），
+    // 避免全是「新任务」这种无区分度的占位标题。
+    _maybeRenameSessionAfterFirstMessage(current, trimmed);
     notifyListeners();
 
     final res = await transport.sendRequest({
@@ -867,8 +912,13 @@ class MobileBridgeClient extends ChangeNotifier {
         final status = event.payload['status'] as String? ?? 'idle';
         _sessionStatusBySession[event.sessionId] = status;
         if (status == 'idle') {
-          // 回复结束：收起「等待中」占位
+          // 回复结束：收起「等待中」占位，并把思考过程折叠（不占屏幕空间）
           _resolvePending(event.sessionId);
+          for (final item in items) {
+            if (item is StreamingTextItem && item.isThinking) {
+              item.collapsed = true;
+            }
+          }
         }
         final permissionId = event.payload['permissionId'] as String?;
         if (status == 'waiting' && permissionId != null) {

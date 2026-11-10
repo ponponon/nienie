@@ -18,7 +18,9 @@ class PendingResponseItem extends SessionTimelineItem {
 class StreamingTextItem extends SessionTimelineItem {
   String text;
   final bool isThinking;
-  StreamingTextItem({required this.text, this.isThinking = false});
+  /// 思考过程可折叠：回答完成后折叠，避免占用过多屏幕空间。
+  bool collapsed;
+  StreamingTextItem({required this.text, this.isThinking = false, this.collapsed = false});
 }
 
 class ToolCallCardItem extends SessionTimelineItem {
@@ -27,13 +29,15 @@ class ToolCallCardItem extends SessionTimelineItem {
   final Map<String, dynamic> input;
   String? resultContent;
   bool isError;
-
+  /// 工具结果详情可折叠（默认收起，点击展开/收起）。
+  bool expanded;
   ToolCallCardItem({
     required this.toolCallId,
     required this.name,
     required this.input,
     this.resultContent,
     this.isError = false,
+    this.expanded = false,
   });
 }
 

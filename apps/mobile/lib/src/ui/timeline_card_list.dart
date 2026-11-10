@@ -6,7 +6,7 @@ import '../models/timeline_items.dart';
 import '../state/mobile_bridge_client.dart';
 import 'agent_brand_logo.dart';
 
-class SessionTimelineList extends StatelessWidget {
+class SessionTimelineList extends StatefulWidget {
   final MobileBridgeClient client;
   final AgentSession session;
 
@@ -16,6 +16,18 @@ class SessionTimelineList extends StatelessWidget {
     required this.session,
   });
 
+  @override
+  State<SessionTimelineList> createState() => _SessionTimelineListState();
+}
+
+class _SessionTimelineListState extends State<SessionTimelineList> {
+  void _toggleExpand(SessionTimelineItem item) {
+    setState(() {
+      if (item is StreamingTextItem) item.collapsed = !item.collapsed;
+      if (item is ToolCallCardItem) item.expanded = !item.expanded;
+    });
+  }
+
   static const Color _weTypeGreen = Color(0xFF17B378);
   static const Color _textPrimary = Color(0xFF141416);
   static const Color _textSecondary = Color(0xFF686C75);
@@ -23,7 +35,7 @@ class SessionTimelineList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final items = client.timelineFor(session.id);
+    final items = widget.client.timelineFor(widget.session.id);
     return ListView.separated(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       itemCount: items.length,
@@ -107,7 +119,7 @@ class SessionTimelineList extends StatelessWidget {
                             icon: LucideIcons.refreshCw,
                             label: 'Retry',
                             filled: true,
-                            onTap: () => client.retryPrompt(item.promptText),
+                            onTap: () => widget.client.retryPrompt(item.promptText),
                           ),
                           const SizedBox(width: 8),
                           const _ActionButton(
@@ -123,10 +135,10 @@ class SessionTimelineList extends StatelessWidget {
                 )
               : Row(
                   children: [
-                    AgentBrandLogo(agentId: session.agentId, size: 14),
+                    AgentBrandLogo(agentId: widget.session.agentId, size: 14),
                     const SizedBox(width: 8),
                     Text(
-                      session.agentId.toUpperCase(),
+                      widget.session.agentId.toUpperCase(),
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -158,7 +170,10 @@ class SessionTimelineList extends StatelessWidget {
           StreamingTextItem() => Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                InkWell(
+                  onTap: item.isThinking ? () => _toggleExpand(item) : null,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Row(
                   children: [
                     if (item.isThinking)
                       Container(
@@ -176,18 +191,30 @@ class SessionTimelineList extends StatelessWidget {
                         ),
                       )
                     else
-                      AgentBrandLogo(agentId: session.agentId, size: 14),
+                      AgentBrandLogo(agentId: widget.session.agentId, size: 14),
                     const SizedBox(width: 8),
                     Text(
-                      item.isThinking ? 'Thinking' : session.agentId.toUpperCase(),
+                      item.isThinking ? 'Thinking' : widget.session.agentId.toUpperCase(),
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                         color: _textSecondary,
                       ),
                     ),
+                    if (item.isThinking) ...[
+                      const SizedBox(width: 6),
+                      Icon(
+                        item.collapsed
+                            ? LucideIcons.chevronDown
+                            : LucideIcons.chevronUp,
+                        size: 14,
+                        color: _textSecondary,
+                      ),
+                    ],
                   ],
                 ),
+                ),
+                if (!item.isThinking || !item.collapsed) ...[
                 const SizedBox(height: 6),
                 Padding(
                   padding: const EdgeInsets.only(left: 2),
@@ -200,6 +227,7 @@ class SessionTimelineList extends StatelessWidget {
                     ),
                   ),
                 ),
+                ],
               ],
             ),
 
@@ -218,7 +246,12 @@ class SessionTimelineList extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  InkWell(
+                    onTap: item.resultContent != null
+                        ? () => _toggleExpand(item)
+                        : null,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Row(
                     children: [
                       const Icon(
                         LucideIcons.terminal,
@@ -248,7 +281,7 @@ class SessionTimelineList extends StatelessWidget {
                           ),
                         ),
                       ),
-                      if (item.resultContent != null)
+                      if (item.resultContent != null) ...[
                         Icon(
                           item.isError ? LucideIcons.circleX : LucideIcons.check,
                           size: 13,
@@ -256,9 +289,19 @@ class SessionTimelineList extends StatelessWidget {
                               ? const Color(0xFFDC2626)
                               : _weTypeGreen,
                         ),
+                        const SizedBox(width: 6),
+                        Icon(
+                          item.expanded
+                              ? LucideIcons.chevronUp
+                              : LucideIcons.chevronDown,
+                          size: 13,
+                          color: _textSecondary,
+                        ),
+                      ],
                     ],
                   ),
-                  if (item.resultContent != null) ...[
+                  ),
+                  if (item.resultContent != null && item.expanded) ...[
                     const SizedBox(height: 5),
                     Text(
                       item.resultContent!,
@@ -384,13 +427,13 @@ class SessionTimelineList extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(8),
                               ),
                             ),
-                            onPressed: () => client.replyPermission(
-                              sessionId: session.id,
+                            onPressed: () => widget.client.replyPermission(
+                              sessionId: widget.session.id,
                               permissionId: item.permissionId,
                               decision: 'allow_once',
                             ),
                             child: Text(
-                              client.strings.allowOnceBtn,
+                              widget.client.strings.allowOnceBtn,
                               style: const TextStyle(fontSize: 11.5),
                             ),
                           ),
@@ -406,13 +449,13 @@ class SessionTimelineList extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(8),
                               ),
                             ),
-                            onPressed: () => client.replyPermission(
-                              sessionId: session.id,
+                            onPressed: () => widget.client.replyPermission(
+                              sessionId: widget.session.id,
                               permissionId: item.permissionId,
                               decision: 'allow_always',
                             ),
                             child: Text(
-                              client.strings.allowAlwaysBtn,
+                              widget.client.strings.allowAlwaysBtn,
                               style: const TextStyle(fontSize: 11.5),
                             ),
                           ),
@@ -428,13 +471,13 @@ class SessionTimelineList extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(8),
                               ),
                             ),
-                            onPressed: () => client.replyPermission(
-                              sessionId: session.id,
+                            onPressed: () => widget.client.replyPermission(
+                              sessionId: widget.session.id,
                               permissionId: item.permissionId,
                               decision: 'reject',
                             ),
                             child: Text(
-                              client.strings.rejectBtn,
+                              widget.client.strings.rejectBtn,
                               style: const TextStyle(fontSize: 11.5),
                             ),
                           ),

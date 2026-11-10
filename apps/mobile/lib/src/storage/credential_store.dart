@@ -7,12 +7,15 @@ class SavedDeviceCredential {
   final String wsUrl;
   final String deviceId;
   final String deviceToken;
+  /** 公网 Relay 地址（稳定，LAN IP 变化时的回退通道）。 */
+  final String? relayUrl;
 
   const SavedDeviceCredential({
     required this.machineId,
     required this.wsUrl,
     required this.deviceId,
     required this.deviceToken,
+    this.relayUrl,
   });
 
   Map<String, dynamic> toJson() => {
@@ -20,6 +23,7 @@ class SavedDeviceCredential {
         'wsUrl': wsUrl,
         'deviceId': deviceId,
         'deviceToken': deviceToken,
+        if (relayUrl != null) 'relayUrl': relayUrl,
       };
 
   factory SavedDeviceCredential.fromJson(Map<String, dynamic> json) {
@@ -28,6 +32,7 @@ class SavedDeviceCredential {
       wsUrl: json['wsUrl'] as String,
       deviceId: json['deviceId'] as String,
       deviceToken: json['deviceToken'] as String,
+      relayUrl: json['relayUrl'] as String?,
     );
   }
 }
