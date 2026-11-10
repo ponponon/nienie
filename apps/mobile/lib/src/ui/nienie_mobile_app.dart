@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../i18n/app_strings.dart';
 import '../models/protocol_models.dart';
@@ -25,6 +26,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   final TextEditingController _pairingCodeController = TextEditingController();
   final TextEditingController _qrUriController = TextEditingController();
   final TextEditingController _promptController = TextEditingController();
+  final List<_Attachment> _attachments = [];
 
   static const Color _weTypeGreen = Color(0xFF17B378);
   static const Color _textPrimary = Color(0xFF141416);
@@ -386,6 +388,18 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     setState(() {});
   }
 
+  Future<void> _pickAttachment(FileType type) async {
+    final result = await FilePicker.pickFiles(type: type, allowMultiple: true);
+    if (result == null) return;
+    setState(() {
+      for (final f in result.files) {
+        if (f.path != null) {
+          _attachments.add(_Attachment(name: f.name, path: f.path!));
+        }
+      }
+    });
+  }
+
   void _showAttachMenu(BuildContext context, MobileBridgeClient client) {
     showModalBottomSheet<void>(
       context: context,
@@ -407,9 +421,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
               title: const Text('图片'),
               onTap: () {
                 Navigator.of(ctx).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('图片附件：即将支持')),
-                );
+                _pickAttachment(FileType.image);
               },
             ),
             ListTile(
@@ -418,9 +430,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
               title: const Text('文件'),
               onTap: () {
                 Navigator.of(ctx).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('文件附件：即将支持')),
-                );
+                _pickAttachment(FileType.any);
               },
             ),
             const SizedBox(height: 8),
@@ -428,6 +438,13 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         ),
       ),
     );
+  }
+
+  String _composeMessage(String text) {
+    if (_attachments.isEmpty) return text;
+    final names = _attachments.map((a) => a.name).join(', ');
+    final note = '[附件: $names]';
+    return text.trim().isEmpty ? note : '${text.trim()}\n$note';
   }
 
   bool _agentSupportsModelSwitch(MobileBridgeClient client) {
@@ -447,6 +464,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
 
   void _showModelPicker(BuildContext context, MobileBridgeClient client) {
     String query = '';
+    final collapsed = <String>{};
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.white,
@@ -461,7 +479,9 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             final filtered = client.models.where((m) {
               if (q.isEmpty) return true;
               return m.name.toLowerCase().contains(q) ||
-                  m.providerName.toLowerCase().contains(q);
+                  m.id.toLowerCase().contains(q) ||
+                  m.providerName.toLowerCase().contains(q) ||
+                  m.providerId.toLowerCase().contains(q);
             }).toList();
             // 按 providerName 分组（保持出现顺序）
             final grouped = <String, List<ModelInfo>>{};
@@ -536,27 +556,48 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                               padding: const EdgeInsets.only(bottom: 8),
                               children: [
                                 for (final entry in grouped.entries) ...[
-                                  // Provider 分组头
-                                  Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      16,
-                                      10,
-                                      16,
-                                      4,
-                                    ),
-                                    child: Text(
-                                      entry.key,
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: _textSecondary,
+                                  // Provider 分组头（可折叠）
+                                  InkWell(
+                                    onTap: () => setState(() {
+                                      if (!collapsed.remove(entry.key)) {
+                                        collapsed.add(entry.key);
+                                      }
+                                    }),
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        10,
+                                        16,
+                                        4,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              entry.key,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: _textSecondary,
+                                              ),
+                                            ),
+                                          ),
+                                          Icon(
+                                            collapsed.contains(entry.key)
+                                                ? LucideIcons.chevronDown
+                                                : LucideIcons.chevronUp,
+                                            size: 14,
+                                            color: _textSecondary,
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
-                                  for (final model in entry.value)
-                                    ListTile(
-                                      key: Key('model-option-${model.id}'),
-                                      dense: true,
+                                  if (!collapsed.contains(entry.key))
+                                    for (final model in entry.value)
+                                      ListTile(
+                                        key: Key('model-option-${model.id}'),
+                                        dense: true,
                                       contentPadding:
                                           const EdgeInsets.symmetric(
                                         horizontal: 16,
@@ -632,6 +673,23 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // 附件预览 chips（已选待发送）
+                  if (_attachments.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final a in _attachments)
+                            Chip(
+                              label: Text(a.name, style: const TextStyle(fontSize: 11)),
+                              deleteIcon: const Icon(LucideIcons.x, size: 13),
+                              onDeleted: () => setState(() => _attachments.remove(a)),
+                            ),
+                        ],
+                      ),
+                    ),
                   // Upper Deck: Full-width borderless input field
                   TextField(
                     key: const Key('input-session-prompt'),
@@ -639,9 +697,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     textInputAction: TextInputAction.send,
                     onSubmitted: (value) {
                       final text = value.trim();
-                      if (text.isEmpty) return;
+                      if (text.isEmpty && _attachments.isEmpty) return;
+                      final msg = _composeMessage(text);
                       _promptController.clear();
-                      client.sendMessage(text);
+                      setState(() => _attachments.clear());
+                      client.sendMessage(msg);
                     },
                     style: const TextStyle(
                       fontSize: 15,
@@ -716,9 +776,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                 _stopGeneration(client);
                               } else {
                                 final text = _promptController.text;
-                                if (text.trim().isEmpty) return;
+                                if (text.trim().isEmpty && _attachments.isEmpty) return;
+                                final msg = _composeMessage(text);
                                 _promptController.clear();
-                                client.sendMessage(text);
+                                setState(() => _attachments.clear());
+                                client.sendMessage(msg);
                               }
                             },
                             icon: Icon(_isGenerating(client) ? LucideIcons.square : LucideIcons.arrowUp, size: 16),
@@ -734,4 +796,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       ],
     );
   }
+}
+
+class _Attachment {
+  final String name;
+  final String path;
+  const _Attachment({required this.name, required this.path});
 }

@@ -10,6 +10,7 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<String> cancelledSessionIds = [];
   final List<Map<String, String>> permissionReplies = [];
   final List<Map<String, String>> registeredPushes = [];
+  Map<String, dynamic>? snapshotResponse;
 
   @override
   Stream<Map<String, dynamic>> get incomingMessages => _incomingController.stream;
@@ -130,6 +131,40 @@ class FakeBridgeTransport implements BridgeTransport {
           'requestId': requestId,
           'ok': true,
           'data': {'accepted': true, 'sessionId': request['sessionId']},
+        };
+      case 'session.snapshot':
+        return {
+          'type': 'response',
+          'requestId': requestId,
+          'ok': true,
+          'data':
+              snapshotResponse ??
+              {
+                'schemaVersion': 1,
+                'snapshotId': 'snap_test',
+                'sessionId': request['sessionId'],
+                'agentId': 'opencode',
+                'streamEpoch': 'ep_snap',
+                'watermark': 5,
+                'capturedAt': '2026-11-10T00:00:00Z',
+                'complete': true,
+                'hasMore': false,
+                'totalParts': 1,
+                'parts': [
+                  {
+                    'kind': 'message',
+                    'partId': 'p1',
+                    'ordinal': 0,
+                    'revision': 1,
+                    'createdAt': '2026-11-10T00:00:00Z',
+                    'updatedAt': '2026-11-10T00:00:00Z',
+                    'role': 'assistant',
+                    'content': [
+                      {'type': 'text', 'text': 'Snapshot content'},
+                    ],
+                  },
+                ],
+              },
         };
       case 'session.cancel':
         cancelledSessionIds.add(request['sessionId'] as String);

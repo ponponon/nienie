@@ -618,4 +618,38 @@ void main() {
     await tester.pump();
     expect(find.text('原始问题'), findsNothing); // 已从列表撤回
   });
+  testWidgets('Snapshot 原子安装：loadSessionSnapshot 替换时间线为快照内容', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 先发一条消息（时间线有内容）
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '旧内容');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+    expect(find.text('旧内容'), findsOneWidget);
+
+    // 配置快照返回，调用 loadSessionSnapshot 原子重建
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_x',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep_snap',
+      'watermark': 5,
+      'capturedAt': '2026-11-10T00:00:00Z',
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {'kind': 'message', 'partId': 'p1', 'ordinal': 0, 'revision': 1, 'createdAt': 'x', 'updatedAt': 'x', 'role': 'user', 'content': [{'type': 'text', 'text': '快照用户'}]},
+      ],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    await tester.pump();
+
+    // 时间线被快照替换：旧内容消失，快照内容出现
+    expect(find.text('旧内容'), findsNothing);
+    expect(find.text('快照用户'), findsOneWidget);
+  });
 }

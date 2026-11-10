@@ -410,6 +410,12 @@ class MobileBridgeClient extends ChangeNotifier {
     }
     // 阶段三/四：同步原子替换（不 await），一次 notify
     if (epoch.isNotEmpty) _currentEpochBySession[sessionId] = epoch;
+    // 清理旧 timeline 时一并取消未完成占位的计时器，避免 Timer 泄漏
+    for (final item in _timelineBySession[sessionId] ?? const <SessionTimelineItem>[]) {
+      if (item is PendingResponseItem) {
+        _pendingTimers.remove(item)?.cancel();
+      }
+    }
     _timelineBySession[sessionId] = nextTimeline;
     _lastSequenceBySession.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
     if (epoch.isNotEmpty) _lastSequenceBySession['$sessionId#$epoch'] = watermark;
