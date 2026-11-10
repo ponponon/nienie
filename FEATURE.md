@@ -330,3 +330,10 @@
 - 用脚本从 `AgentBrandIcons.tsx` 提取 5 段官方 SVG（含 Codex 渐变、MiMo 字标、DeepSeek 鲸鱼），把 JSX 属性转成 HTML 属性后内联进官网卡片，尺寸统一 22×22 并加 `aria-hidden="true"`；不引入外部图片或 CDN 依赖，不受 CSP 与资源缓存影响。
 - 本地无头 Chrome 与线上 `https://nienie-web.pages.dev` 截图像素完全一致，5 个图标均正常显示；已用 `wrangler pages deploy website --project-name=nienie-web --branch=main` 发布到生产环境。
 - 同步修正文档里的官网地址：`https://nienie.quniv.cn` 从未配置 DNS（死链），官网实际地址为 `https://nienie-web.pages.dev`。
+
+### 2026-11-10 官网 favicon 破缓存与缓存策略修正
+
+- **修复浏览器标签页仍显示旧绿色 N 图标**：`website/favicon.ico` 与各尺寸 PNG 内容其实已是 P6 小猫、线上文件哈希与本地一致，问题是浏览器把旧 favicon 缓存住了（新图标生成后直到本次才真正部署到 Pages，且图标走 `/assets/*` 的 24 小时 + stale-while-revalidate 缓存）。
+- `website/index.html` 给 `favicon.ico`、`nienie-icon-16/32.png`、`apple-touch-icon.png`、`site.webmanifest` 全部加 `?v=2` 版本号，强制浏览器重新拉取；以后换 logo 只需递增版本号。
+- `website/_headers`：图标类资源不再走 `/assets/*` 的长缓存——`/assets/*` 统一改为 `max-age=3600, must-revalidate`，`favicon.ico` 与 `site.webmanifest` 单独设 `max-age=0, must-revalidate`。注意 CF Pages 会把多条匹配规则的 Cache-Control **合并**（不是覆盖），必须避免规则重叠产生自相矛盾的响应头。
+- 线上验证：5 个 `?v=2` 资源均 200 且内容与本地一致，首页 200，各资源只返回单条 Cache-Control。

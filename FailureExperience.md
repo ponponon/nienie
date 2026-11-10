@@ -994,3 +994,14 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - 经验：**同一套品牌资产在多端出现时，必须明确单一来源**；桌面端补齐图标后要回头检查官网、README、文档等其它展示面。静态官网优先内联 SVG（不依赖外部资源），并做一次无头浏览器渲染验证，不能只看 HTML 文本对不对。
 - 处理：脚本从桌面端组件提取 5 段官方 SVG，把 JSX 属性（`fillRule` / `stopColor` 等）转成 HTML 属性后内联进官网卡片；本地与线上截图 MD5 完全一致，重新部署 Cloudflare Pages 生产环境。
 - 关联：同轮发现 `FEATURE.md` 把官网地址写成 `https://nienie.quniv.cn`（该域名从未配 DNS），被 boss_host 项目卡片照抄成死链。文档里的「规划 URL」要标注状态，或直接写当前真实可访问地址；外链发布前必须实际访问验证。
+
+---
+
+## 2026-11-10 换 logo 后浏览器标签页仍是旧图标：favicon 缓存与 _headers 规则重叠
+
+- 现象：官网 Agent 图标修好、P6 小猫 favicon 文件也已在仓库里，用户手机浏览器 tab 仍显示旧的绿色 N 字标。
+- 原因排查：先从 `favicon.ico` 二进制里拆出 32px 帧确认图案已是小猫、线上所有图标 md5 与本地一致 → 文件没问题；再看缓存头，图标走 `/assets/*` 的 `max-age=86400, stale-while-revalidate=604800`，加上 Chrome 对 favicon 有独立顽固缓存，旧图标被长期留住。且新图标文件生成后并未立刻部署到 Pages（官网上一次部署仍是旧 N）。
+- 经验一：**换 logo 要同步部署所有展示面**（桌面 / 移动 / 官网 / 项目卡片），本地文件更新不等于线上已更新；验证要查线上资源哈希，不能只看仓库文件。
+- 经验二：**favicon 必须靠 URL 版本号破缓存**（`favicon.ico?v=2` 等），仅靠服务器 Cache-Control 对 Chrome 的 favicon 缓存通常无效；以后每次换图标递增 `?v`。
+- 经验三：**Cloudflare Pages 的 `_headers` 多条规则匹配时，同名 header 会被逗号合并而不是覆盖**——曾写出 `max-age=86400, ..., max-age=0` 这种自相矛盾的响应头，浏览器取前面的长缓存，规则形同虚设。设计缓存规则时必须避免路径重叠，部署后用 `curl -I` 逐条确认只返回一条 Cache-Control。
+- 处理：5 个图标引用加 `?v=2`；`/assets/*` 统一缩短为 1 小时，`favicon.ico` / `site.webmanifest` 单独 no-cache；重新部署并逐项验证。

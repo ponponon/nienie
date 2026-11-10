@@ -11,7 +11,13 @@
   Cache-Control: public, max-age=3600, must-revalidate
 
 /assets/*
-  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+  Cache-Control: public, max-age=3600, must-revalidate
+
+/favicon.ico
+  Cache-Control: public, max-age=0, must-revalidate
+
+/site.webmanifest
+  Cache-Control: public, max-age=0, must-revalidate
 
 /
   Cache-Control: public, max-age=0, must-revalidate
