@@ -12,6 +12,7 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<Map<String, String>> registeredPushes = [];
   Map<String, dynamic>? snapshotResponse;
   String? helloMachineId;
+  bool omitHelloMachineId = false;
 
   @override
   Stream<Map<String, dynamic>> get incomingMessages => _incomingController.stream;
@@ -44,7 +45,7 @@ class FakeBridgeTransport implements BridgeTransport {
           'ok': true,
           'data': {
             'protocolVersion': PROTOCOL_VERSION,
-            'machineId': helloMachineId ?? 'machine_mac',
+            if (!omitHelloMachineId) 'machineId': helloMachineId ?? 'machine_mac',
             'authenticated': true,
           },
         };

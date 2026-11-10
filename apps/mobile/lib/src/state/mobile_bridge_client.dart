@@ -360,6 +360,45 @@ class MobileBridgeClient extends ChangeNotifier {
     }
   }
 
+  /// 严格校验快照 Part 结构：未知 kind 拒绝（不静默丢弃），partId 唯一、revision 合法。
+  bool _allPartsWellFormed(List<dynamic> parts) {
+    final seenIds = <String>{};
+    const knownKinds = {
+      'message',
+      'thinking',
+      'tool_call',
+      'permission',
+      'usage',
+      'error',
+      'file_change',
+    };
+    for (final raw in parts) {
+      if (raw is! Map<String, dynamic>) return false;
+      final id = raw['partId'];
+      final kind = raw['kind'];
+      if (id is! String || id.isEmpty) return false;
+      if (!seenIds.add(id)) return false; // partId 重复
+      final rev = raw['revision'];
+      if (rev is! int || rev < 1) return false;
+      if (raw['ordinal'] is! int) return false;
+      if (kind is! String || !knownKinds.contains(kind)) return false; // 未知 Part 拒绝
+      if (kind == 'message') {
+        final content = raw['content'];
+        if (content is! List) return false;
+        // 只支持 text block；image/resource 等暂不支持，拒绝而非静默过滤
+        for (final b in content) {
+          if (b is! Map<String, dynamic> || b['type'] != 'text') return false;
+        }
+      } else if (kind == 'thinking' && raw['content'] is! String) {
+        return false;
+      } else if (kind == 'tool_call' &&
+          (raw['toolCallId'] is! String || raw['name'] is! String)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /// 会话快照：resetRequired/truncated 时拉完整 Part 状态，原子替换本地时间线。
   /// Snapshot 是「状态」不是「事件」：临时构建 Timeline → 校验 → 同步一次性替换。
   Future<void> loadSessionSnapshot(String sessionId) async {
@@ -375,15 +414,25 @@ class MobileBridgeClient extends ChangeNotifier {
       return;
     }
     final data = res['data'] as Map<String, dynamic>;
-    // 完整性白名单校验（ChatGPT J0-4/J0-5）：字段缺失、totalParts 不符、
-    // 空 parts 却已有历史，都判定为不可信快照，绝不清空现有 Timeline。
+    // 严格白名单校验（ChatGPT J0.1）：字段/身份/watermark/Part 结构全查，
+    // 未知 Part 或 Content Block 一律拒绝，绝不静默丢弃或部分安装。
     final snapshotParts = data['parts'];
     final existingItems = _timelineBySession[sessionId] ?? const <SessionTimelineItem>[];
+    final session = activeSession;
+    final wm = data['watermark'];
     final valid = data['schemaVersion'] == 1 &&
+        (data['snapshotId'] is String && (data['snapshotId'] as String).isNotEmpty) &&
+        data['sessionId'] == sessionId &&
+        (session == null || data['agentId'] == session.agentId) &&
+        (data['streamEpoch'] is String && (data['streamEpoch'] as String).isNotEmpty) &&
+        wm is int &&
+        wm >= 0 &&
+        data['capturedAt'] is String &&
         data['complete'] == true &&
         data['hasMore'] == false &&
         snapshotParts is List &&
         ((data['totalParts'] as num?)?.toInt() ?? -1) == snapshotParts.length &&
+        _allPartsWellFormed(snapshotParts) &&
         !(snapshotParts.isEmpty && existingItems.isNotEmpty);
     if (!valid) {
       errorMessage = '快照不完整或不可信，已保留当前记录';
@@ -391,7 +440,7 @@ class MobileBridgeClient extends ChangeNotifier {
       return;
     }
     final epoch = data['streamEpoch'] as String? ?? '';
-    final watermark = (data['watermark'] as num?)?.toInt() ?? 0;
+    final watermark = wm;
     final parts = (snapshotParts as List<dynamic>? ?? const []);
     // 阶段二：独立构建临时 Timeline（不修改现有状态）
     final nextTimeline = <SessionTimelineItem>[];
@@ -432,6 +481,20 @@ class MobileBridgeClient extends ChangeNotifier {
           inputTokens: (p['inputTokens'] as num?)?.toInt() ?? 0,
           outputTokens: (p['outputTokens'] as num?)?.toInt() ?? 0,
           costUsd: (p['costUsd'] as num?)?.toDouble() ?? 0.0,
+        ));
+      } else if (kind == 'permission') {
+        nextTimeline.add(PermissionRequestCardItem(
+          permissionId: p['permissionId'] as String? ?? '',
+          permission: p['permission'] as String? ?? '',
+          detail: p['detail'] as String? ?? '',
+          patterns: (p['patterns'] as List<dynamic>? ?? const []).cast<String>(),
+          resolvedDecision: p['decision'] as String?,
+        ));
+      } else if (kind == 'file_change') {
+        nextTimeline.add(FileDiffCardItem(
+          file: p['file'] as String? ?? '',
+          additions: (p['additions'] as num?)?.toInt() ?? 0,
+          deletions: (p['deletions'] as num?)?.toInt() ?? 0,
         ));
       }
     }
