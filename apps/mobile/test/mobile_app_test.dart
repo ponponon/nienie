@@ -652,4 +652,33 @@ void main() {
     expect(find.text('旧内容'), findsNothing);
     expect(find.text('快照用户'), findsOneWidget);
   });
+  testWidgets('不完整快照不清空时间线（防数据丢失）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '保留我');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+    expect(find.text('保留我'), findsOneWidget);
+
+    // 快照 complete=false（不完整）→ 不应清空时间线
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_bad',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep_x',
+      'watermark': 0,
+      'capturedAt': 'x',
+      'complete': false,
+      'hasMore': true,
+      'totalParts': 0,
+      'parts': [],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    await tester.pump();
+    expect(find.text('保留我'), findsOneWidget); // 未被清空
+    client.dispose();
+  });
 }

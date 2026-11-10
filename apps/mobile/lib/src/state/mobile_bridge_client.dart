@@ -284,7 +284,9 @@ class MobileBridgeClient extends ChangeNotifier {
       throw StateError(errorMessage!);
     }
 
-    if (connectedUrl != saved.wsUrl) {
+    // 不覆盖 saved.wsUrl：回退到 Relay/USB 成功也不能丢失原始 LAN 地址，
+    // 否则后续无法优先尝试局域网直连（ChatGPT P0）。仅在原 wsUrl 为空时才记录。
+    if (saved.wsUrl.isEmpty && connectedUrl.isNotEmpty) {
       await credentialStore.save(
         SavedDeviceCredential(
           machineId: saved.machineId,
@@ -363,6 +365,12 @@ class MobileBridgeClient extends ChangeNotifier {
       return;
     }
     final data = res['data'] as Map<String, dynamic>;
+    // 完整性校验：不完整的快照绝不覆盖现有 Timeline（防数据丢失，ChatGPT P0）
+    if (data['complete'] != true || data['hasMore'] == true) {
+      errorMessage = '快照不完整，已保留当前记录';
+      notifyListeners();
+      return;
+    }
     final epoch = data['streamEpoch'] as String? ?? '';
     final watermark = (data['watermark'] as num?)?.toInt() ?? 0;
     final parts = (data['parts'] as List<dynamic>? ?? const []);
