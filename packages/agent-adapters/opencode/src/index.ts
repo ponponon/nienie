@@ -408,7 +408,7 @@ export class OpenCodeAdapter implements AgentAdapter {
       const maxRows = 20000;
       let totalRead = 0;
       for (let offset = 0; ; offset += pageSize) {
-        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
+        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output, json_extract(p.data, '$.state.input') AS tool_input, json_extract(p.data, '$.state.status') AS tool_status, json_extract(p.data, '$.state.error') AS tool_error FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
         const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
           encoding: 'utf8',
           timeout: 2000,
@@ -422,6 +422,9 @@ export class OpenCodeAdapter implements AgentAdapter {
           tool?: string | null;
           call_id?: string | null;
           tool_output?: string | null;
+          tool_input?: string | null;
+          tool_status?: string | null;
+          tool_error?: string | null;
         }>;
         if (rows.length === 0) break;
         totalRead += rows.length;
@@ -575,7 +578,7 @@ export class OpenCodeAdapter implements AgentAdapter {
       let sawUnhandled = false;
       let truncated = false;
       for (let offset = 0; offset < safetyMaxRows; offset += pageSize) {
-        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
+        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output, json_extract(p.data, '$.state.input') AS tool_input, json_extract(p.data, '$.state.status') AS tool_status, json_extract(p.data, '$.state.error') AS tool_error FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
         const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
           encoding: 'utf8',
           timeout: 5000,
@@ -589,6 +592,9 @@ export class OpenCodeAdapter implements AgentAdapter {
           tool?: string | null;
           call_id?: string | null;
           tool_output?: string | null;
+          tool_input?: string | null;
+          tool_status?: string | null;
+          tool_error?: string | null;
         }>;
         if (rows.length === 0) break;
         for (const row of rows) {
@@ -601,14 +607,22 @@ export class OpenCodeAdapter implements AgentAdapter {
             parts.push({ ...base, kind: 'message', role: 'assistant', content: [{ type: 'text', text }] });
           } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
             const output = row.tool_output ?? '';
+            // 读真实 input/status/error，正确映射（completed 空输出 ≠ running、failed ≠ running）
+            let input: Record<string, unknown> = {};
+            try { input = row.tool_input ? JSON.parse(row.tool_input) : {}; } catch { input = {}; }
+            const rawStatus = row.tool_status ?? '';
+            const status = rawStatus === 'completed' || rawStatus === 'failed' || rawStatus === 'pending' ? rawStatus : (output ? 'completed' : 'running');
+            const isError = row.tool_error != null && row.tool_error !== '';
             parts.push({
               ...base,
               kind: 'tool_call',
               toolCallId: row.call_id || partId,
               name: row.tool,
-              input: {},
-              status: output ? 'completed' : 'running',
+              input,
+              status,
               ...(output ? { output } : {}),
+              isError,
+              ...(row.tool_error ? { output: String(row.tool_error) } : {}),
             });
           } else {
             // 未知/未支持 Part：不能静默丢弃并谎报 complete（J0-8）

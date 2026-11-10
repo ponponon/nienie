@@ -539,7 +539,10 @@ class MobileBridgeClient extends ChangeNotifier {
         ));
       } else if (kind == 'file_change') {
         nextTimeline.add(FileDiffCardItem(
+          diffId: p['diffId'] as String? ?? '',
           file: p['file'] as String? ?? '',
+          before: p['before'] as String? ?? '',
+          after: p['after'] as String? ?? '',
           additions: (p['additions'] as num?)?.toInt() ?? 0,
           deletions: (p['deletions'] as num?)?.toInt() ?? 0,
         ));
@@ -648,7 +651,10 @@ class MobileBridgeClient extends ChangeNotifier {
         final map = Map<String, dynamic>.from(raw as Map);
         items.add(
           FileDiffCardItem(
+            diffId: map['file'] as String? ?? '',
             file: map['file'] as String? ?? '',
+            before: map['before'] as String? ?? '',
+            after: map['after'] as String? ?? '',
             additions: map['additions'] as int? ?? 0,
             deletions: map['deletions'] as int? ?? 0,
           ),

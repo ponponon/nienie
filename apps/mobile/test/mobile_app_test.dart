@@ -752,6 +752,15 @@ void main() {
     await client.reconnectWithSavedCredential('machine_mac');
     final sid = client.sessions.isNotEmpty ? client.sessions.first.id : 'ses_alpha';
 
+    // 先填 timeline（before>0），否则无法区分「被误清空」和「本来就是空」
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'pre_1', 'streamEpoch': 'ep_pre', 'sessionId': sid,
+      'sequence': 1, 'timestamp': '2026-11-10T00:00:00Z', 'type': 'text_delta',
+      'payload': {'delta': '预置内容'},
+    });
+    await tester.pump();
+    expect(client.timelineFor(sid).length, 1);
+
     // 未知 Part kind → 拒绝
     transport.snapshotResponse = {
       'schemaVersion': 1, 'snapshotId': 's', 'sessionId': sid, 'agentId': client.sessions.isNotEmpty ? client.sessions.first.agentId : 'opencode',

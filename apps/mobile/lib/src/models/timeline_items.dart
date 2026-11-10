@@ -70,12 +70,18 @@ class PermissionRequestCardItem extends SessionTimelineItem {
 }
 
 class FileDiffCardItem extends SessionTimelineItem {
+  final String diffId;
   final String file;
+  final String before;
+  final String after;
   final int additions;
   final int deletions;
 
   const FileDiffCardItem({
+    required this.diffId,
     required this.file,
+    required this.before,
+    required this.after,
     required this.additions,
     required this.deletions,
   });
