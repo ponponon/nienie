@@ -343,11 +343,29 @@ describe('desktop bridge composition', () => {
     const htmlText = await htmlRes.text();
     expect(htmlText).toContain('Nienie Bridge');
     expect(htmlText).toContain('/api/ipc');
+    const csrfMatch = /const csrfToken = "([0-9a-f]+)"/.exec(htmlText);
+    expect(csrfMatch).not.toBeNull();
+    const csrfToken = csrfMatch![1]!;
+    const ipcHeaders = { 'content-type': 'application/json', 'x-nienie-csrf': csrfToken };
+
+    // 1b. CSRF 防护：无 token / 错误 Origin 拒绝
+    const noToken = await fetch(`${url}/api/ipc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: NIENIE_IPC_CHANNELS.START_BRIDGE, args: [] }),
+    });
+    expect(noToken.status).toBe(403);
+    const badOrigin = await fetch(`${url}/api/ipc`, {
+      method: 'POST',
+      headers: { ...ipcHeaders, origin: 'https://evil.example' },
+      body: JSON.stringify({ channel: NIENIE_IPC_CHANNELS.START_BRIDGE, args: [] }),
+    });
+    expect(badOrigin.status).toBe(403);
 
     // 2. POST /api/ipc triggers START_BRIDGE and returns updated state
     const startRes = await fetch(`${url}/api/ipc`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: ipcHeaders,
       body: JSON.stringify({
         channel: NIENIE_IPC_CHANNELS.START_BRIDGE,
         args: [],
@@ -361,7 +379,7 @@ describe('desktop bridge composition', () => {
     // 3. POST /api/ipc supports reactive locale switching without full-page reload
     const localeRes = await fetch(`${url}/api/ipc`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: ipcHeaders,
       body: JSON.stringify({
         channel: NIENIE_IPC_CHANNELS.SET_LOCALE,
         args: ['en'],

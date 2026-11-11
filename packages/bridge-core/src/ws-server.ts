@@ -165,8 +165,8 @@ export class BridgeServer {
   }
 
   async start(): Promise<BridgeServerAddress> {
-    // 冷启动预热（P2）：手机离线期间发生的完成/审批通知也要有会话标题
-    void this.registry
+    // 冷启动预热（P2）：可等待，消除「启动后立刻来通知拿不到标题」的竞态
+    await this.registry
       .listSessions()
       .then((sessions) => {
         for (const session of sessions) this.sessionIndex.set(session.id, session);
@@ -825,9 +825,26 @@ export class BridgeServer {
       this.pushRouter
         .notifyEvent(event, {
           sessionTitle: this.sessionIndex.get(event.sessionId)?.title,
+          summary: this.buildSessionSummary(event.sessionId),
         })
         .catch(() => undefined);
     }
+  }
+
+  /** 完成通知摘要（R3-6）：取该会话事件历史中真实文本的尾部；没有文本则不伪造。 */
+  private buildSessionSummary(sessionId: string): string | undefined {
+    const history = this.eventHistoryBySession.get(sessionId) ?? [];
+    let text = '';
+    for (const event of history) {
+      if (event.type === 'text_delta' && typeof event.payload['delta'] === 'string') {
+        text += event.payload['delta'];
+        if (text.length > 400) text = text.slice(-400);
+      }
+    }
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return undefined;
+    const excerpt = trimmed.length > 120 ? `…${trimmed.slice(-120)}` : trimmed;
+    return `已完成：${excerpt}`;
   }
 
   private sendMessage(client: ClientConnection, message: BridgeResponse): void {

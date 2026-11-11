@@ -524,3 +524,14 @@
 - **R10** 测试按钮吃草稿 URL/类型（不经旧配置），文案「Webhook 连接成功」。
 - P2 顺手：ws-server 冷启动预热 sessionIndex（离线通知也有会话标题）、事件级去重（同 eventId 只推一次）。
 - 测试：bridge-core 46（+4）+ mobile 33（+1 深链）+ 全仓 210 vitest 全绿；另修 Flutter SDK ink_sparkle.frag 缺失问题（改用 InkRipple 水波纹，产品更克制且不依赖 shader 资源）。
+
+### 2026-11-11 路线图#1 三轮修复（通知不丢失 / 断线可恢复 / 敏感不外泄）
+
+- **失败可重试**：eventId 只有投递成功才记入去重（失败不记，重复事件可触发重试）；每次发送带一次自动重试。
+- **深链断线保护**：离线时保留 pendingDeepLinkSessionId、openSession 成功才清除；重连 + refreshSessions 后自动重试进入（测试覆盖「缓存→断线→深链→重连→进入」）。
+- **路径脱敏重写**：默认模式把 macOS/Linux `/(Users|home)/x/...`、Windows `C:\Users\x\...`、UNC 路径整条折叠为 `~/`或`…/` + 文件名（不泄漏项目名/目录结构）；三平台路径回归测试；详细模式保留原样。
+- **Preview Server CSRF**：`/api/ipc` 校验一次性随机 token（页面注入）+ Origin 仅本机 + 通道白名单（DESKTOP_PRELOAD_METHODS）；测试覆盖无 token/恶意 Origin 403。
+- **完成通知真实摘要**：ws-server 从会话事件历史取真实文本尾部作摘要（≤120 字），无数据降级普通完成通知（不伪造）。
+- **P2 一并**：sessionIndex 预热可等待（消冷启动竞态）、sendTestNotification 直发不经 Router（绝不静默成功）、createDesktopPreloadApi 由 DESKTOP_PRELOAD_METHODS 统一构建、auto 识别域名收紧（day.app/官方 ntfy 域，自建用显式类型）+ 边界测试。
+- **多设备语义明确**：当前推送门禁为全局单设备语义（任一授权端在线即不推送）；多设备级门禁与应用层 ACK 留待后续（FEATURE 与路线图不宣称多设备闭环）。
+- 测试：bridge-core 50（+4）+ desktop 6（含 CSRF 拒绝）+ mobile 34（+1 断线深链）；全仓 214 vitest 全绿。

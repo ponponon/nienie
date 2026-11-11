@@ -281,13 +281,23 @@ export class DesktopBridgeController {
   }
 
   async sendTestNotification(input?: { webhookUrl?: string | undefined; senderType?: 'auto' | 'bark' | 'ntfy' | 'webhook' | undefined }): Promise<void> {
-    // R10：测试当前输入框草稿，而非旧配置
+    // R10/R3-P2：测试当前输入框草稿并直接经 Sender 发送（不经 Router，绕过偏好闸；Router 缺失也绝不静默成功）
     const url = (input?.webhookUrl ?? this.notificationWebhookUrl).trim();
     if (!url) {
       throw new Error('请先填写通知 Webhook URL');
     }
     const sender = createPushSender({ type: input?.senderType ?? this.notificationSenderType, url });
-    await this.pushRouter?.notifyTest(sender.send);
+    await sender.send({
+      deviceId: 'test',
+      platform: 'unknown',
+      provider: 'webhook',
+      pushToken: 'test',
+      sessionId: 'test-session',
+      title: 'Nienie 测试通知',
+      body: 'Webhook 连接成功。',
+      clickUrl: 'nienie://home',
+      timestamp: Date.now(),
+    });
     this.appendLog('info', 'Test notification sent');
   }
 
@@ -640,43 +650,27 @@ export type DesktopPreloadApi = {
 };
 
 export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPreloadApi {
+  const channel = (method: keyof typeof DESKTOP_PRELOAD_METHODS) => DESKTOP_PRELOAD_METHODS[method];
   return {
-    getState: () =>
-      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.GET_STATE) as Promise<DesktopDashboardState>,
-    startBridge: () =>
-      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.START_BRIDGE) as Promise<DesktopDashboardState>,
-    stopBridge: () =>
-      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.STOP_BRIDGE) as Promise<DesktopDashboardState>,
-    refreshAgents: () =>
-      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.REFRESH_AGENTS) as Promise<DesktopDashboardState>,
-    refreshPairing: () =>
-      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.REFRESH_PAIRING) as Promise<DesktopDashboardState>,
+    getState: () => ipcRenderer.invoke(channel('getState')) as Promise<DesktopDashboardState>,
+    startBridge: () => ipcRenderer.invoke(channel('startBridge')) as Promise<DesktopDashboardState>,
+    stopBridge: () => ipcRenderer.invoke(channel('stopBridge')) as Promise<DesktopDashboardState>,
+    refreshAgents: () => ipcRenderer.invoke(channel('refreshAgents')) as Promise<DesktopDashboardState>,
+    refreshPairing: () => ipcRenderer.invoke(channel('refreshPairing')) as Promise<DesktopDashboardState>,
     setRelay: (input: SetRelayInput) =>
-      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.SET_RELAY, input) as Promise<DesktopDashboardState>,
+      ipcRenderer.invoke(channel('setRelay'), input) as Promise<DesktopDashboardState>,
     setLocale: (locale: DesktopLocale) =>
-      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.SET_LOCALE, locale) as Promise<DesktopDashboardState>,
+      ipcRenderer.invoke(channel('setLocale'), locale) as Promise<DesktopDashboardState>,
     setMachineName: (name: string) =>
-      ipcRenderer.invoke(
-        NIENIE_IPC_CHANNELS.SET_MACHINE_NAME,
-        name,
-      ) as Promise<DesktopDashboardState>,
+      ipcRenderer.invoke(channel('setMachineName'), name) as Promise<DesktopDashboardState>,
     setAutoUpdate: (enabled: boolean) =>
-      ipcRenderer.invoke(
-        NIENIE_IPC_CHANNELS.SET_AUTO_UPDATE,
-        enabled,
-      ) as Promise<DesktopDashboardState>,
+      ipcRenderer.invoke(channel('setAutoUpdate'), enabled) as Promise<DesktopDashboardState>,
     revokeDevice: (deviceId: string) =>
-      ipcRenderer.invoke(
-        NIENIE_IPC_CHANNELS.REVOKE_DEVICE,
-        deviceId,
-      ) as Promise<DesktopDashboardState>,
+      ipcRenderer.invoke(channel('revokeDevice'), deviceId) as Promise<DesktopDashboardState>,
     setNotifications: (input: SetNotificationsInput) =>
-      ipcRenderer.invoke(
-        NIENIE_IPC_CHANNELS.SET_NOTIFICATIONS,
-        input,
-      ) as Promise<DesktopDashboardState>,
+      ipcRenderer.invoke(channel('setNotifications'), input) as Promise<DesktopDashboardState>,
     testNotification: (input?: { webhookUrl?: string; senderType?: 'auto' | 'bark' | 'ntfy' | 'webhook' }) =>
-      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.TEST_NOTIFICATION, input) as Promise<void>,
+      ipcRenderer.invoke(channel('testNotification'), input) as Promise<void>,
   };
 }
 

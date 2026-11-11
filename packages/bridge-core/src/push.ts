@@ -52,15 +52,24 @@ export function validateWebhookUrl(raw: string): string | undefined {
   return url.toString().replace(/\/+$/, '');
 }
 
-/** 外发隐私脱敏（R8）：密钥类走 redactLogText；详细模式关闭时进一步脱敏本机路径/家目录。 */
+/** 外发隐私脱敏（R8）：密钥类走 redactLogText；详细模式关闭时整路径折叠为 ~/或…/ + 文件名，
+ *  不泄漏项目名/目录结构；覆盖 macOS/Linux/Windows/UNC 路径。 */
 export function sanitizePushBody(text: string, detailed: boolean): string {
   const secrets = redactLogText(text);
   if (detailed) return secrets;
   return secrets
-    .replace(/\/Users\/[^/\s]+/g, '~')
-    .replace(/\/home\/[^/\s]+/g, '~')
+    .replace(/[A-Za-z]:[\\/](?:Users|home)[\\/][^\\/:*?"<>|\s]+(?:[\\/][^\\/:*?"<>|\s]+)*/gi, (match) => {
+      const parts = match.split(/[\\/]/);
+      return `~/${parts[parts.length - 1]}`;
+    })
+    .replace(/\/(?:Users|home)\/[^/\s]+(?:\/[^/\s]+)*/g, (match) => {
+      const parts = match.split('/');
+      return `~/${parts[parts.length - 1]}`;
+    })
+    .replace(/\\\\[^\\\s]+\\(?:[^\\\s]+\\)*([^\\\s]+)/g, '\\\\…\\$1')
     .replace(/\/(?:private\/)?var\/folders\/\S+/g, '…')
-    .replace(/(?<![\w~])\/(?:[\w.-]+\/)+([\w.-]+)/g, '…/$1');
+    .replace(/\/(?:[\w.-]+\/)+([\w.-]+)/g, '…/$1')
+    .replace(/[A-Za-z]:\\(?:[\w.-]+\\)+([\w.-]+)/g, '…\\$1');
 }
 
 function encodeHeaderUtf8(value: string): string {
@@ -197,9 +206,9 @@ export function createPushSender(options: {
   const type =
     options.type && options.type !== 'auto'
       ? options.type
-      : host.endsWith('day.app')
+      : host === 'api.day.app' || host.endsWith('.day.app')
         ? 'bark'
-        : host.includes('ntfy')
+        : host === 'ntfy.sh' || host === 'ntfy.com' || host.startsWith('ntfy.') || host.includes('.ntfy.')
           ? 'ntfy'
           : 'webhook';
   if (type === 'bark') return new BarkPushSender({ url: validated, fetch: options.fetch });
@@ -298,21 +307,24 @@ export class PushNotificationRouter {
     });
   }
 
-  /** 事件通知：绝不抛出（R4）。投递策略：webhook 全局单目标一次；设备级（apns/fcm）按注册逐设备。 */
+  /** 事件通知：绝不抛出（R4）。投递策略：webhook 全局单目标一次；设备级（apns/fcm）按注册逐设备。
+   *  失败重试一次；只有投递成功才记入 eventId 去重（失败允许后续重复事件触发重试，R3-1）。 */
   async notifyEvent(
     event: CanonicalAgentEvent,
-    context: { sessionTitle?: string | undefined; now?: Date } = {},
+    context: { sessionTitle?: string | undefined; summary?: string | undefined; now?: Date } = {},
   ): Promise<void> {
+    const dedupeKey = `${event.sessionId}#${event.streamEpoch}#${event.eventId}`;
+    if (this.seenEventIds.has(dedupeKey)) return;
     try {
       if (!this.shouldDeliver(event, context.now ?? new Date())) return;
       const sessionLabel =
         context.sessionTitle ?? this.resolveSessionTitle?.(event.sessionId) ?? event.sessionId;
-      const message = this.composeMessage(event, sessionLabel);
+      const message = this.composeMessage(event, sessionLabel, context.summary);
       if (!message) return;
       const timestamp = Date.now();
       const tasks: Array<Promise<void>> = [];
       if (this.webhookSender) {
-        tasks.push(this.webhookSender({ ...message, platform: 'unknown', provider: 'webhook', pushToken: 'webhook', deviceId: 'webhook', timestamp }));
+        tasks.push(this.deliverWithRetry(this.webhookSender, { ...message, platform: 'unknown', provider: 'webhook', pushToken: 'webhook', deviceId: 'webhook', timestamp }));
       }
       if (this.deviceSender) {
         const seen = new Set<string>();
@@ -320,18 +332,37 @@ export class PushNotificationRouter {
           const key = `${reg.provider}:${reg.pushToken}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          tasks.push(this.deviceSender({ ...message, deviceId: reg.deviceId, platform: reg.platform, provider: reg.provider, pushToken: reg.pushToken, timestamp }));
+          tasks.push(this.deliverWithRetry(this.deviceSender, { ...message, deviceId: reg.deviceId, platform: reg.platform, provider: reg.provider, pushToken: reg.pushToken, timestamp }));
         }
       }
       await Promise.all(tasks);
+      this.markDelivered(dedupeKey);
     } catch (error) {
+      // 失败不记 dedupeKey：同一事件再次到达可重试投递
       this.onDeliveryError?.(error);
+    }
+  }
+
+  private async deliverWithRetry(sender: PushSender, message: Parameters<PushSender>[0]): Promise<void> {
+    try {
+      await sender(message);
+    } catch {
+      await sender(message);
+    }
+  }
+
+  private markDelivered(key: string): void {
+    this.seenEventIds.add(key);
+    if (this.seenEventIds.size > MAX_DEDUPE_EVENTS) {
+      const first = this.seenEventIds.values().next().value;
+      if (first !== undefined) this.seenEventIds.delete(first);
     }
   }
 
   private composeMessage(
     event: CanonicalAgentEvent,
     sessionLabel: string,
+    summary?: string | undefined,
   ): { sessionId: string; title: string; body: string; clickUrl: string } | undefined {
     const detailed = this.preferences.detailed;
     let title: string | undefined;
@@ -344,7 +375,11 @@ export class PushNotificationRouter {
           : `${sessionLabel}：Agent 正在等待审批`;
     } else if (event.type === 'status' && event.payload['status'] === 'idle') {
       title = 'Nienie · 任务完成';
-      rawBody = `${sessionLabel}：Agent 已完成本轮任务。`;
+      // 有摘要用摘要（真实数据），没有则降级为普通完成通知，不伪造（R3-6）
+      rawBody =
+        summary && summary.trim().length > 0
+          ? `${sessionLabel}：${summary.trim()}`
+          : `${sessionLabel}：Agent 已完成本轮任务。`;
     } else if (event.type === 'error') {
       title = 'Nienie · 执行出错';
       rawBody =
@@ -366,14 +401,6 @@ export class PushNotificationRouter {
     if (!this.webhookSender && !this.deviceSender) return false;
     if (this.preferences.mutedSessionIds.includes(event.sessionId)) return false;
     if (this.preferences.quietHours && isWithinQuietHours(this.preferences.quietHours, now)) return false;
-    // 事件级去重：同 eventId 只推一次（重复投递不产生重复通知）
-    const key = `${event.sessionId}#${event.streamEpoch}#${event.eventId}`;
-    if (this.seenEventIds.has(key)) return false;
-    this.seenEventIds.add(key);
-    if (this.seenEventIds.size > MAX_DEDUPE_EVENTS) {
-      const first = this.seenEventIds.values().next().value;
-      if (first !== undefined) this.seenEventIds.delete(first);
-    }
     return true;
   }
 }

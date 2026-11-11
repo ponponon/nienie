@@ -1268,6 +1268,26 @@ void main() {
     client.dispose();
   });
 
+  test('路线图#1 R9 断线时深链保留，重连后自动进入正确会话', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions(); // 先缓存会话
+    client.connectionState = BridgeConnectionState.disconnected;
+    expect(client.handleDeepLink(Uri.parse('nienie://session/ses_alpha')), isTrue);
+    await client.refreshSessions(); // 断线刷新不消费
+    expect(client.pendingDeepLinkSessionId, 'ses_alpha');
+    expect(client.activeSession?.id, isNot('ses_alpha'));
+
+    client.connectionState = BridgeConnectionState.connected;
+    await client.refreshSessions(); // 重连后自动进入
+    expect(client.pendingDeepLinkSessionId, isNull);
+    expect(client.activeSession?.id, 'ses_alpha');
+    client.dispose();
+  });
+
   test('路线图#1 R9 通知深链：nienie://session/<id> 直达会话（未加载时挂起、刷新后自动进入）', () async {
     final transport = FakeBridgeTransport();
     final client = MobileBridgeClient(
@@ -1275,6 +1295,7 @@ void main() {
       credentialStore: InMemoryCredentialStore(),
     );
     expect(client.handleDeepLink(Uri.parse('https://example.com')), isFalse);
+    client.connectionState = BridgeConnectionState.connected;
     expect(client.handleDeepLink(Uri.parse('nienie://session/ses_alpha')), isTrue);
     expect(client.pendingDeepLinkSessionId, 'ses_alpha');
     await client.refreshSessions(); // fake 返回 ses_alpha → 消费深链

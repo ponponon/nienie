@@ -914,10 +914,17 @@ class MobileBridgeClient extends ChangeNotifier {
   Future<void> _consumePendingDeepLink() async {
     final id = pendingDeepLinkSessionId;
     if (id == null) return;
+    // 断线时保留深链（R9）：连接恢复、refreshSessions 完成后自动重试进入
+    if (connectionState != BridgeConnectionState.connected) return;
     final match = sessions.where((s) => s.id == id).firstOrNull;
     if (match == null) return;
-    pendingDeepLinkSessionId = null;
-    await openSession(match);
+    try {
+      await openSession(match);
+      // 只有真正进入会话才清除，失败/异常保留等待重连后再消费
+      pendingDeepLinkSessionId = null;
+    } catch (_) {
+      // 保留 pendingDeepLinkSessionId
+    }
   }
 
   Future<AgentSession> createSession({

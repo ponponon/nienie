@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,6 +22,7 @@ export type DesktopPreviewServerOptions = {
 };
 
 export class DesktopPreviewServer {
+  private readonly csrfToken = randomBytes(24).toString('hex');
   private readonly controller: DesktopBridgeController;
   private readonly host: string;
   private readonly requestedPort: number;
@@ -154,7 +156,7 @@ export class DesktopPreviewServer {
       const invoke = async (channel, ...args) => {
         const res = await fetch('/api/ipc', {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', 'x-nienie-csrf': csrfToken },
           body: JSON.stringify({ channel, args }),
         });
         const data = await res.json();
@@ -163,6 +165,7 @@ export class DesktopPreviewServer {
         }
         return data;
       };
+      const csrfToken = ${JSON.stringify(this.csrfToken)};
       window.nienieDesktop = ${ JSON.stringify(Object.keys(createDesktopPreloadApi({ invoke: async () => ({}) }))) }.reduce((acc, method) => {
         const map = ${ JSON.stringify(DESKTOP_PRELOAD_METHODS) };
         acc[method] = (...args) => invoke(map[method], ...args);
@@ -228,8 +231,35 @@ export class DesktopPreviewServer {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/ipc') {
+      const origin = req.headers['origin'];
+      const csrf = req.headers['x-nienie-csrf'];
+      const allowedChannels = new Set<string>(Object.values(DESKTOP_PRELOAD_METHODS));
+      if (csrf !== this.csrfToken) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Invalid CSRF token' }));
+        return;
+      }
+      if (origin !== undefined) {
+        let originHost = '';
+        try {
+          originHost = new URL(String(origin)).host;
+        } catch {
+          originHost = '';
+        }
+        const isLocalOrigin = /^localhost(:\d+)?$|^127\.0\.0\.1(:\d+)?$|^\[::1\](:\d+)?$/.test(originHost);
+        if (!isLocalOrigin) {
+          res.writeHead(403, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'Origin not allowed' }));
+          return;
+        }
+      }
       const body = (await readJsonBody(req)) as { channel?: string; args?: unknown[] };
-      const handler = body.channel ? this.ipcHandlers.get(body.channel) : undefined;
+      if (!body.channel || !allowedChannels.has(body.channel)) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Unknown IPC channel' }));
+        return;
+      }
+      const handler = this.ipcHandlers.get(body.channel);
       if (!handler) {
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'Unknown IPC channel' }));

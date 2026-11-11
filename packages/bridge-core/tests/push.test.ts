@@ -6,6 +6,7 @@ import {
   isWithinQuietHours,
   NtfyPushSender,
   PushNotificationRouter,
+  sanitizePushBody,
   WebhookPushSender,
   type PushNotificationMessage,
 } from '../src/push.js';
@@ -269,5 +270,59 @@ describe('三类 Sender 真实 HTTP（R5/R9）', () => {
     expect(() => createPushSender({ type: 'auto', url: 'file:///etc/passwd' })).toThrow(/Invalid/);
     expect(() => createPushSender({ type: 'auto', url: 'https://user:pass@host/x' })).toThrow(/Invalid/);
     expect(() => createPushSender({ type: 'ntfy', url: 'https://ntfy.sh/' })).toThrow(/topic/);
+  });
+});
+
+describe('R3 第三轮：可靠性与脱敏', () => {
+  const now = new Date('2026-11-11T12:00:00');
+  it('sanitizePushBody 默认模式折叠 macOS/Linux/Windows/UNC 路径为 ~/或…/ + 文件名', () => {
+    const detailed = false;
+    expect(sanitizePushBody('cat /Users/alice/Company/private-project/src/main.ts', detailed))
+      .toBe('cat ~/main.ts');
+    expect(sanitizePushBody('cat /home/bob/work/repo/a.py', detailed)).toBe('cat ~/a.py');
+    expect(sanitizePushBody('type C:\\Users\\bob\\Secret\\app\\main.py', detailed)).toBe('type ~/main.py');
+    expect(sanitizePushBody('open /etc/ssh/config', detailed)).toBe('open …/config');
+    // 详细模式保留原样
+    expect(sanitizePushBody('cat /Users/alice/Company/x.ts', true)).toContain('/Users/alice/Company/x.ts');
+  });
+
+  it('投递失败不记 dedupeKey：同一事件再次到达可重试；成功后才去重', async () => {
+    const sent: PushNotificationMessage[] = [];
+    let failFirst = 2; // 前两次（含重试）失败，之后成功
+    const router = new PushNotificationRouter({
+      webhookSender: async (message) => {
+        if (failFirst > 0) {
+          failFirst -= 1;
+          throw new Error('hook down');
+        }
+        sent.push(message);
+      },
+    });
+    const same = event({ type: 'status', payload: { status: 'idle' } });
+    await router.notifyEvent(same, { now }); // 两次都失败
+    expect(sent).toHaveLength(0);
+    await router.notifyEvent(same, { now }); // 再次到达：重试成功
+    expect(sent).toHaveLength(1);
+    await router.notifyEvent(same, { now }); // 已送达 → 去重
+    expect(sent).toHaveLength(1);
+  });
+
+  it('完成通知带真实摘要；无摘要时降级为普通完成通知', async () => {
+    const sent: PushNotificationMessage[] = [];
+    const router = new PushNotificationRouter({ webhookSender: async (m) => sent.push(m) });
+    await router.notifyEvent(event({ type: 'status', payload: { status: 'idle' } }), {
+      now,
+      sessionTitle: '修 GC Bug',
+      summary: '已完成：28 项测试通过',
+    });
+    expect(sent[0]!.body).toBe('修 GC Bug：已完成：28 项测试通过');
+    await router.notifyEvent(event({ type: 'status', payload: { status: 'idle' } }), { now, sessionTitle: '修 GC Bug' });
+    expect(sent[1]!.body).toBe('修 GC Bug：Agent 已完成本轮任务。');
+  });
+
+  it('auto 识别域名收紧：非官方域名不误判为 Bark/ntfy', () => {
+    expect(createPushSender({ type: 'auto', url: 'https://my-bark.example.com/key' })).toBeInstanceOf(WebhookPushSender);
+    expect(createPushSender({ type: 'auto', url: 'https://api.day.app/k' })).toBeInstanceOf(BarkPushSender);
+    expect(createPushSender({ type: 'auto', url: 'https://ntfy.example.com/t' })).toBeInstanceOf(NtfyPushSender);
   });
 });
