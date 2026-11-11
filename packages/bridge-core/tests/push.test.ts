@@ -309,7 +309,9 @@ describe('R3 第三轮：可靠性与脱敏', () => {
 
   it('完成通知带真实摘要；无摘要时降级为普通完成通知', async () => {
     const sent: PushNotificationMessage[] = [];
-    const router = new PushNotificationRouter({ webhookSender: async (m) => sent.push(m) });
+    const router = new PushNotificationRouter({ webhookSender: async (m) => {
+      sent.push(m);
+    } });
     await router.notifyEvent(event({ type: 'status', payload: { status: 'idle' } }), {
       now,
       sessionTitle: '修 GC Bug',
