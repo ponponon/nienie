@@ -462,3 +462,13 @@
 - **Diff 500 降级态**：`session.diff` 失败返回 `{diffs: [], unavailable: true}`（「无变更」≠「算不出」），手机端 `diffUnavailableFor` + 明确提示「此历史会话的文件差异暂不可用，可能与旧版本迁移数据有关」，可重试。
 - **分页防御**：`listAllMessages` 补 cursor 死循环检测、重复消息 ID 检测、空页带 next 报错、limit 正整数校验。
 - 测试 155 vitest（协议 9 + adapter 102）+ 29 mobile 全绿。
+
+### 2026-11-10 J0.6b-3.2 封板收尾（一次性提交）
+
+- **截断豁免收窄为精确白名单**：弃通用前缀规则，只允许逐项人工核实过的 2 个 v1 Tool Output（ses_f2ea6da23ffe… 的两个 websearch，按 toolCallId+v1 输出 SHA-256 精确匹配）；**普通文本必须严格相等**，无任何豁免。
+- **附件比较规则**：URI 型比 URI、inline 型比 SHA-256（v1 `file` part 的 data: URL 现场解码算哈希对照 v2 的 contentHash），name/mime 同比。
+- **附件端到端可见**：`UserPromptItem.attachments`（name/mime/sourceType/uri/contentHash）——事件 payload 附件保存、快照 resource 块转换为附件（**不丢弃**）、UI 在用户气泡内显示「文件名 · MIME」行（paperclip 图标）。
+- **Diff unavailable 降级展示**：活跃会话时间线内显示 `DIFF_UNAVAILABLE` 可重试提示卡（不再只有全局 errorMessage）；重试前清理旧差异卡与提示卡，**不重复生成**。
+- **对照脚本**：API 失败计入 `diffUnverified`（不计为比较成功），汇总行 `diffVerified/diffUnverified/diffIssues` 分开。
+- **limit 校验**：number/string 双向验证正整数（`Number()`+`isSafeInteger`，封堵 `'1.5'`/`'-10'`/`'abc'`/`''` 绕过）。
+- 测试 155 vitest + 31 mobile（+2：附件端到端含 UI 断言、Diff 降级+重试去重）全绿。

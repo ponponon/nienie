@@ -8,6 +8,17 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<String> sentPrompts = [];
   final List<String?> sentModelIds = [];
   final List<String?> sentClientMessageIds = [];
+  bool diffUnavailable = false;
+  List<Map<String, dynamic>> diffResponse = [
+    {
+      'diffId': 'd1',
+      'file': 'src/index.ts',
+      'before': 'a',
+      'after': 'b',
+      'additions': 3,
+      'deletions': 1,
+    },
+  ];
   final List<String> cancelledSessionIds = [];
   final List<Map<String, String>> permissionReplies = [];
   final List<Map<String, String>> registeredPushes = [];
@@ -201,21 +212,21 @@ class FakeBridgeTransport implements BridgeTransport {
           },
         };
       case 'session.diff':
+        if (diffUnavailable) {
+          return {
+            'type': 'response',
+            'requestId': requestId,
+            'ok': true,
+            'data': {'sessionId': request['sessionId'], 'diffs': [], 'unavailable': true},
+          };
+        }
         return {
           'type': 'response',
           'requestId': requestId,
           'ok': true,
           'data': {
             'sessionId': request['sessionId'],
-            'diffs': [
-              {
-                'file': 'src/index.ts',
-                'before': 'a',
-                'after': 'b',
-                'additions': 3,
-                'deletions': 1,
-              },
-            ],
+            'diffs': diffResponse,
           },
         };
       case 'push.register':

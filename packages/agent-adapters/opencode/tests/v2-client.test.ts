@@ -483,5 +483,9 @@ describe('listAllMessages 分页防御（P2）', () => {
 
     const badLimit = new OpenCodeV2Client({ baseUrl: 'http://127.0.0.1:49374', fetch: mockFetch(() => json(200, { data: [], cursor: {} })) });
     await expect(badLimit.listAllMessages('ses_1', { limit: -1 })).rejects.toThrow(/positive integer/);
+    for (const bad of ['1.5', '-10', 'abc', '']) {
+      await expect(badLimit.listAllMessages('ses_1', { limit: bad })).rejects.toThrow(/positive integer/);
+    }
+    await expect(badLimit.listAllMessages('ses_1', { limit: '200' })).resolves.toEqual([]);
   });
 });

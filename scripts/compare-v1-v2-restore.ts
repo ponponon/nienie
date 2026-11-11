@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -9,8 +10,8 @@ import { deriveDiffId } from '../packages/agent-adapters/opencode/src/v2/diff-id
 
 type Item =
   | { kind: 'user_text' | 'assistant_text'; text: string; synthetic?: boolean }
-  | { kind: 'attachment'; name: string; mime: string; uri: string }
-  | { kind: 'tool'; name: string; input: string; output: string; status: string; isError: boolean };
+  | { kind: 'attachment'; name: string; mime: string; uri?: string; contentHash?: string }
+  | { kind: 'tool'; name: string; input: string; output: string; status: string; isError: boolean; toolCallId: string };
 
 const dbPath = join(homedir(), '.local/share/opencode/opencode.db');
 if (!existsSync(dbPath)) {
@@ -33,6 +34,7 @@ function v1Items(sessionId: string): Item[] {
       `json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, ` +
       `json_extract(p.data, '$.state.output') AS tool_output, json_extract(p.data, '$.state.input') AS tool_input, ` +
       `json_extract(p.data, '$.state.status') AS tool_status, json_extract(p.data, '$.state.error') AS tool_error, ` +
+      `json_extract(p.data, '$.callID') AS call_id, ` +
       `json_extract(p.data, '$.mime') AS mime, json_extract(p.data, '$.filename') AS filename, json_extract(p.data, '$.url') AS url ` +
       `FROM part p JOIN message m ON p.message_id = m.id ` +
       `WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC;`,
@@ -47,12 +49,24 @@ function v1Items(sessionId: string): Item[] {
     } else if (role === 'assistant' && type === 'text') {
       if (text.length > 0) items.push({ kind: 'assistant_text', text });
     } else if (type === 'file') {
-      items.push({
-        kind: 'attachment',
-        name: String(row['filename'] ?? ''),
-        mime: String(row['mime'] ?? ''),
-        uri: String(row['url'] ?? ''),
-      });
+      const url = String(row['url'] ?? '');
+      if (url.startsWith('data:')) {
+        const comma = url.indexOf(',');
+        const data = comma >= 0 ? url.slice(comma + 1) : '';
+        items.push({
+          kind: 'attachment',
+          name: String(row['filename'] ?? ''),
+          mime: String(row['mime'] ?? ''),
+          contentHash: createHash('sha256').update(data, 'base64').digest('hex'),
+        });
+      } else {
+        items.push({
+          kind: 'attachment',
+          name: String(row['filename'] ?? ''),
+          mime: String(row['mime'] ?? ''),
+          uri: url,
+        });
+      }
     } else if (role === 'assistant' && type === 'tool' && row['tool']) {
       const rawStatus = String(row['tool_status'] ?? '');
       const output = String(row['tool_output'] ?? '');
@@ -72,6 +86,7 @@ function v1Items(sessionId: string): Item[] {
         output: errorText ? (output ? `${errorText}\n${output}` : errorText) : output,
         status,
         isError: errorText.length > 0,
+        toolCallId: String(row['call_id'] ?? ''),
       });
     }
   }
@@ -105,7 +120,8 @@ function v2Items(specs: ReturnType<typeof restoreHistoryEvents>): Item[] {
           kind: 'attachment',
           name: String(attachment['name'] ?? ''),
           mime: String(attachment['mime'] ?? ''),
-          uri: String(attachment['uri'] ?? ''),
+          ...(typeof attachment['uri'] === 'string' ? { uri: attachment['uri'] } : {}),
+          ...(typeof attachment['contentHash'] === 'string' ? { contentHash: attachment['contentHash'] } : {}),
         });
       }
     } else if (spec.type === 'tool_use') {
@@ -125,6 +141,7 @@ function v2Items(specs: ReturnType<typeof restoreHistoryEvents>): Item[] {
           output: '',
           status: String(spec.payload['status'] ?? 'running'),
           isError: false,
+          toolCallId: id,
         });
       }
     } else if (spec.type === 'tool_result') {
@@ -145,6 +162,7 @@ function v2Items(specs: ReturnType<typeof restoreHistoryEvents>): Item[] {
           output: String(spec.payload['content'] ?? ''),
           status: isError ? 'failed' : 'completed',
           isError,
+          toolCallId: id,
         });
       }
     }
@@ -162,17 +180,15 @@ function normalizeInput(raw: string): string {
 
 type CompareResult = 'equal' | 'v1-truncated' | 'mismatch';
 
-/** v1 存量数据的 state.output 存在截断（尾部多字节字符被切断），v2 content[] 是完整值。
- *  只允许「v1 是 v2 的前缀（含切断尾）」标记为已知数据差异，其余一律 mismatch。 */
-function isTruncatedPrefix(v1: string, v2: string): boolean {
-  if (v2.startsWith(v1)) return v1.length < v2.length;
-  for (let cut = 1; cut <= 4; cut += 1) {
-    if (v1.length > cut && v2.startsWith(v1.slice(0, v1.length - cut))) return true;
-  }
-  return false;
-}
+/** 截断豁免白名单（J0.6b-3.2）：只允许逐项精确核实过的 v1 Tool Output（sha256 精确匹配），
+ *  不再使用通用前缀规则；普通文本必须严格相等。 */
+const KNOWN_TRUNCATED_OUTPUTS = new Map<string, string>([
+  // ses_f2ea6da23ffeUSIts4GRmp419x 的两个 websearch：v1 state.output 尾部多字节截断（已逐项人工核实，v2 content[] 为完整值）
+  ['call_5e0b2bb6a43d438d88db5149', '850f6a4bf09e5210ebed264b73d293da603fb9468eebc017880e0a8a62811394'],
+  ['call_e493bf9aeca14fd6a43208b4', '69075009c724845d920f648b79fb0b41f8ba0462feba05b1d107ba8188408991'],
+]);
 
-function compareItems(a: Item, b: Item): CompareResult {
+function compareItems(a: Item, b: Item, toolCallId?: string): CompareResult {
   if (a.kind !== b.kind) return 'mismatch';
   if (a.kind === 'tool' && b.kind === 'tool') {
     const headEqual =
@@ -182,15 +198,21 @@ function compareItems(a: Item, b: Item): CompareResult {
       a.isError === b.isError;
     if (!headEqual) return 'mismatch';
     if (a.output === b.output) return 'equal';
-    return isTruncatedPrefix(a.output, b.output) ? 'v1-truncated' : 'mismatch';
+    const allowHash = toolCallId ? KNOWN_TRUNCATED_OUTPUTS.get(toolCallId) : undefined;
+    if (allowHash && createHash('sha256').update(a.output, 'utf8').digest('hex') === allowHash) {
+      return 'v1-truncated';
+    }
+    return 'mismatch';
   }
   if (a.kind === 'attachment' && b.kind === 'attachment') {
-    return a.name === b.name && a.mime === b.mime && a.uri === b.uri ? 'equal' : 'mismatch';
+    if (a.name !== b.name || a.mime !== b.mime) return 'mismatch';
+    if (a.uri !== undefined && b.uri !== undefined) return a.uri === b.uri ? 'equal' : 'mismatch';
+    if (a.contentHash !== undefined && b.contentHash !== undefined) {
+      return a.contentHash === b.contentHash ? 'equal' : 'mismatch';
+    }
+    return 'mismatch';
   }
-  const textA = (a as { text: string }).text;
-  const textB = (b as { text: string }).text;
-  if (textA === textB) return 'equal';
-  return isTruncatedPrefix(textA, textB) ? 'v1-truncated' : 'mismatch';
+  return (a as { text: string }).text === (b as { text: string }).text ? 'equal' : 'mismatch';
 }
 
 const found = await discoverOpenCodeService();
@@ -228,6 +250,7 @@ let allowedExtra = 0;
 let knownTruncations = 0;
 let fatalExtra = 0;
 const diffIssues: string[] = [];
+let diffUnverified = 0;
 
 for (const sessionId of candidates) {
   const old = v1Items(sessionId);
@@ -245,7 +268,7 @@ for (const sessionId of candidates) {
       allowedExtra += 1;
       cursor += 1;
     }
-    const verdict = cursor < current.length ? compareItems(item, current[cursor]!) : 'mismatch';
+    const verdict = cursor < current.length ? compareItems(item, current[cursor]!, item.kind === 'tool' ? item.toolCallId : undefined) : 'mismatch';
     if (verdict === 'equal') {
       matched += 1;
       cursor += 1;
@@ -308,12 +331,13 @@ for (const sessionId of candidates) {
       `   diff: deterministic=${deterministic} unique=${unique} v1Files=${v1Files.length} v2Files=${v2Files.length} filesEqual=${filesEqual}`,
     );
   } catch (error) {
-    console.log(`   diff: UNAVAILABLE ${String(error).slice(0, 100)}`);
+    diffUnverified += 1;
+    console.log(`   diff: UNVERIFIED (API 失败不计为比较成功) ${String(error).slice(0, 100)}`);
   }
 }
 
 console.log('---');
 console.log(
-  `mode=${mode} sessions=${candidates.length} failed=${failedSessions} v1Items=${totalV1} orderedMatched=${totalMatched} knownV1Truncations=${knownTruncations} allowedExtra(synthetic)=${allowedExtra} fatalExtra=${fatalExtra} diffIssues=${diffIssues.length}`,
+  `mode=${mode} sessions=${candidates.length} failed=${failedSessions} v1Items=${totalV1} orderedMatched=${totalMatched} knownV1Truncations=${knownTruncations} allowedExtra(synthetic)=${allowedExtra} fatalExtra=${fatalExtra} diffVerified=${candidates.length - diffUnverified} diffUnverified=${diffUnverified} diffIssues=${diffIssues.length}`,
 );
 process.exit(failedSessions > 0 || diffIssues.length > 0 ? 1 : 0);

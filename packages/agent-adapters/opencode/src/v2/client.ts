@@ -154,7 +154,8 @@ export class OpenCodeV2Client {
     options: { limit?: number | string | undefined; type?: OpenCodeV2MessageListQuery['type'] } = {},
   ): Promise<OpenCodeV2SessionMessageInfo[]> {
     const pageSize = options.limit ?? 200;
-    if (typeof pageSize === 'number' && (!Number.isInteger(pageSize) || pageSize <= 0)) {
+    const numericLimit = Number(pageSize);
+    if (!Number.isSafeInteger(numericLimit) || numericLimit <= 0) {
       throw new OpenCodeV2ClientError('OpenCode message pagination: limit must be a positive integer', 0);
     }
     const messages: OpenCodeV2SessionMessageInfo[] = [];

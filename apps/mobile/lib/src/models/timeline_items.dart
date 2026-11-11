@@ -2,14 +2,33 @@ sealed class SessionTimelineItem {
   const SessionTimelineItem();
 }
 
+/// 附件元数据（J0.6b-3.2）：结构化保留文件名/MIME/来源，UI 可见，不再随文本丢失。
+class AttachmentMeta {
+  final String name;
+  final String mime;
+  final String sourceType; // 'uri' | 'inline'
+  final String? uri;
+  final String? contentHash;
+  const AttachmentMeta({
+    this.name = '',
+    required this.mime,
+    required this.sourceType,
+    this.uri,
+    this.contentHash,
+  });
+}
+
 class UserPromptItem extends SessionTimelineItem {
   String message;
+  /// 消息携带的附件元数据（文件名/MIME 可见）。
+  List<AttachmentMeta> attachments;
   /// 内容归属标识与状态版本（J0.4）：同 partId 的用户消息增量精确追加，重放不重复。
   String? partId;
   int revision;
   /// 服务端（或客户端预生成）消息关联 ID（J0.6b-3b）：历史/事件按此认领本地乐观消息，防止重复。
   String? messageId;
-  UserPromptItem(this.message, {this.partId, this.revision = 0, this.messageId});
+  UserPromptItem(this.message,
+      {this.partId, this.revision = 0, this.messageId, this.attachments = const []});
 }
 
 /// 发送后、回复到达前的「等待中」占位卡片。

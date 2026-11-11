@@ -374,6 +374,25 @@ class MobileBridgeClient extends ChangeNotifier {
     return activeSession?.id == sessionId ? activeSession : null;
   }
 
+  /// 解析附件元数据（事件 payload / 快照 resource 块 → AttachmentMeta），结构化保留不丢失。
+  List<AttachmentMeta> parseAttachments(dynamic raw) {
+    if (raw is! List) return const [];
+    final out = <AttachmentMeta>[];
+    for (final entry in raw) {
+      if (entry is! Map) continue;
+      final map = Map<String, dynamic>.from(entry);
+      if (map['uri'] is! String && map['contentHash'] is! String) continue;
+      out.add(AttachmentMeta(
+        name: map['name'] as String? ?? '',
+        mime: map['mime'] as String? ?? map['mimeType'] as String? ?? '',
+        sourceType: map['sourceType'] as String? ?? (map['uri'] != null ? 'uri' : 'inline'),
+        uri: map['uri'] as String?,
+        contentHash: map['contentHash'] as String?,
+      ));
+    }
+    return out;
+  }
+
   /// 严格校验快照 Part 结构：未知 kind 拒绝（不静默丢弃），partId 唯一、revision 合法。
   bool _allPartsWellFormed(List<dynamic> parts) {
     final seenIds = <String>{};
@@ -508,19 +527,32 @@ class MobileBridgeClient extends ChangeNotifier {
       final kind = p['kind'] as String?;
       if (kind == 'message') {
         final role = p['role'] as String?;
-        final content = (p['content'] as List<dynamic>? ?? const [])
+        final blocks = (p['content'] as List<dynamic>? ?? const [])
             .map((b) => Map<String, dynamic>.from(b as Map))
+            .toList();
+        final content = blocks
             .where((b) => b['type'] == 'text')
             .map((b) => b['text'] as String? ?? '')
             .join();
-        if (content.isEmpty) continue;
+        // resource 块转换为附件元数据（J0.6b-3.2）：不能丢弃
+        final attachments = blocks
+            .where((b) => b['type'] == 'resource')
+            .map((b) => AttachmentMeta(
+                  name: b['name'] as String? ?? '',
+                  mime: b['mimeType'] as String? ?? '',
+                  sourceType: 'uri',
+                  uri: b['uri'] as String?,
+                ))
+            .toList();
+        if (content.isEmpty && attachments.isEmpty) continue;
         if (role == 'user') {
           nextTimeline.add(UserPromptItem(
             content,
             partId: p['partId'] as String?,
             revision: (p['revision'] as num?)?.toInt() ?? 0,
+            attachments: attachments,
           ));
-        } else {
+        } else if (content.isNotEmpty) {
           nextTimeline.add(StreamingTextItem(
             text: content,
             isThinking: false,
@@ -683,15 +715,24 @@ class MobileBridgeClient extends ChangeNotifier {
     });
     if (res['ok'] == true) {
       final data = res['data'] as Map<String, dynamic>;
+      final items = _timelineBySession.putIfAbsent(sessionId, () => []);
+      // 重试去重（J0.6b-3.2）：重新加载前清掉旧差异卡与降级提示，不重复生成
+      items.removeWhere((item) =>
+          item is FileDiffCardItem ||
+          (item is ErrorCardItem && item.code == 'DIFF_UNAVAILABLE'));
       if (data['unavailable'] == true) {
         _diffUnavailableSessions.add(sessionId);
+        items.add(ErrorCardItem(
+          code: 'DIFF_UNAVAILABLE',
+          message: '此历史会话的文件差异暂不可用，可能与旧版本迁移数据有关',
+          retryable: true,
+        ));
         errorMessage = '此历史会话的文件差异暂不可用，可能与旧版本迁移数据有关';
         notifyListeners();
         return;
       }
       _diffUnavailableSessions.remove(sessionId);
       final diffs = data['diffs'] as List<dynamic>? ?? const [];
-      final items = _timelineBySession.putIfAbsent(sessionId, () => []);
       for (final raw in diffs) {
         final map = Map<String, dynamic>.from(raw as Map);
         items.add(
@@ -1166,6 +1207,7 @@ class MobileBridgeClient extends ChangeNotifier {
         if (role == 'user') {
           // 用户消息同样按 partId 归属：增量追加到原消息，重放由 revision 门禁丢弃（J0.4）
           final messageId = event.payload['messageId'] as String?;
+          final attachments = parseAttachments(event.payload['attachments']);
           if (partId != null) {
             UserPromptItem? target;
             for (final item in items) {
@@ -1194,13 +1236,17 @@ class MobileBridgeClient extends ChangeNotifier {
                 claimed.partId = partId;
                 claimed.revision = partRevision ?? 0;
                 claimed.message = delta;
+                if (attachments.isNotEmpty) claimed.attachments = attachments;
               } else {
                 items.add(UserPromptItem(delta,
-                    partId: partId, revision: partRevision ?? 0, messageId: messageId));
+                    partId: partId,
+                    revision: partRevision ?? 0,
+                    messageId: messageId,
+                    attachments: attachments));
               }
             }
           } else {
-            items.add(UserPromptItem(delta, messageId: messageId));
+            items.add(UserPromptItem(delta, messageId: messageId, attachments: attachments));
           }
           markApplied();
           break;

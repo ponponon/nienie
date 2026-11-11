@@ -1171,4 +1171,101 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('J0.6b-3.2 附件端到端：事件附件保存 + 快照 resource 块不丢弃 + UI 显示文件名/MIME', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 事件路径：text+附件并存时附件保存到 UserPromptItem
+    transport.emitServerEvent(j04Evt(eventId: 'a1', seq: 1, type: 'text_delta',
+        payload: {
+          'delta': '请分析这个图片',
+          'role': 'user',
+          'partId': 'msg_att:0',
+          'partRevision': 7,
+          'attachments': [
+            {'name': 'image.png', 'mime': 'image/png', 'sourceType': 'uri', 'uri': 'file:///w/image.png'},
+          ],
+        }));
+    await tester.pump();
+    var prompt = client.timelineFor('ses_alpha').whereType<UserPromptItem>().single;
+    expect(prompt.attachments.single.name, 'image.png');
+    expect(prompt.attachments.single.mime, 'image/png');
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -1200));
+    await tester.pumpAndSettle();
+    expect(find.text('image.png · image/png'), findsOneWidget); // UI 可见
+
+    // 快照路径：resource 块转换为附件，不丢弃
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_att',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep_snap',
+      'watermark': 1,
+      'capturedAt': '2026-11-10T00:00:00Z',
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {'kind': 'message', 'partId': 'p1', 'ordinal': 0, 'revision': 2, 'createdAt': 'x', 'updatedAt': 'x',
+          'role': 'user', 'content': [
+            {'type': 'text', 'text': '看下这个文件'},
+            {'type': 'resource', 'uri': 'file:///w/a.ts', 'name': 'a.ts', 'mimeType': 'text/plain'},
+          ]},
+      ],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    await tester.pump();
+    prompt = client.timelineFor('ses_alpha').whereType<UserPromptItem>().single;
+    expect(prompt.attachments.single.name, 'a.ts');
+    expect(prompt.attachments.single.uri, 'file:///w/a.ts');
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -1200));
+    await tester.pumpAndSettle();
+    expect(find.text('a.ts · text/plain'), findsOneWidget);
+    client.dispose();
+  });
+
+  testWidgets('J0.6b-3.2 Diff unavailable 显示降级提示，重试不重复生成差异卡', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.diffUnavailable = true;
+    await client.loadSessionDiffs('ses_alpha');
+    await tester.pump();
+    expect(client.diffUnavailableFor('ses_alpha'), isTrue);
+    expect(
+      client.timelineFor('ses_alpha').whereType<ErrorCardItem>().where((e) => e.code == 'DIFF_UNAVAILABLE').length,
+      1,
+    );
+
+    // 重试（仍不可用）→ 不重复提示
+    await client.loadSessionDiffs('ses_alpha');
+    await tester.pump();
+    expect(
+      client.timelineFor('ses_alpha').whereType<ErrorCardItem>().where((e) => e.code == 'DIFF_UNAVAILABLE').length,
+      1,
+    );
+
+    // 恢复可用 → 提示消失，差异卡生成；再重试不重复差异卡
+    transport.diffUnavailable = false;
+    transport.diffResponse = [
+      {'diffId': 'd1', 'file': 'a.ts', 'before': '', 'after': '@@', 'additions': 1, 'deletions': 0},
+    ];
+    await client.loadSessionDiffs('ses_alpha');
+    await client.loadSessionDiffs('ses_alpha');
+    await tester.pump();
+    expect(client.timelineFor('ses_alpha').whereType<FileDiffCardItem>().length, 1);
+    expect(
+      client.timelineFor('ses_alpha').whereType<ErrorCardItem>().where((e) => e.code == 'DIFF_UNAVAILABLE').isEmpty,
+      isTrue,
+    );
+    client.dispose();
+  });
+
 }

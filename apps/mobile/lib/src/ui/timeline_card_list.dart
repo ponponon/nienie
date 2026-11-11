@@ -60,13 +60,54 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     bottomRight: Radius.circular(4),
                   ),
                 ),
-                child: Text(
-                  item.message,
-                  style: const TextStyle(
-                    color: _textPrimary,
-                    fontSize: 14,
-                    height: 1.45,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      item.message,
+                      style: const TextStyle(
+                        color: _textPrimary,
+                        fontSize: 14,
+                        height: 1.45,
+                      ),
+                    ),
+                    // 附件元数据可见（J0.6b-3.2）：文件名 + MIME
+                    for (final attachment in item.attachments) ...[
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              LucideIcons.paperclip,
+                              size: 12,
+                              color: _textSecondary,
+                            ),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                attachment.name.isNotEmpty
+                                    ? '${attachment.name} · ${attachment.mime}'
+                                    : attachment.mime,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: _textSecondary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
