@@ -407,3 +407,14 @@
 - **turn 范围解析**（`resolveDiffTurnRange`）：from 缺省=最新用户消息、to 缺省=from 自身，返回解析后的真实 User Message ID 供 diffId 使用；校验 from/to 必须是用户消息且 to 不早于 from（ChatGPT 要求的"实际生效 turn 范围"）。
 - 测试 79 个（新增 8：四态映射/输出抽取/事件规格顺序与 partId/revision/快照显式 status 与 ordinal/turn 范围默认与校验/diffId 公式与敏感性与空值拒绝）。
 - **待 ChatGPT 裁决的划界**（见下轮审查）：会话 CRUD/写入/事件切换与 v1 SQLite 读取删除的先后；streaming→running 还是 pending（两轮审查口径不一致）；乐观消息 messageId 需要 session.send 响应携带（协议小变更）。
+
+### 2026-11-10 J0.6b-3a 审查修正（ChatGPT 裁决落地）
+
+- **裁决 A（streaming 映射）**：`mapV2ToolStatus('streaming')` 改为 **pending**（streaming=模型还在生成工具参数、未执行；running=已进入执行）。且 tool_use 事件携带显式 `status`，手机端 reducer 采纳规则：新建卡采纳 requestedStatus（v1 无 status 默认 running 兼容）；pending→running 允许升级；running→pending 禁止降级；completed/failed 吸收态不变。
+- **裁决 B**：J0.6b-3 采用 **B2**（含最小 v2 SSE 接入，SSE 用独立长连接处理器而非 client.request）；J0.7 专注 Durable Log/watermark/快照串行化；**v1 SQLite 删除推迟到新旧读取真实数据对照通过后**（对照前保留 fallback）。
+- **裁决 C**：乐观消息关联增加请求侧 `clientMessageId`（手机生成 msg_xxx → session.send → prompt body.id，响应 messageId 校验一致），消除「SSE 先于 send 响应到达」竞态。
+- **diffId 允许空 patch**（二进制/无 hunk 差异合法），仅要求 string；其余四字段仍须已解析非空。
+- **无损转换**：error 工具同时保留错误信息与部分输出（`boom\npartial`）；file 块保留 name|uri 双字段（`file:name|uri`）；空文本但带附件的用户消息不消失（合成 `file:name|uri|mime`/`agent:`/`skill:` 摘要行）。
+- **Schema 严格化**：Assistant.agent/model 必填、ToolState.Running.metadata 必填、Completed.content 非空元组、OtherMessage 九种类型按官方逐字段建模（Shell/Skill/Synthetic/System/Compaction/Idle/AgentSelected/ModelSelected/LocationSwitched）、limit 收敛 number|string 口径。
+- **分页**：新增 `listAllMessages` 完整分页器（首页显式 order=asc、后续页 cursor-only 且过滤条件不变）；restore/resolve 强制升序输入（降序抛错）。
+- 测试 141 vitest + 28 mobile 全绿。剩余 J0.6b-3b..g（clientMessageId 协议、Session CRUD/写入切 v2、Message/Snapshot/Diff 实际接入、最小 v2 SSE、真实数据对照、移除 v1 SQLite）按序进行。

@@ -20,7 +20,10 @@ export function deriveDiffId(input: DiffIdInput): string {
   const fromMessageId = requireResolvedId('fromMessageId', input.fromMessageId);
   const toMessageId = requireResolvedId('toMessageId', input.toMessageId);
   const file = requireResolvedId('file', input.file);
-  const patch = requireResolvedId('patch', input.patch);
+  const patch = input.patch;
+  if (typeof patch !== 'string') {
+    throw new Error('diffId input patch must be a string (empty patch is allowed)');
+  }
   const canonical = JSON.stringify(['diff:v1', sessionId, fromMessageId, toMessageId, file, patch]);
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 }

@@ -17,6 +17,7 @@ import type {
   OpenCodeV2SessionInfo,
   OpenCodeV2SessionListQuery,
   OpenCodeV2SessionListResponse,
+  OpenCodeV2SessionMessageInfo,
   OpenCodeV2FileDiffInfo,
 } from './types.js';
 
@@ -145,6 +146,26 @@ export class OpenCodeV2Client {
     if (query.cursor !== undefined) params['cursor'] = query.cursor;
     if (query.type !== undefined) params['type'] = query.type;
     return this.request<OpenCodeV2MessageListResponse>('GET', `${sessionPath(sessionId)}/message`, { query: params });
+  }
+
+  /** 完整分页读取全部消息（升序）：首页显式 order=asc，后续页只带 cursor 且保持其余过滤条件不变。 */
+  async listAllMessages(
+    sessionId: string,
+    options: { limit?: number | string | undefined; type?: OpenCodeV2MessageListQuery['type'] } = {},
+  ): Promise<OpenCodeV2SessionMessageInfo[]> {
+    const pageSize = options.limit ?? 200;
+    const messages: OpenCodeV2SessionMessageInfo[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page: OpenCodeV2MessageListResponse =
+        cursor === undefined
+          ? await this.listMessages(sessionId, { limit: pageSize, order: 'asc', type: options.type })
+          : await this.listMessages(sessionId, { limit: pageSize, type: options.type, cursor });
+      messages.push(...page.data);
+      const next = page.cursor.next;
+      if (next === undefined || next === null) return messages;
+      cursor = next;
+    }
   }
 
   async getSessionDiff(sessionId: string, query: OpenCodeV2DiffQuery = {}): Promise<OpenCodeV2FileDiffInfo[]> {

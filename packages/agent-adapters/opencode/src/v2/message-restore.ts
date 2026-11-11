@@ -2,6 +2,7 @@ import type { SessionSnapshotPart } from '@nienie/protocol';
 import type {
   OpenCodeV2AssistantContentPart,
   OpenCodeV2SessionMessageInfo,
+  OpenCodeV2UserMessage,
   OpenCodeV2ToolContent,
   OpenCodeV2ToolState,
 } from './types.js';
@@ -16,7 +17,7 @@ export type NienieToolStatus = 'pending' | 'running' | 'completed' | 'failed';
 export function mapV2ToolStatus(status: OpenCodeV2ToolState['status']): NienieToolStatus {
   switch (status) {
     case 'streaming':
-      return 'running';
+      return 'pending';
     case 'running':
       return 'running';
     case 'completed':
@@ -29,7 +30,7 @@ export function mapV2ToolStatus(status: OpenCodeV2ToolState['status']): NienieTo
 export function contentToText(content: OpenCodeV2ToolContent[] | undefined): string {
   if (!content) return '';
   return content
-    .map((block) => (block.type === 'text' ? block.text : `file:${block.name ?? block.uri}`))
+    .map((block) => (block.type === 'text' ? block.text : `file:${block.name ?? ''}|${block.uri}`))
     .filter((text) => text.length > 0)
     .join('\n');
 }
@@ -52,12 +53,11 @@ export function extractToolOutput(state: OpenCodeV2ToolState): { input: Record<s
       return { input: state.input, output: '', isError: false };
     case 'completed':
       return { input: state.input, output: contentToText(state.content), isError: false };
-    case 'error':
-      return {
-        input: state.input,
-        output: state.error.message,
-        isError: true,
-      };
+    case 'error': {
+      const partial = contentToText(state.content);
+      const output = partial.length > 0 ? `${state.error.message}\n${partial}` : state.error.message;
+      return { input: state.input, output, isError: true };
+    }
   }
 }
 
@@ -69,20 +69,50 @@ export function assistantPartId(messageId: string, ordinal: number): string {
   return `${messageId}:${ordinal}`;
 }
 
+/** 用户消息附件保留策略：有文本时展示文本；仅附件无文本时合成可检索摘要（name/uri/mime 不丢失）。
+ *  v2 响应侧文件附件是 Prompt.FileAttachment（data/mime/source），URI 在 source.type='uri' 上。 */
+export function userMessageText(message: OpenCodeV2UserMessage): string {
+  if (message.text.length > 0) return message.text;
+  const lines: string[] = [];
+  for (const file of message.files ?? []) {
+    const uri = file.source !== undefined && file.source.type === 'uri' ? file.source.uri : '(inline)';
+    lines.push(`file:${file.name ?? ''}|${uri}|${file.mime}`);
+  }
+  for (const agent of message.agents ?? []) {
+    lines.push(`agent:${agent.name}`);
+  }
+  for (const skill of message.skills ?? []) {
+    lines.push(`skill:${skill.id}`);
+  }
+  return lines.join('\n');
+}
+
+function assertAscending(messages: OpenCodeV2SessionMessageInfo[]): void {
+  let previous = Number.NEGATIVE_INFINITY;
+  for (const message of messages) {
+    if (message.time.created < previous) {
+      throw new Error('messages must be in ascending time order');
+    }
+    previous = message.time.created;
+  }
+}
+
 /** 将 v2 Message API 的完整消息流转换为 Nienie 历史事件规格（增量全值、稳定 partId/revision）。
  *  期望 messages 按时间升序（GET /message?order=asc 全部分页拼接后的结果）。 */
 export function restoreHistoryEvents(messages: OpenCodeV2SessionMessageInfo[]): RestoredEventSpec[] {
+  assertAscending(messages);
   const events: RestoredEventSpec[] = [];
   for (const message of messages) {
     if (message.type === 'user') {
-      if (message.text.length === 0) continue;
+      const text = userMessageText(message);
+      if (text.length === 0) continue;
       events.push({
         type: 'text_delta',
         payload: {
-          delta: message.text,
+          delta: text,
           role: 'user',
           partId: userPartId(message.id),
-          partRevision: message.text.length || 1,
+          partRevision: text.length || 1,
           messageId: message.id,
         },
       });
@@ -122,6 +152,7 @@ export function restoreHistoryEvents(messages: OpenCodeV2SessionMessageInfo[]): 
             toolCallId: part.id,
             name: part.name,
             input,
+            status: mapV2ToolStatus(part.state.status),
             partId: part.id,
             partRevision: 1,
             messageId: message.id,
@@ -148,6 +179,7 @@ export function restoreHistoryEvents(messages: OpenCodeV2SessionMessageInfo[]): 
 
 /** 将 v2 消息转换为 SessionSnapshot Part（快照是状态：全量、按序、带显式 status）。 */
 export function buildSnapshotParts(messages: OpenCodeV2SessionMessageInfo[]): SessionSnapshotPart[] {
+  assertAscending(messages);
   const parts: SessionSnapshotPart[] = [];
   let ordinal = 0;
   const stamp = () => ({ ordinal: ordinal++, createdAt: '', updatedAt: '' });
@@ -155,15 +187,16 @@ export function buildSnapshotParts(messages: OpenCodeV2SessionMessageInfo[]): Se
     const createdAt = new Date(message.time.created).toISOString();
     const base = () => ({ ...stamp(), createdAt, updatedAt: createdAt });
     if (message.type === 'user') {
-      if (message.text.length === 0) continue;
+      const text = userMessageText(message);
+      if (text.length === 0) continue;
       parts.push({
         ...base(),
         kind: 'message',
         messageId: message.id,
         role: 'user',
-        content: [{ type: 'text', text: message.text }],
+        content: [{ type: 'text', text }],
         partId: userPartId(message.id),
-        revision: message.text.length || 1,
+        revision: text.length || 1,
       });
       continue;
     }
@@ -221,6 +254,7 @@ export function resolveDiffTurnRange(
   from?: string | undefined,
   to?: string | undefined,
 ): DiffTurnRange {
+  assertAscending(messages);
   const userIds = messages.filter((m) => m.type === 'user').map((m) => m.id);
   if (userIds.length === 0) {
     throw new Error('Cannot resolve diff range: session has no user messages');

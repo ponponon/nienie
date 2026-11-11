@@ -68,7 +68,7 @@ export type OpenCodeV2SessionInfo = {
 };
 
 export type OpenCodeV2SessionListQuery = {
-  limit?: number | undefined;
+  limit?: number | string | undefined;
   order?: 'asc' | 'desc' | undefined;
   search?: string | undefined;
   parentID?: string | undefined;
@@ -291,11 +291,11 @@ export type OpenCodeV2StructuredError = {
 
 export type OpenCodeV2ToolState =
   | { status: 'streaming'; input: string }
-  | { status: 'running'; input: Record<string, unknown>; metadata?: Record<string, unknown> | undefined }
+  | { status: 'running'; input: Record<string, unknown>; metadata: Record<string, unknown> }
   | {
       status: 'completed';
       input: Record<string, unknown>;
-      content: OpenCodeV2ToolContent[];
+      content: [OpenCodeV2ToolContent, ...OpenCodeV2ToolContent[]];
       metadata?: Record<string, unknown> | undefined;
     }
   | {
@@ -345,8 +345,8 @@ export type OpenCodeV2AssistantMessage = {
   id: string;
   time: { created: number; streamed?: number | undefined; completed?: number | undefined };
   type: 'assistant';
-  agent?: string | undefined;
-  model?: OpenCodeV2ModelRef | undefined;
+  agent: string;
+  model: OpenCodeV2ModelRef;
   content: OpenCodeV2AssistantContentPart[];
   metadata?: Record<string, unknown> | undefined;
 };
@@ -362,12 +362,80 @@ export type OpenCodeV2SystemMessageType =
   | 'compaction'
   | 'idle';
 
-export type OpenCodeV2OtherMessage = {
+type OpenCodeV2OtherMessageBase = {
   id: string;
   time: { created: number };
-  type: OpenCodeV2SystemMessageType;
   metadata?: Record<string, unknown> | undefined;
 };
+
+export type OpenCodeV2ShellMessage = OpenCodeV2OtherMessageBase & {
+  type: 'shell';
+  shellID: string;
+  command: string;
+  status: string;
+  exit?: number | undefined;
+  output?: string | undefined;
+};
+
+export type OpenCodeV2SkillMessage = OpenCodeV2OtherMessageBase & {
+  type: 'skill';
+  skill: string;
+  name: string;
+  text: string;
+};
+
+export type OpenCodeV2SyntheticMessage = OpenCodeV2OtherMessageBase & {
+  type: 'synthetic';
+  text: string;
+  description?: string | undefined;
+};
+
+export type OpenCodeV2SystemMessage = OpenCodeV2OtherMessageBase & {
+  type: 'system';
+  text: string;
+  description?: string | undefined;
+};
+
+export type OpenCodeV2CompactionMessage = OpenCodeV2OtherMessageBase & {
+  type: 'compaction';
+};
+
+export type OpenCodeV2IdleMessage = OpenCodeV2OtherMessageBase & {
+  type: 'idle';
+  outcome: string;
+  error?: unknown;
+};
+
+export type OpenCodeV2AgentSelectedMessage = OpenCodeV2OtherMessageBase & {
+  type: 'agent-switched';
+  agent: string;
+  previous?: string | undefined;
+};
+
+export type OpenCodeV2ModelSelectedMessage = OpenCodeV2OtherMessageBase & {
+  type: 'model-switched';
+  model: OpenCodeV2ModelRef;
+  previous?: OpenCodeV2ModelRef | undefined;
+};
+
+export type OpenCodeV2LocationSwitchedMessage = OpenCodeV2OtherMessageBase & {
+  type: 'location-switched';
+  location: OpenCodeV2LocationRef;
+  projectID?: string | undefined;
+  subpath?: string | undefined;
+  previous?: unknown;
+};
+
+export type OpenCodeV2OtherMessage =
+  | OpenCodeV2ShellMessage
+  | OpenCodeV2SkillMessage
+  | OpenCodeV2SyntheticMessage
+  | OpenCodeV2SystemMessage
+  | OpenCodeV2CompactionMessage
+  | OpenCodeV2IdleMessage
+  | OpenCodeV2AgentSelectedMessage
+  | OpenCodeV2ModelSelectedMessage
+  | OpenCodeV2LocationSwitchedMessage;
 
 export type OpenCodeV2SessionMessageInfo =
   | OpenCodeV2UserMessage
@@ -375,7 +443,7 @@ export type OpenCodeV2SessionMessageInfo =
   | OpenCodeV2OtherMessage;
 
 export type OpenCodeV2MessageListQuery = {
-  limit?: number | undefined;
+  limit?: number | string | undefined;
   order?: 'asc' | 'desc' | undefined;
   cursor?: string | undefined;
   type?: OpenCodeV2SystemMessageType | 'assistant' | 'user' | undefined;

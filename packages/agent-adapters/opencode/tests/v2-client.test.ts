@@ -442,4 +442,25 @@ describe('OpenCodeV2Client', () => {
     const search = new URL(captured[0]!.url).searchParams;
     expect(Object.fromEntries(search)).toEqual({'from': 'msg_a', 'to': 'msg_b', 'context': '3'});
   });
+
+  it('listAllMessages paginates with explicit asc first page and cursor-only follow-ups', async () => {
+    const captured: CapturedRequest[] = [];
+    const m = (id: string) => ({ id, time: { created: 1 }, type: 'user', text: id });
+    const pages = [
+      json(200, { data: [m('m1')], cursor: { next: 'c2', previous: null } }),
+      json(200, { data: [m('m2')], cursor: { next: 'c3', previous: 'c1' } }),
+      json(200, { data: [m('m3')], cursor: { next: null, previous: 'c2' } }),
+    ];
+    let call = 0;
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => pages[call++]!, captured),
+    });
+    const messages = await client.listAllMessages('ses_1', { limit: 1, type: 'user' });
+    expect(messages.map((msg) => msg.id)).toEqual(['m1', 'm2', 'm3']);
+    const queries = captured.map((req) => Object.fromEntries(new URL(req.url).searchParams));
+    expect(queries[0]).toEqual({'limit': '1', 'order': 'asc', 'type': 'user'});
+    expect(queries[1]).toEqual({'limit': '1', 'type': 'user', 'cursor': 'c2'});
+    expect(queries[2]).toEqual({'limit': '1', 'type': 'user', 'cursor': 'c3'});
+  });
 });

@@ -25,6 +25,8 @@ const assistantMsg: OpenCodeV2AssistantMessage = {
   id: 'msg_a1',
   time: { created: 1760000001000 },
   type: 'assistant',
+  agent: 'build',
+  model: { id: 'claude-sonnet-4', providerID: 'anthropic' },
   content: [
     { type: 'text', text: '好的' },
     { type: 'reasoning', text: '先看看结构' },
@@ -43,13 +45,15 @@ function toolState(state: OpenCodeV2ToolState): OpenCodeV2AssistantMessage {
     id: 'msg_t',
     time: { created: 1760000002000 },
     type: 'assistant',
+    agent: 'build',
+    model: { id: 'claude-sonnet-4', providerID: 'anthropic' },
     content: [{ type: 'tool', id: 'call_x', name: 'shell', state, time: { created: 1760000002000 } }],
   };
 }
 
 describe('mapV2ToolStatus / extractToolOutput', () => {
   it('maps the four v2 tool states to Nienie statuses', () => {
-    expect(mapV2ToolStatus('streaming')).toBe('running');
+    expect(mapV2ToolStatus('streaming')).toBe('pending');
     expect(mapV2ToolStatus('running')).toBe('running');
     expect(mapV2ToolStatus('completed')).toBe('completed');
     expect(mapV2ToolStatus('error')).toBe('failed');
@@ -62,7 +66,7 @@ describe('mapV2ToolStatus / extractToolOutput', () => {
       isError: false,
     });
     expect(extractToolOutput({ status: 'streaming', input: '{"command":"ls"}' }).input).toEqual({'command': 'ls'});
-    expect(extractToolOutput({ status: 'running', input: { command: 'ls' } })).toEqual({
+    expect(extractToolOutput({ status: 'running', input: { command: 'ls' }, metadata: {} })).toEqual({
       input: {'command': 'ls'},
       output: '',
       isError: false,
@@ -73,7 +77,7 @@ describe('mapV2ToolStatus / extractToolOutput', () => {
         input: {},
         content: [{ type: 'text', text: 'out' }, { type: 'file', uri: 'file:///x', mime: 'text/plain', name: 'x.txt' }],
       }),
-    ).toEqual({ input: {}, output: 'out\nfile:x.txt', isError: false });
+    ).toEqual({ input: {}, output: 'out\nfile:x.txt|file:///x', isError: false });
     expect(
       extractToolOutput({
         status: 'error',
@@ -81,7 +85,7 @@ describe('mapV2ToolStatus / extractToolOutput', () => {
         error: { type: 'Error', message: 'boom' },
         content: [{ type: 'text', text: 'partial' }],
       }),
-    ).toEqual({ input: {}, output: 'boom', isError: true });
+    ).toEqual({ input: {}, output: 'boom\npartial', isError: true });
   });
 });
 
@@ -122,7 +126,7 @@ describe('restoreHistoryEvents', () => {
   it('emits tool_use only for non-terminal tool states', () => {
     for (const state of [
       { status: 'streaming', input: '{}' },
-      { status: 'running', input: {} },
+      { status: 'running', input: {}, metadata: {} },
     ] as OpenCodeV2ToolState[]) {
       const events = restoreHistoryEvents([toolState(state)]);
       expect(events.map((e) => e.type)).toEqual(['tool_use']);
@@ -156,7 +160,7 @@ describe('buildSnapshotParts', () => {
   });
 
   it('restores non-terminal tools as running with revision 1', () => {
-    const parts = buildSnapshotParts([toolState({ status: 'running', input: { command: 'ls' } })]);
+    const parts = buildSnapshotParts([toolState({ status: 'running', input: { command: 'ls' }, metadata: {} })]);
     expect(parts[0]).toMatchObject({ status: 'running', revision: 1 });
   });
 });
@@ -189,5 +193,56 @@ describe('resolveDiffTurnRange', () => {
     expect(() => resolveDiffTurnRange([userMsg, assistantMsg, u2], 'msg_missing')).toThrow();
     expect(() => resolveDiffTurnRange([assistantMsg])).toThrow();
     expect(() => resolveDiffTurnRange([userMsg, assistantMsg, u2], 'msg_a1')).toThrow();
+  });
+});
+
+describe('J0.6b-3a 保真策略', () => {
+  it('tool_use 携带显式 status（streaming→pending），tool_result 仍为终态事件', () => {
+    const events = restoreHistoryEvents([toolState({ status: 'streaming', input: '{"command":"ls"' })]);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload['status']).toBe('pending');
+    const done = restoreHistoryEvents([toolState({ status: 'completed', input: {}, content: [{ type: 'text', text: 'ok' }] })]);
+    expect(done[0]!.payload['status']).toBe('completed');
+  });
+
+  it('空文本但带附件的用户消息不消失：保留 name/uri/mime', () => {
+    const attachmentOnly: OpenCodeV2UserMessage = {
+      id: 'msg_file',
+      time: { created: 1760000000000 },
+      type: 'user',
+      text: '',
+      files: [{ data: 'AA==', mime: 'text/plain', source: { type: 'uri', uri: 'file:///w/a.ts' }, name: 'a.ts' }],
+      agents: [{ name: 'explore' }],
+      skills: [{ id: 'skill_1', name: 's1' }],
+    };
+    const events = restoreHistoryEvents([attachmentOnly]);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload['delta']).toBe('file:a.ts|file:///w/a.ts|text/plain\nagent:explore\nskill:skill_1');
+    const parts = buildSnapshotParts([attachmentOnly]);
+    expect(parts).toHaveLength(1);
+    expect(parts[0]!.kind).toBe('message');
+    expect((parts[0] as unknown as { content: Array<{ text: string }> }).content[0]!.text).toContain('file:a.ts|file:///w/a.ts|text/plain');
+  });
+
+  it('error 工具保留部分输出与错误信息两者', () => {
+    const events = restoreHistoryEvents([
+      toolState({
+        status: 'error',
+        input: {},
+        error: { type: 'Error', message: 'boom' },
+        content: [{ type: 'text', text: 'partial' }],
+      }),
+    ]);
+    expect(events[1]!.payload['content']).toBe('boom\npartial');
+  });
+
+  it('拒绝降序消息数组（防止分页拼接错误导致顺序错乱）', () => {
+    const descending = [
+      { ...userMsg, id: 'msg_late', time: { created: 3000 } },
+      { ...userMsg, id: 'msg_early', time: { created: 1000 } },
+    ] as OpenCodeV2SessionMessageInfo[];
+    expect(() => restoreHistoryEvents(descending)).toThrow(/ascending/);
+    expect(() => buildSnapshotParts(descending)).toThrow(/ascending/);
+    expect(() => resolveDiffTurnRange(descending)).toThrow(/ascending/);
   });
 });

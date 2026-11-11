@@ -1233,6 +1233,9 @@ class MobileBridgeClient extends ChangeNotifier {
         final input = Map<String, dynamic>.from(
           event.payload['input'] as Map? ?? const {},
         );
+        // v2 事件带显式 status（streaming→pending）；旧 v1 事件无 status 默认 running（兼容）
+        final rawStatus = event.payload['status'] as String?;
+        final requested = rawStatus == null ? ToolCallStatus.running : parseToolCallStatus(rawStatus);
         _resolvePending(event.sessionId);
         ToolCallCardItem? existing;
         for (final item in items.reversed) {
@@ -1243,9 +1246,9 @@ class MobileBridgeClient extends ChangeNotifier {
         }
         if (existing != null) {
           final card = existing;
-          // 幂等 upsert：重放不新增卡片；终态（completed/failed）不回退为 running
+          // 状态机：pending→running 允许升级；running→pending 禁止降级；终态吸收
           if (card.status == ToolCallStatus.pending || card.status == ToolCallStatus.running) {
-            card.status = ToolCallStatus.running;
+            if (requested == ToolCallStatus.running) card.status = ToolCallStatus.running;
           }
           // 结果先于声明时占位卡信息补齐：真实工具名覆盖占位名，input 只补缺失字段
           if (card.name == 'tool' && name != 'tool') card.name = name;
@@ -1260,7 +1263,7 @@ class MobileBridgeClient extends ChangeNotifier {
               toolCallId: toolCallId,
               name: name,
               input: input,
-              status: ToolCallStatus.running,
+              status: requested,
               partId: partId,
               revision: partRevision ?? 0,
             ),

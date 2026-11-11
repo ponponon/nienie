@@ -1102,4 +1102,41 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('J0.6b-3a tool_use 显式 status 采纳：streaming→pending、running 不降级、v1 无 status 默认 running', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // v2 streaming → pending（新建采纳）
+    transport.emitServerEvent(j04Evt(eventId: 's1', seq: 1, type: 'tool_use',
+        payload: {'toolCallId': 't1', 'name': 'shell', 'input': {}, 'status': 'pending'}));
+    await tester.pump();
+    var tool = client.timelineFor('ses_alpha').whereType<ToolCallCardItem>().single;
+    expect(tool.status, ToolCallStatus.pending);
+
+    // running 升级允许
+    transport.emitServerEvent(j04Evt(eventId: 's2', seq: 2, type: 'tool_use',
+        payload: {'toolCallId': 't1', 'name': 'shell', 'input': {}, 'status': 'running'}));
+    await tester.pump();
+    tool = client.timelineFor('ses_alpha').whereType<ToolCallCardItem>().single;
+    expect(tool.status, ToolCallStatus.running);
+
+    // running + pending 禁止降级
+    transport.emitServerEvent(j04Evt(eventId: 's3', seq: 3, type: 'tool_use',
+        payload: {'toolCallId': 't1', 'name': 'shell', 'input': {}, 'status': 'pending'}));
+    await tester.pump();
+    tool = client.timelineFor('ses_alpha').whereType<ToolCallCardItem>().single;
+    expect(tool.status, ToolCallStatus.running);
+
+    // 旧 v1 事件无 status → 默认 running（新建）
+    transport.emitServerEvent(j04Evt(eventId: 's4', seq: 4, type: 'tool_use',
+        payload: {'toolCallId': 't2', 'name': 'shell', 'input': {}}));
+    await tester.pump();
+    final t2 = client.timelineFor('ses_alpha').whereType<ToolCallCardItem>().firstWhere((t) => t.toolCallId == 't2');
+    expect(t2.status, ToolCallStatus.running);
+    client.dispose();
+  });
+
 }

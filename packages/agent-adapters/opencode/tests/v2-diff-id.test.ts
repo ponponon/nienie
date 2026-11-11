@@ -44,12 +44,20 @@ describe('deriveDiffId', () => {
     expect(a).not.toBe(b);
   });
 
+  it('allows empty patch (binary/no-hunk diffs) but not undefined', () => {
+    const withEmpty = deriveDiffId({ ...base, patch: '' });
+    expect(withEmpty).toHaveLength(64);
+    expect(withEmpty).not.toBe(deriveDiffId(base));
+    expect(() => deriveDiffId({ ...base, patch: undefined as unknown as string })).toThrow();
+    expect(() => deriveDiffId({ ...base, patch: null as unknown as string })).toThrow();
+  });
+
   it('rejects unresolved or empty from/to and other fields', () => {
     expect(() => deriveDiffId({ ...base, fromMessageId: '' })).toThrow();
     expect(() => deriveDiffId({ ...base, toMessageId: '' })).toThrow();
     expect(() => deriveDiffId({ ...base, sessionId: '' })).toThrow();
     expect(() => deriveDiffId({ ...base, file: '' })).toThrow();
-    expect(() => deriveDiffId({ ...base, patch: '' })).toThrow();
+    expect(() => deriveDiffId({ ...base, patch: undefined as unknown as string })).toThrow();
     expect(() => deriveDiffId({ ...base, fromMessageId: undefined as unknown as string })).toThrow();
     expect(() => deriveDiffId({ ...base, toMessageId: null as unknown as string })).toThrow();
   });
