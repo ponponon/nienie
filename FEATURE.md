@@ -436,3 +436,11 @@
 - **diffId 正式修复（J0 P2 结清）**：`SessionFileDiff` 增加必填 `diffId`（sha256 稳定派生）；v1 回退路径用 `legacy-v1` 哨兵范围派生（确定性）；手机端 FileDiffCardItem 改用 `map['diffId']`（不再拿文件路径当 ID）。v2 的 patch 文本暂由 `after` 字段承载（before 空），J0.7 UI 重构时换 patch 结构。
 - 测试 147 vitest（新增 v2 模式适配器 6 用例：detect/list/create/send 模型切换+回显校验/cancel/权限映射/历史恢复 eventId/快照/turn 范围 diffId）+ 29 mobile 全绿。
 - **状态**：6b-3c/3d 完成；剩余 3e（最小 v2 SSE）、3f（真实数据对照）、3g（移除 v1 SQLite）。
+
+### 2026-11-10 J0.6b-3e 最小 v2 SSE 实时事件（B2 裁决落地）
+
+- **新增 `v2/sse.ts`**：`streamV2EventFrames` 独立长连接处理器（`GET /api/event` 全局流、Basic Auth、`redirect:'error'`、`parseSseStream` 解帧——不进 `client.request` 的 15s JSON 通道）+ `V2LiveEventMapper` 实时映射器。
+- **事件映射**（最小可用集）：`session.text/reasoning.delta|ended` → text/thinking 增量（partId=`${assistantMessageID}:${ordinal}` 与恢复层同身份；ended 按累计水位补缺后缀，全量已到则不重复）；`session.tool.input.started` → tool_use status=pending、`input.ended`/`called` → running（input 解析）、`success`/`failed` → tool_result（failed 保留 error.message+部分输出）；`execution.started/succeeded/failed/interrupted` → status running/idle/cancelled（failed 另发 error 事件）；`permission.asked` → status waiting+权限卡；`session.usage.updated` → usage。未知事件忽略（有意的 Timeline Projection）。
+- **适配器接线**：v2 模式事件流统一 key `v2-global`（全局流不再按 directory 订阅）；实时帧 eventId 从源 `evt_` id 派生（`v2:{id}`，跨重放稳定）；`sendMessage` 前强制建立事件流（强一致门禁保留）；断线重连补偿改为对所有已加载会话跑 `emitV2MessageHistory`（幂等 eventId+revision 门禁保证不重复）。
+- **真机冒烟**：连接桌面 v2 共享服务 `/api/event`（Basic Auth）8 秒收到帧、鉴权与解帧正常；映射器单测覆盖 delta/ended 补缺、工具四态、执行/权限/用量映射。
+- 测试 153 vitest（新增 v2-sse 6 用例）+ 29 mobile 全绿。**至此 6b-3c/3d/3e 完成：手机建会话（桌面可见）→ 发消息 → 实时流式回复的 v2 数据通路全链路打通**；剩余 3f（真实数据对照）/3g（移除 v1 SQLite）。

@@ -29,6 +29,7 @@ import { discoverOpenCodeService, type OpenCodeServiceEndpoint } from './service
 import { OpenCodeV2Client } from './v2/client.js';
 import { deriveDiffId } from './v2/diff-id.js';
 import { buildSnapshotParts, resolveDiffTurnRange, restoreHistoryEvents } from './v2/message-restore.js';
+import { streamV2EventFrames, V2LiveEventMapper, type V2EventFrame } from './v2/sse.js';
 import type { OpenCodeV2SessionInfo } from './v2/types.js';
 
 export { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
@@ -160,6 +161,8 @@ export class OpenCodeAdapter implements AgentAdapter {
   private readonly v2Mode: boolean;
   private readonly v2Endpoint: OpenCodeServiceEndpoint | undefined;
   private v2Client: OpenCodeV2Client | undefined;
+  private v2StreamEndpoint: { baseUrl: string; password?: string | undefined } | undefined;
+  private readonly v2Mapper = new V2LiveEventMapper();
   private readonly normalizer: OpenCodeEventNormalizer;
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
 
@@ -227,6 +230,10 @@ export class OpenCodeAdapter implements AgentAdapter {
     this.eventManager = new AgentEventConnectionManager<unknown>({
       connect: (key, signal) => this.connectEventStream(key, signal),
       onEvent: (raw) => {
+        if (this.v2Mode) {
+          this.emitV2LiveFrame(raw as V2EventFrame);
+          return;
+        }
         for (const event of this.normalizer.normalize(raw)) {
           this.emit(event);
         }
@@ -243,6 +250,7 @@ export class OpenCodeAdapter implements AgentAdapter {
         password: this.v2Endpoint.password,
         fetch: this.fetchImpl,
       });
+      this.v2StreamEndpoint = { baseUrl: this.v2Endpoint.baseUrl, password: this.v2Endpoint.password };
       return this.v2Client;
     }
     const found = await discoverOpenCodeService({ fetch: this.fetchImpl });
@@ -256,7 +264,28 @@ export class OpenCodeAdapter implements AgentAdapter {
       password: found.endpoint.password,
       fetch: this.fetchImpl,
     });
+    this.v2StreamEndpoint = { baseUrl: found.endpoint.baseUrl, password: found.endpoint.password };
     return this.v2Client;
+  }
+
+  /** v2 实时帧 → 统一事件（eventId 从源 evt_ id 派生，partId 身份与恢复层一致）。 */
+  private emitV2LiveFrame(frame: V2EventFrame): void {
+    const sessionId = String(frame.data['sessionID'] ?? '');
+    if (!sessionId) return;
+    for (const spec of this.v2Mapper.map(frame)) {
+      this.emit(
+        createCanonicalEvent({
+          eventId: frame.id ? `v2:${frame.id}` : `v2:${randomUUID()}`,
+          streamEpoch: this.normalizer.streamEpoch,
+          agentId: this.id,
+          sessionId,
+          sequence: this.normalizer.nextSequence(sessionId),
+          timestamp: new Date().toISOString(),
+          type: spec.type,
+          payload: spec.payload,
+        }),
+      );
+    }
   }
 
   private mapV2Session(raw: OpenCodeV2SessionInfo): AgentSession {
@@ -565,6 +594,7 @@ export class OpenCodeAdapter implements AgentAdapter {
   async loadSession(sessionId: string): Promise<AgentSession> {
     if (this.v2Mode) {
       const client = await this.ensureV2Client();
+      await this.connectEvents().catch(() => undefined);
       if (!this.loadedHistorySessions.has(sessionId)) {
         this.loadedHistorySessions.add(sessionId);
         await this.emitV2MessageHistory(sessionId);
@@ -980,6 +1010,8 @@ export class OpenCodeAdapter implements AgentAdapter {
   ): Promise<{ messageId?: string | undefined } | void> {
     if (this.v2Mode) {
       const client = await this.ensureV2Client();
+      // 强一致：实时事件流建立失败则不发 Prompt
+      await this.connectEvents();
       const modelId = options?.modelId;
       if (modelId) {
         const slash = modelId.indexOf('/');
@@ -1104,6 +1136,10 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async connectEvents(directory?: string): Promise<void> {
+    if (this.v2Mode) {
+      await this.eventManager.waitUntilConnected('v2-global');
+      return;
+    }
     const key = directory ?? this.directory ?? '';
     // waitUntilConnected 内部会按需启动 supervisor，并等待「当前」连接真正可用，
     // 避免 ensure + wait 双调用在失败时产生重复建连的竞态窗口。
@@ -1115,6 +1151,16 @@ export class OpenCodeAdapter implements AgentAdapter {
     key: string,
     signal: AbortSignal,
   ): Promise<AsyncIterable<unknown>> {
+    if (this.v2Mode) {
+      await this.ensureV2Client();
+      const endpoint = this.v2StreamEndpoint!;
+      return streamV2EventFrames({
+        endpoint,
+        fetch: this.fetchImpl,
+        signal,
+        parse: parseSseStream,
+      });
+    }
     const effectiveDir = key === '' ? undefined : key;
     const response = await this.fetchImpl(
       this.buildUrl('/event', effectiveDir ? { directory: effectiveDir } : undefined),
@@ -1135,6 +1181,12 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   /** 断线重连后，对已加载的会话做事件历史补偿（增量回放，幂等）。 */
   private compensateHistoryForKey(key: string): void {
+    if (this.v2Mode) {
+      for (const sessionId of this.loadedHistorySessions) {
+        void this.emitV2MessageHistory(sessionId);
+      }
+      return;
+    }
     for (const sessionId of this.loadedHistorySessions) {
       const dir = this.sessionDirectories.get(sessionId) ?? this.directory ?? '';
       if (dir === key) {
