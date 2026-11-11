@@ -495,3 +495,9 @@
 - **catch 作用域收缩**：抽 `verifySessionDiffs` 统一验证——白名单豁免仅作用于 `client.getSessionDiff` 的 HTTP 500；`resolveDiffTurnRange` 本地异常、diffId 计算异常、v1 API 失败/网络错误/非法响应一律 fatal（fail-closed）。
 - **验收表七行全覆盖测试**：v2+白名单+500→unverified；+0/404/401→fatal；v2 非白名单+500→fatal；v1 任意错误→fatal（不吃 v2 白名单）；本地 resolveDiffTurnRange 异常→fatal；全一致→ok。
 - 基线：202 vitest（adapter 120）+ 32 mobile 全绿。
+
+### 2026-11-10 J0.6b 正式封板（OFFICIALLY SEALED @ e73d5cd）
+
+- ChatGPT 终审九维全过：ToolCall 身份一致性 / 严格文本比较 / 附件一致性 / Synthetic 处理 / Snapshot 一致性 / v1-truncated 精确白名单 / Diff fail-closed / HTTP 500 最小授权 / catch 作用域隔离。J0.6b 不再追加验收要求。
+- **J0.6b 全程**：3a Schema/状态机 → 3b clientMessageId → 3c/3d v2 数据面（手机会话桌面可见闭环）→ 3e 最小 v2 SSE → 3f 严格对照（203/203）→ 3.1-3.5 五轮审查收尾，共 13 个 commit（97df99c…e73d5cd）。
+- **J0.7a GO**（Durable Log Client）设计三原则：`DurableCursor = string` opaque token（不解析/不假设格式）、Durable Cursor 与 Nienie Sequence 双序列空间由 Watermark 层映射、恢复语义优先（断线恢复/重复读取/游标推进/进程重启/并发消费一致性）；第一阶段只做接口+分页读取+游标传递，不混入 Snapshot/事件合并/移动端恢复。
