@@ -269,3 +269,125 @@ export type OpenCodeV2LocationResponse<T> = {
   location: OpenCodeV2LocationRef;
   data: T;
 };
+
+export type OpenCodeV2ToolTextContent = { type: 'text'; text: string };
+
+export type OpenCodeV2ToolFileContent = {
+  type: 'file';
+  uri: string;
+  mime: string;
+  name?: string | null | undefined;
+};
+
+export type OpenCodeV2ToolContent = OpenCodeV2ToolTextContent | OpenCodeV2ToolFileContent;
+
+export type OpenCodeV2StructuredError = {
+  type: string;
+  message: string;
+  status?: number | undefined;
+  response?: { body: string } | undefined;
+  retryAfterMs?: number | undefined;
+};
+
+export type OpenCodeV2ToolState =
+  | { status: 'streaming'; input: string }
+  | { status: 'running'; input: Record<string, unknown>; metadata?: Record<string, unknown> | undefined }
+  | {
+      status: 'completed';
+      input: Record<string, unknown>;
+      content: OpenCodeV2ToolContent[];
+      metadata?: Record<string, unknown> | undefined;
+    }
+  | {
+      status: 'error';
+      input: Record<string, unknown>;
+      error: OpenCodeV2StructuredError;
+      content?: OpenCodeV2ToolContent[] | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    };
+
+export type OpenCodeV2AssistantTextPart = { type: 'text'; text: string; native?: unknown };
+
+export type OpenCodeV2AssistantReasoningPart = {
+  type: 'reasoning';
+  text: string;
+  native?: unknown;
+  time?: { created: number; completed?: number | undefined } | undefined;
+};
+
+export type OpenCodeV2AssistantToolPart = {
+  type: 'tool';
+  id: string;
+  name: string;
+  executed?: boolean | undefined;
+  native?: unknown;
+  state: OpenCodeV2ToolState;
+  time: { created: number; ran?: number | undefined; completed?: number | undefined };
+};
+
+export type OpenCodeV2AssistantContentPart =
+  | OpenCodeV2AssistantTextPart
+  | OpenCodeV2AssistantReasoningPart
+  | OpenCodeV2AssistantToolPart;
+
+export type OpenCodeV2UserMessage = {
+  id: string;
+  time: { created: number };
+  type: 'user';
+  text: string;
+  files?: OpenCodeV2InboxFileAttachment[] | undefined;
+  agents?: OpenCodeV2InboxAgentAttachment[] | undefined;
+  skills?: OpenCodeV2InboxSkillAttachment[] | undefined;
+  metadata?: Record<string, unknown> | undefined;
+};
+
+export type OpenCodeV2AssistantMessage = {
+  id: string;
+  time: { created: number; streamed?: number | undefined; completed?: number | undefined };
+  type: 'assistant';
+  agent?: string | undefined;
+  model?: OpenCodeV2ModelRef | undefined;
+  content: OpenCodeV2AssistantContentPart[];
+  metadata?: Record<string, unknown> | undefined;
+};
+
+export type OpenCodeV2SystemMessageType =
+  | 'agent-switched'
+  | 'model-switched'
+  | 'location-switched'
+  | 'synthetic'
+  | 'system'
+  | 'skill'
+  | 'shell'
+  | 'compaction'
+  | 'idle';
+
+export type OpenCodeV2OtherMessage = {
+  id: string;
+  time: { created: number };
+  type: OpenCodeV2SystemMessageType;
+  metadata?: Record<string, unknown> | undefined;
+};
+
+export type OpenCodeV2SessionMessageInfo =
+  | OpenCodeV2UserMessage
+  | OpenCodeV2AssistantMessage
+  | OpenCodeV2OtherMessage;
+
+export type OpenCodeV2MessageListQuery = {
+  limit?: number | undefined;
+  order?: 'asc' | 'desc' | undefined;
+  cursor?: string | undefined;
+  type?: OpenCodeV2SystemMessageType | 'assistant' | 'user' | undefined;
+};
+
+export type OpenCodeV2MessageListResponse = {
+  data: OpenCodeV2SessionMessageInfo[];
+  cursor: { previous?: string | null | undefined; next?: string | null | undefined };
+};
+
+export type OpenCodeV2DiffQuery = {
+  from?: string | undefined;
+  to?: string | undefined;
+  context?: string | undefined;
+};

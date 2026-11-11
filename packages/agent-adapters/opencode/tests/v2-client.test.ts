@@ -396,4 +396,50 @@ describe('OpenCodeV2Client', () => {
     expect(() => new OpenCodeV2Client({ baseUrl: 'http://127.0.0.1:49374/prefix' })).toThrow(OpenCodeV2ClientError);
     expect(() => new OpenCodeV2Client({ baseUrl: 'http://127.0.0.1:49374' })).not.toThrow();
   });
+
+  it('listMessages encodes pagination params and returns the cursor pair', async () => {
+    const captured: CapturedRequest[] = [];
+    const message = {
+      id: 'msg_1',
+      time: { created: 1760000000000 },
+      type: 'user',
+      text: 'hello',
+    };
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { data: [message], cursor: { previous: null, next: 'cur_next' } }), captured),
+    });
+    const page = await client.listMessages('ses_1', { limit: 200, order: 'asc', type: 'user' });
+    expect(page.data).toEqual([message]);
+    expect(page.cursor.next).toBe('cur_next');
+    expect(page.cursor.previous).toBeNull();
+    const search = new URL(captured[0]!.url).searchParams;
+    expect(Object.fromEntries(search)).toEqual({'limit': '200', 'order': 'asc', 'type': 'user'});
+  });
+
+  it('listMessages follows the cursor without order and refuses cursor+order together', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { data: [], cursor: {} }), captured),
+    });
+    await client.listMessages('ses_1', { cursor: 'cur_next' });
+    expect(Object.fromEntries(new URL(captured[0]!.url).searchParams)).toEqual({'cursor': 'cur_next'});
+    await expect(client.listMessages('ses_1', { cursor: 'cur_next', order: 'asc' })).rejects.toMatchObject({
+      message: expect.stringContaining('cursor'),
+    });
+  });
+
+  it('getSessionDiff passes from/to/context and unwraps data', async () => {
+    const captured: CapturedRequest[] = [];
+    const diff = { file: 'a.ts', patch: '@@ -1 +1 @@', additions: 1, deletions: 1, status: 'modified' };
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { data: [diff] }), captured),
+    });
+    const result = await client.getSessionDiff('ses_1', { from: 'msg_a', to: 'msg_b', context: '3' });
+    expect(result).toEqual([diff]);
+    const search = new URL(captured[0]!.url).searchParams;
+    expect(Object.fromEntries(search)).toEqual({'from': 'msg_a', 'to': 'msg_b', 'context': '3'});
+  });
 });

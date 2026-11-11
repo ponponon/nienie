@@ -45,14 +45,25 @@ export {
   type VerifyOpenCodeServiceOptions,
 } from './service-discovery.js';
 export { OpenCodeV2Client, OpenCodeV2ClientError, type OpenCodeV2ClientOptions } from './v2/client.js';
+export { deriveDiffId, type DiffIdInput } from './v2/diff-id.js';
 export type {
+  OpenCodeV2AssistantContentPart,
+  OpenCodeV2AssistantMessage,
+  OpenCodeV2AssistantReasoningPart,
+  OpenCodeV2AssistantTextPart,
+  OpenCodeV2AssistantToolPart,
   OpenCodeV2CreateSessionInput,
+  OpenCodeV2DiffQuery,
+  OpenCodeV2FileDiffInfo,
   OpenCodeV2InboxUserMessage,
   OpenCodeV2LocationQuery,
   OpenCodeV2LocationResponse,
+  OpenCodeV2MessageListQuery,
+  OpenCodeV2MessageListResponse,
   OpenCodeV2ModelInfo,
   OpenCodeV2ModelListQuery,
   OpenCodeV2ModelRef,
+  OpenCodeV2OtherMessage,
   OpenCodeV2PermissionDecision,
   OpenCodeV2PermissionRule,
   OpenCodeV2PromptInput,
@@ -61,6 +72,11 @@ export type {
   OpenCodeV2SessionInfo,
   OpenCodeV2SessionListQuery,
   OpenCodeV2SessionListResponse,
+  OpenCodeV2SessionMessageInfo,
+  OpenCodeV2StructuredError,
+  OpenCodeV2ToolContent,
+  OpenCodeV2ToolState,
+  OpenCodeV2UserMessage,
 } from './v2/types.js';
 
 const execFileAsync = promisify(execFile);

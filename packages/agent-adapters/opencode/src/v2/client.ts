@@ -1,9 +1,12 @@
 import { normalizeLocalServiceUrl, openCodeServiceAuthHeader } from '../service-discovery.js';
 import type {
   OpenCodeV2CreateSessionInput,
+  OpenCodeV2DiffQuery,
   OpenCodeV2InboxUserMessage,
   OpenCodeV2LocationQuery,
   OpenCodeV2LocationResponse,
+  OpenCodeV2MessageListQuery,
+  OpenCodeV2MessageListResponse,
   OpenCodeV2ModelInfo,
   OpenCodeV2ModelListQuery,
   OpenCodeV2ModelRef,
@@ -14,6 +17,7 @@ import type {
   OpenCodeV2SessionInfo,
   OpenCodeV2SessionListQuery,
   OpenCodeV2SessionListResponse,
+  OpenCodeV2FileDiffInfo,
 } from './types.js';
 
 export class OpenCodeV2ClientError extends Error {
@@ -126,6 +130,34 @@ export class OpenCodeV2Client {
       `${sessionPath(sessionId)}/permission/${encodeURIComponent(requestId)}/reply`,
       { body: message === undefined ? { decision } : { decision, message } },
     );
+  }
+
+  async listMessages(
+    sessionId: string,
+    query: OpenCodeV2MessageListQuery = {},
+  ): Promise<OpenCodeV2MessageListResponse> {
+    if (query.cursor !== undefined && query.order !== undefined) {
+      throw new OpenCodeV2ClientError('OpenCode message pagination: cursor must not be combined with order', 0);
+    }
+    const params: Record<string, string> = {};
+    if (query.limit !== undefined) params['limit'] = String(query.limit);
+    if (query.order !== undefined) params['order'] = query.order;
+    if (query.cursor !== undefined) params['cursor'] = query.cursor;
+    if (query.type !== undefined) params['type'] = query.type;
+    return this.request<OpenCodeV2MessageListResponse>('GET', `${sessionPath(sessionId)}/message`, { query: params });
+  }
+
+  async getSessionDiff(sessionId: string, query: OpenCodeV2DiffQuery = {}): Promise<OpenCodeV2FileDiffInfo[]> {
+    const params: Record<string, string> = {};
+    if (query.from !== undefined) params['from'] = query.from;
+    if (query.to !== undefined) params['to'] = query.to;
+    if (query.context !== undefined) params['context'] = query.context;
+    const response = await this.request<{ data: OpenCodeV2FileDiffInfo[] }>(
+      'GET',
+      `${sessionPath(sessionId)}/diff`,
+      { query: params },
+    );
+    return response.data;
   }
 
   private async request<T>(
