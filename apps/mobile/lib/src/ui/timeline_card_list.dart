@@ -237,7 +237,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
               decoration: BoxDecoration(
                 color: const Color(0xFFF7F8FA),
                 border: Border.all(
-                  color: item.isError
+                  color: item.status == ToolCallStatus.failed
                       ? const Color(0xFFEF4444).withValues(alpha: 0.35)
                       : _borderSubtle,
                 ),
@@ -281,14 +281,23 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                           ),
                         ),
                       ),
+                      // 状态图标来自显式 status（J0.4：禁止用 resultContent 推断成败）
+                      Icon(
+                        switch (item.status) {
+                          ToolCallStatus.pending => LucideIcons.circleDashed,
+                          ToolCallStatus.running => LucideIcons.loaderCircle,
+                          ToolCallStatus.completed => LucideIcons.check,
+                          ToolCallStatus.failed => LucideIcons.circleX,
+                        },
+                        size: 13,
+                        color: switch (item.status) {
+                          ToolCallStatus.failed => const Color(0xFFDC2626),
+                          ToolCallStatus.completed => _weTypeGreen,
+                          ToolCallStatus.running => _weTypeGreen,
+                          ToolCallStatus.pending => _textSecondary,
+                        },
+                      ),
                       if (item.resultContent != null) ...[
-                        Icon(
-                          item.isError ? LucideIcons.circleX : LucideIcons.check,
-                          size: 13,
-                          color: item.isError
-                              ? const Color(0xFFDC2626)
-                              : _weTypeGreen,
-                        ),
                         const SizedBox(width: 6),
                         Icon(
                           item.expanded

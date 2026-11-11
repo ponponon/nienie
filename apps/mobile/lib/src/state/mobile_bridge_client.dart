@@ -50,6 +50,8 @@ class MobileBridgeClient extends ChangeNotifier {
   static const int _maxSeenEventIds = 2000;
   final Map<String, List<SessionTimelineItem>> _timelineBySession = {};
   final Map<String, String> _sessionStatusBySession = {};
+  // partId → 已应用的最高 revision（J0.4 幂等归约）：同 revision 重放丢弃、低 revision 晚到不覆盖
+  final Map<String, Map<String, int>> _partRevisionBySession = {};
   final Map<PendingResponseItem, Timer> _pendingTimers = {};
   StreamSubscription<Map<String, dynamic>>? _subscription;
   int _requestCounter = 0;
@@ -505,10 +507,20 @@ class MobileBridgeClient extends ChangeNotifier {
         if (role == 'user') {
           nextTimeline.add(UserPromptItem(content));
         } else {
-          nextTimeline.add(StreamingTextItem(text: content, isThinking: false));
+          nextTimeline.add(StreamingTextItem(
+            text: content,
+            isThinking: false,
+            partId: p['partId'] as String?,
+            revision: (p['revision'] as num?)?.toInt() ?? 0,
+          ));
         }
       } else if (kind == 'thinking') {
-        nextTimeline.add(StreamingTextItem(text: p['content'] as String? ?? '', isThinking: true));
+        nextTimeline.add(StreamingTextItem(
+          text: p['content'] as String? ?? '',
+          isThinking: true,
+          partId: p['partId'] as String?,
+          revision: (p['revision'] as num?)?.toInt() ?? 0,
+        ));
       } else if (kind == 'tool_call') {
         nextTimeline.add(ToolCallCardItem(
           toolCallId: p['toolCallId'] as String? ?? '',
@@ -516,6 +528,9 @@ class MobileBridgeClient extends ChangeNotifier {
           input: Map<String, dynamic>.from(p['input'] as Map? ?? const {}),
           resultContent: p['output'] as String?,
           isError: p['isError'] as bool? ?? false,
+          status: parseToolCallStatus(p['status'] as String?),
+          partId: p['partId'] as String?,
+          revision: (p['revision'] as num?)?.toInt() ?? 0,
         ));
       } else if (kind == 'error') {
         nextTimeline.add(ErrorCardItem(
@@ -550,6 +565,15 @@ class MobileBridgeClient extends ChangeNotifier {
     }
     // 阶段三/四：同步原子替换（不 await），一次 notify
     if (epoch.isNotEmpty) _currentEpochBySession[sessionId] = epoch;
+    // 快照是权威状态：以快照 revision 播种 partId 版本表，之后同/低 revision 的补偿事件被丢弃
+    final seededRevisions = <String, int>{};
+    for (final raw in parts) {
+      final p = Map<String, dynamic>.from(raw as Map);
+      final partId = p['partId'];
+      final rev = p['revision'];
+      if (partId is String && rev is int) seededRevisions[partId] = rev;
+    }
+    _partRevisionBySession[sessionId] = seededRevisions;
     // 清理旧 timeline 时一并取消未完成占位的计时器，避免 Timer 泄漏
     for (final item in _timelineBySession[sessionId] ?? const <SessionTimelineItem>[]) {
       if (item is PendingResponseItem) {
@@ -1055,6 +1079,21 @@ class MobileBridgeClient extends ChangeNotifier {
   /// 将事件写入时间线（状态归约）；事件必须已按 sequence 有序调用。
   void _applyCanonicalEvent(CanonicalAgentEvent event) {
     final items = _timelineBySession.putIfAbsent(event.sessionId, () => []);
+    // J0.4 幂等归约：partId + revision 门禁——同 revision 重放丢弃、低 revision 晚到不覆盖新状态
+    final rawPartId = event.payload['partId'];
+    final rawPartRevision = event.payload['partRevision'];
+    final partId = rawPartId is String && rawPartId.isNotEmpty ? rawPartId : null;
+    final partRevision = rawPartRevision is int ? rawPartRevision : null;
+    final revisions = _partRevisionBySession.putIfAbsent(event.sessionId, () => {});
+    if (partId != null && partRevision != null) {
+      final applied = revisions[partId] ?? 0;
+      if (partRevision <= applied) return;
+    }
+    void markApplied() {
+      if (partId != null && partRevision != null) {
+        revisions[partId] = partRevision;
+      }
+    }
 
     switch (event.type) {
       case 'status':
@@ -1097,26 +1136,71 @@ class MobileBridgeClient extends ChangeNotifier {
         }
         // 回复内容开始到达：收起「等待中」占位
         _resolvePending(event.sessionId);
-        if (items.isNotEmpty &&
+        if (partId != null) {
+          // 同 partId 归约：增量追加到归属 item，revision 单调推进
+          StreamingTextItem? target;
+          for (final item in items) {
+            if (item is StreamingTextItem && !item.isThinking && item.partId == partId) {
+              target = item;
+              break;
+            }
+          }
+          if (target != null) {
+            target.text += delta;
+            if (partRevision != null && partRevision > target.revision) {
+              target.revision = partRevision;
+            }
+          } else {
+            items.add(StreamingTextItem(
+              text: delta,
+              isThinking: false,
+              partId: partId,
+              revision: partRevision ?? 0,
+            ));
+          }
+        } else if (items.isNotEmpty &&
             items.last is StreamingTextItem &&
             !(items.last as StreamingTextItem).isThinking) {
           (items.last as StreamingTextItem).text += delta;
         } else {
           items.add(StreamingTextItem(text: delta, isThinking: false));
         }
+        markApplied();
         break;
 
       case 'thinking_delta':
         final delta = event.payload['delta'] as String? ?? '';
         if (delta.isEmpty) break;
         _resolvePending(event.sessionId);
-        if (items.isNotEmpty &&
+        if (partId != null) {
+          StreamingTextItem? target;
+          for (final item in items) {
+            if (item is StreamingTextItem && item.isThinking && item.partId == partId) {
+              target = item;
+              break;
+            }
+          }
+          if (target != null) {
+            target.text += delta;
+            if (partRevision != null && partRevision > target.revision) {
+              target.revision = partRevision;
+            }
+          } else {
+            items.add(StreamingTextItem(
+              text: delta,
+              isThinking: true,
+              partId: partId,
+              revision: partRevision ?? 0,
+            ));
+          }
+        } else if (items.isNotEmpty &&
             items.last is StreamingTextItem &&
             (items.last as StreamingTextItem).isThinking) {
           (items.last as StreamingTextItem).text += delta;
         } else {
           items.add(StreamingTextItem(text: delta, isThinking: true));
         }
+        markApplied();
         break;
 
       case 'tool_use':
@@ -1126,13 +1210,36 @@ class MobileBridgeClient extends ChangeNotifier {
           event.payload['input'] as Map? ?? const {},
         );
         _resolvePending(event.sessionId);
-        items.add(
-          ToolCallCardItem(
-            toolCallId: toolCallId,
-            name: name,
-            input: input,
-          ),
-        );
+        ToolCallCardItem? existing;
+        for (final item in items.reversed) {
+          if (item is ToolCallCardItem && item.toolCallId == toolCallId) {
+            existing = item;
+            break;
+          }
+        }
+        if (existing != null) {
+          // 幂等 upsert：重放不新增卡片；终态（completed/failed）不回退为 running
+          if (existing.status == ToolCallStatus.pending || existing.status == ToolCallStatus.running) {
+            existing.status = ToolCallStatus.running;
+          }
+          if (existing.input.isEmpty && input.isNotEmpty) existing.input.addAll(input);
+          if (partId != null) existing.partId = partId;
+          if (partRevision != null && partRevision > existing.revision) {
+            existing.revision = partRevision;
+          }
+        } else {
+          items.add(
+            ToolCallCardItem(
+              toolCallId: toolCallId,
+              name: name,
+              input: input,
+              status: ToolCallStatus.running,
+              partId: partId,
+              revision: partRevision ?? 0,
+            ),
+          );
+        }
+        markApplied();
         break;
 
       case 'tool_result':
@@ -1149,6 +1256,11 @@ class MobileBridgeClient extends ChangeNotifier {
         if (existing != null) {
           existing.resultContent = content;
           existing.isError = isError;
+          existing.status = isError ? ToolCallStatus.failed : ToolCallStatus.completed;
+          if (partId != null) existing.partId = partId;
+          if (partRevision != null && partRevision > existing.revision) {
+            existing.revision = partRevision;
+          }
         } else {
           items.add(
             ToolCallCardItem(
@@ -1157,9 +1269,13 @@ class MobileBridgeClient extends ChangeNotifier {
               input: const {},
               resultContent: content,
               isError: isError,
+              status: isError ? ToolCallStatus.failed : ToolCallStatus.completed,
+              partId: partId,
+              revision: partRevision ?? 0,
             ),
           );
         }
+        markApplied();
         break;
 
       case 'error':

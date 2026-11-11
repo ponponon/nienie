@@ -379,3 +379,13 @@
 - **构造防御**：`OpenCodeV2Client` 构造函数复用 `normalizeLocalServiceUrl` 校验 baseUrl 必须是本地服务根地址（防止未来误传任意 URL 把 Basic Auth 凭据外发）；baseUrl 统一取 `url.origin`。
 - 补测试：409 ConflictError / 400 InvalidCursorError 标签保留、空 body、坏 JSON、响应体读取失败、超时 status 0、构造拒绝非本地 URL、Default/Provider 不带 types。测试 64 个。
 - **开发顺序确认**（ChatGPT 决定）：J0.6a.1 封板 → J0.4（ToolCallCardItem.status + partId/revision 幂等归约）→ J0.6b（Diff + Message API + diffId 稳定派生 + 移除 v1 SQLite 读取）→ J0.7（Snapshot/事件集成）。
+
+### 2026-11-10 J0.4 ToolCallCardItem 显式状态 + partId/revision 幂等归约（手机端数据模型）
+
+- **`ToolCallStatus` 显式生命周期**（`timeline_items.dart`）：新增 `enum ToolCallStatus { pending, running, completed, failed }` 与 `parseToolCallStatus`；`ToolCallCardItem` 增加 `status`（默认 running）、`partId`、`revision` 字段。状态是领域数据：**禁止用 `resultContent != null` 推断成败**（completed 可以没有输出、running 可能已有部分输出）。`StreamingTextItem` 同步增加 `partId`/`revision`。
+- **状态生命周期**（reducer `_applyCanonicalEvent`）：`tool_use` → running；`tool_result` → completed/failed（按 isError）；completed/failed 为终态，`tool_use` 重放不回退状态；Snapshot 按 part 的显式 `status` 恢复（streaming/running/completed/error 的 v1→Nienie 映射在适配器侧，手机只认 pending/running/completed/failed）。
+- **partId + revision 幂等归约**：per-session `_partRevisionBySession`（partId → 已应用最高 revision）；事件带 `partId`+`partRevision` 时——同 revision 重放丢弃、低 revision 晚到不覆盖新状态、高 revision 正确更新；文本按 partId 精确定位归属 item 增量追加（不再依赖「最后一个文本 item」启发式）；工具按 `toolCallId` 幂等 upsert（多次断线重连/epoch 切换重放不重复生成卡片）。无 partId 的事件走原有兼容路径。
+- **Snapshot 安装**：恢复 tool 状态/`partId`/`revision`，并以快照 revision 播种版本表（快照是权威状态，之后同/低 revision 的补偿事件被丢弃）。
+- **UI 按状态渲染**（`timeline_card_list.dart`）：状态图标来自 `status`（pending=circleDashed/running=loaderCircle/completed=check/failed=circleX），结果内容只决定可展开性；边框红色只看 `status == failed`。
+- **验收矩阵**（mobile_app_test.dart 新增 5 组）：Snapshot 恢复 running/completed(空输出)/failed(空错误) 三态正确 + UI 图标按 status；相同 partId+revision 重放不重复追加/不重复卡片；高 revision 更新、低 revision 晚到不覆盖（文本与工具终态均验证）；历史补偿与实时事件并发最终一致且单卡片；多次断线重连（3 个 epoch）不重复卡片、终态不回退。22 个手机端测试全绿，flutter analyze 无问题，仓库全量 127 vitest 全绿。
+- **明确留给后续的跨源一致性问题**（本轮不做，避免扩大范围）：a) v1 快照构建器 `revision` 硬编码 1、与历史事件 `partRevision`（文本累计长度）口径不可比，且 reasoning/step/patch/file part 会导致构建抛错（真实会话暂无法走快照路径）——随 J0.6b/J0.7 用 v2 Message API 重建快照时解决；b) 实时事件（normalizer）不携带 partId/revision，门禁目前只覆盖历史/合成事件——J0.7 统一归约时补齐。
