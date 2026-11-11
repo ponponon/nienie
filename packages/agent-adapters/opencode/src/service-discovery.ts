@@ -27,7 +27,8 @@ export type OpenCodeServiceDiscoveryReason =
   | 'identity_mismatch'
   | 'version_mismatch'
   | 'failed'
-  | 'not_ready';
+  | 'not_ready'
+  | 'ambiguous';
 
 export type OpenCodeServiceDiscoveryResult =
   | { ok: true; endpoint: OpenCodeServiceEndpoint; registration: OpenCodeServiceRegistration }
@@ -46,9 +47,13 @@ export type VerifyOpenCodeServiceOptions = {
 
 const DEFAULT_TIMEOUT_MS = 2000;
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1', '0.0.0.0']);
+
 export function openCodeStateDirs(stateDir?: string): string[] {
   if (stateDir !== undefined) return [stateDir];
   const dirs = new Set<string>();
+  const explicit = process.env['NIENIE_OPENCODE_STATE_DIR'];
+  if (explicit) dirs.add(explicit);
   const xdg = process.env['XDG_STATE_HOME'];
   if (xdg) dirs.add(xdg);
   dirs.add(join(homedir(), '.local', 'state'));
@@ -57,6 +62,12 @@ export function openCodeStateDirs(stateDir?: string): string[] {
 
 export function openCodeStateDir(stateDir?: string): string {
   return openCodeStateDirs(stateDir)[0] ?? join(homedir(), '.local', 'state');
+}
+
+function registrationNamePriority(name: string): number {
+  if (name === 'service.json') return 0;
+  if (name === 'service-local.json') return 1;
+  return 2;
 }
 
 export function openCodeRegistrationFiles(stateDir?: string): string[] {
@@ -73,7 +84,11 @@ export function openCodeRegistrationFiles(stateDir?: string): string[] {
     }
     files.push(
       ...[...names]
-        .sort((a, b) => (a === 'service.json' ? -1 : b === 'service.json' ? 1 : a.localeCompare(b)))
+        .sort((a, b) => {
+          const pa = registrationNamePriority(a);
+          const pb = registrationNamePriority(b);
+          return pa !== pb ? pa - pb : a.localeCompare(b);
+        })
         .map((name) => join(base, name)),
     );
   }
@@ -99,16 +114,30 @@ export function readOpenCodeServiceRegistration(file: string): OpenCodeServiceRe
   const pid = record['pid'];
   if (typeof url !== 'string' || url.length === 0) return undefined;
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
-  const version = record['version'];
-  const id = record['id'];
-  const password = record['password'];
+  if ('version' in record && typeof record['version'] !== 'string') return undefined;
+  if ('password' in record && typeof record['password'] !== 'string') return undefined;
+  if ('id' in record && typeof record['id'] !== 'string') return undefined;
   return {
-    id: typeof id === 'string' ? id : undefined,
-    version: typeof version === 'string' ? version : undefined,
+    id: typeof record['id'] === 'string' ? record['id'] : undefined,
+    version: typeof record['version'] === 'string' ? record['version'] : undefined,
     url,
     pid,
-    password: typeof password === 'string' ? password : undefined,
+    password: typeof record['password'] === 'string' ? record['password'] : undefined,
   };
+}
+
+export function normalizeLocalServiceUrl(raw: string): URL | undefined {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+  if (url.username || url.password) return undefined;
+  if (!LOOPBACK_HOSTS.has(url.hostname)) return undefined;
+  if (url.hostname === '0.0.0.0') url.hostname = '127.0.0.1';
+  return url;
 }
 
 export function openCodeServiceAuthHeader(password: string | undefined): Record<string, string> | undefined {
@@ -123,12 +152,16 @@ export async function verifyOpenCodeService(
 ): Promise<OpenCodeServiceDiscoveryResult> {
   const doFetch = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const url = new URL('/api/info', registration.url);
+  const url = normalizeLocalServiceUrl(registration.url);
+  if (url === undefined) {
+    return { ok: false, reason: 'invalid_registration', message: 'OpenCode service registration has an invalid or non-local URL' };
+  }
   const headers = openCodeServiceAuthHeader(registration.password);
   let response: Response;
   try {
-    response = await doFetch(url, {
+    response = await doFetch(new URL('/api/info', url), {
       ...(headers ? { headers } : {}),
+      redirect: 'error',
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
@@ -139,6 +172,9 @@ export async function verifyOpenCodeService(
   }
   if (response.status === 401 || response.status === 403) {
     return { ok: false, reason: 'unauthorized', message: 'OpenCode service rejected authentication' };
+  }
+  if (response.status === 503) {
+    return { ok: false, reason: 'not_ready', message: 'OpenCode service is starting' };
   }
   let body: unknown;
   try {
@@ -165,7 +201,7 @@ export async function verifyOpenCodeService(
   return {
     ok: true,
     endpoint: {
-      baseUrl: registration.url.replace(/\/+$/, ''),
+      baseUrl: url.toString().replace(/\/+$/, ''),
       version: info.version,
       pid: info.pid,
       username: 'opencode',
@@ -175,10 +211,18 @@ export async function verifyOpenCodeService(
   };
 }
 
+function sameServiceInstance(
+  left: OpenCodeServiceRegistration,
+  right: OpenCodeServiceRegistration,
+): boolean {
+  return left.id === right.id && left.version === right.version && left.url === right.url && left.pid === right.pid;
+}
+
 export async function discoverOpenCodeService(
   options: DiscoverOpenCodeServiceOptions = {},
 ): Promise<OpenCodeServiceDiscoveryResult> {
   const files = openCodeRegistrationFiles(options.stateDir);
+  const valid: Extract<OpenCodeServiceDiscoveryResult, { ok: true }>[] = [];
   let firstFailure: OpenCodeServiceDiscoveryResult | undefined;
   for (const file of files) {
     if (!existsSync(file)) continue;
@@ -192,10 +236,18 @@ export async function discoverOpenCodeService(
       fetch: options.fetch,
       timeoutMs: options.timeoutMs,
     });
-    if (result.ok) return result;
-    firstFailure ??= result;
+    if (result.ok) valid.push(result);
+    else firstFailure ??= result;
   }
-  return firstFailure ?? { ok: false, reason: 'not_found', message: 'No OpenCode service registration was found' };
+  if (valid.length === 0) {
+    return firstFailure ?? { ok: false, reason: 'not_found', message: 'No OpenCode service registration was found' };
+  }
+  const first = valid[0]!;
+  const allSame = valid.every((candidate) => sameServiceInstance(candidate.registration, first.registration));
+  if (!allSame) {
+    return { ok: false, reason: 'ambiguous', message: 'Multiple OpenCode services are registered; pass a stateDir to select one' };
+  }
+  return first;
 }
 
 function decodeServerInfo(input: unknown): { version: string; pid: number } | undefined {

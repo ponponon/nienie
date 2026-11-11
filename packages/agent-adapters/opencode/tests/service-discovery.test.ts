@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   discoverOpenCodeService,
+  normalizeLocalServiceUrl,
   openCodeRegistrationFiles,
   openCodeServiceAuthHeader,
   openCodeStateDirs,
@@ -67,6 +68,33 @@ describe('readOpenCodeServiceRegistration', () => {
     const dir = makeStateDir();
     writeRegistration(dir, 'service.json', registration);
     expect(readOpenCodeServiceRegistration(join(dir, 'opencode', 'service.json'))).toEqual(registration);
+  });
+
+  it('rejects the whole registration when optional fields have wrong types', () => {
+    const dir = makeStateDir();
+    writeRegistration(dir, 'a.json', { url: 'http://127.0.0.1:49374', pid: 1, version: 123 });
+    writeRegistration(dir, 'b.json', { url: 'http://127.0.0.1:49374', pid: 1, password: 123 });
+    writeRegistration(dir, 'c.json', { url: 'http://127.0.0.1:49374', pid: 1, id: 7 });
+    expect(readOpenCodeServiceRegistration(join(dir, 'opencode', 'a.json'))).toBeUndefined();
+    expect(readOpenCodeServiceRegistration(join(dir, 'opencode', 'b.json'))).toBeUndefined();
+    expect(readOpenCodeServiceRegistration(join(dir, 'opencode', 'c.json'))).toBeUndefined();
+  });
+});
+
+describe('normalizeLocalServiceUrl', () => {
+  it('accepts loopback URLs and rewrites 0.0.0.0 to 127.0.0.1', () => {
+    expect(normalizeLocalServiceUrl('http://127.0.0.1:49374')?.toString()).toBe('http://127.0.0.1:49374/');
+    expect(normalizeLocalServiceUrl('http://localhost:49374')?.hostname).toBe('localhost');
+    expect(normalizeLocalServiceUrl('http://0.0.0.0:49374')?.hostname).toBe('127.0.0.1');
+    expect(normalizeLocalServiceUrl('http://[::1]:49374')?.hostname).toBe('[::1]');
+  });
+
+  it('rejects malformed, non-http, credential-bearing or non-loopback URLs', () => {
+    expect(normalizeLocalServiceUrl('not-a-valid-url')).toBeUndefined();
+    expect(normalizeLocalServiceUrl('file:///etc/passwd')).toBeUndefined();
+    expect(normalizeLocalServiceUrl('http://user:pass@127.0.0.1:49374')).toBeUndefined();
+    expect(normalizeLocalServiceUrl('https://attacker.example')).toBeUndefined();
+    expect(normalizeLocalServiceUrl('http://192.168.1.10:49374')).toBeUndefined();
   });
 });
 
@@ -158,6 +186,25 @@ describe('verifyOpenCodeService', () => {
     const result = await verifyOpenCodeService(registration, { fetch: fetchMock });
     expect(result).toMatchObject({ ok: false, reason: 'unreachable' });
   });
+
+  it('never fetches a non-local or malformed registration URL', async () => {
+    let probed = 0;
+    const fetchMock = (async () => {
+      probed += 1;
+      return jsonResponse(200, serverInfo);
+    }) as typeof globalThis.fetch;
+    const external = await verifyOpenCodeService({ ...registration, url: 'https://attacker.example' }, { fetch: fetchMock });
+    expect(external).toMatchObject({ ok: false, reason: 'invalid_registration' });
+    const malformed = await verifyOpenCodeService({ ...registration, url: 'not-a-valid-url' }, { fetch: fetchMock });
+    expect(malformed).toMatchObject({ ok: false, reason: 'invalid_registration' });
+    expect(probed).toBe(0);
+  });
+
+  it('classifies a 503 with an HTML body as not_ready, not incompatible', async () => {
+    const fetchMock = (async () => new Response('<html>starting</html>', { status: 503 })) as typeof globalThis.fetch;
+    const result = await verifyOpenCodeService(registration, { fetch: fetchMock });
+    expect(result).toMatchObject({ ok: false, reason: 'not_ready' });
+  });
 });
 
 describe('discoverOpenCodeService', () => {
@@ -207,6 +254,35 @@ describe('discoverOpenCodeService', () => {
     if (result.ok) return;
     expect(result.message.includes('secret-password')).toBe(false);
   });
+
+  it('reports ambiguous when two different live services are registered', async () => {
+    const dir = makeStateDir();
+    writeRegistration(dir, 'service.json', { ...registration, id: 'svc_a', url: 'http://127.0.0.1:49374', pid: 11111 });
+    writeRegistration(dir, 'service-local.json', { ...registration, id: 'svc_b', url: 'http://127.0.0.1:49375', pid: 22222 });
+    const fetchMock = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const pid = url.includes(':49374') ? 11111 : 22222;
+      return jsonResponse(200, { version: '2.2.5', pid });
+    }) as typeof globalThis.fetch;
+    const result = await discoverOpenCodeService({ stateDir: dir, fetch: fetchMock });
+    expect(result).toMatchObject({ ok: false, reason: 'ambiguous' });
+    if (result.ok) return;
+    expect(result.message.includes('secret-password')).toBe(false);
+  });
+
+  it('accepts the same instance registered in multiple files', async () => {
+    const dir = makeStateDir();
+    writeRegistration(dir, 'service.json', registration);
+    writeRegistration(dir, 'service-local.json', registration);
+    const result = await discoverOpenCodeService({
+      stateDir: dir,
+      fetch: (async () => jsonResponse(200, serverInfo)) as typeof globalThis.fetch,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.registration.id).toBe('svc_1');
+    expect(result.endpoint.baseUrl).toBe('http://127.0.0.1:49374');
+  });
 });
 
 describe('openCodeStateDirs', () => {
@@ -225,6 +301,21 @@ describe('openCodeStateDirs', () => {
 
   it('returns only the explicit stateDir when provided', () => {
     expect(openCodeStateDirs('/tmp/explicit-state')).toEqual(['/tmp/explicit-state']);
+  });
+
+  it('prefers NIENIE_OPENCODE_STATE_DIR over XDG_STATE_HOME', () => {
+    const previousXdg = process.env['XDG_STATE_HOME'];
+    const previousNieNie = process.env['NIENIE_OPENCODE_STATE_DIR'];
+    process.env['XDG_STATE_HOME'] = '/tmp/xdg-state';
+    process.env['NIENIE_OPENCODE_STATE_DIR'] = '/tmp/nienie-state';
+    try {
+      expect(openCodeStateDirs()[0]).toBe('/tmp/nienie-state');
+    } finally {
+      if (previousXdg === undefined) delete process.env['XDG_STATE_HOME'];
+      else process.env['XDG_STATE_HOME'] = previousXdg;
+      if (previousNieNie === undefined) delete process.env['NIENIE_OPENCODE_STATE_DIR'];
+      else process.env['NIENIE_OPENCODE_STATE_DIR'] = previousNieNie;
+    }
   });
 
   it('probes registrations across every state root', () => {

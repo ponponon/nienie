@@ -345,3 +345,12 @@
 - **失败原因分级**（`OpenCodeServiceDiscoveryReason`）：`not_found`（无注册文件）/ `invalid_registration`（文件损坏）/ `unreachable` / `unauthorized` / `incompatible`（404 或响应体不合法）/ `identity_mismatch`（pid 不一致）/ `version_mismatch` / `failed`（500）/ `not_ready`（503 启动中）。错误信息与日志永不携带密码。
 - **状态根目录双候选**：官方规则是 `XDG_STATE_HOME || ~/.local/state`，但桌面 GUI 启动的 opencode-cli 在干净环境下注册到 `~/.local/state`，而终端环境（如本机 openctrlc）可能把 `XDG_STATE_HOME` 指到别处导致发现不到。发现逻辑按序探测两个根目录下的全部候选注册文件，第一个通过 `/api/info` 身份验证的胜出（验证本身保证不会误连到无关服务）。
 - **验收**：31 个单测覆盖（缺失/损坏/401/404/非 JSON/pid 不匹配/版本不匹配/500/503/网络失败/多注册回退/密码不泄漏/多根目录探测）；真机冒烟发现桌面 v2.2.5 服务 `http://127.0.0.1:49374`（`0xC0DE` 固定服务端口，pid 与桌面 `opencode-cli serve --service` 进程一致），确认 Nienie 可 attach 到与桌面同一个服务实例，不会启动第二个 Server。此为 J0.5（Phase 1 只读连接验证）验收点。
+
+### 2026-11-10 J0.5.1 服务发现加固（按 ChatGPT 审查反馈）
+
+- **URL 严格校验 + 凭据外泄防护**（`normalizeLocalServiceUrl`）：注册文件 URL 必须是 http/https、不得带 URL 内嵌凭据（userinfo）、主机必须是回环地址白名单（127.0.0.1 / localhost / [::1] / 0.0.0.0→127.0.0.1 重写）；不合格直接 `invalid_registration` 且**绝不发起请求**（防止把 Basic Auth 密码发往外部主机）。fetch 加 `redirect: 'error'`，禁止重定向跳到别的主机。非法 URL 不再抛异常中断候选回退循环。
+- **可选字段类型严格校验**：`version`/`password`/`id` 存在但类型不是 string 时按官方 Service.Info Schema 语义拒绝整个注册文件（原实现会静默当不存在，导致退化成无认证访问）。
+- **503 分类修正**：503 在 body 解析之前直接分类 `not_ready`（原实现先 `response.json()`，503+HTML 响应体会被误判成 `incompatible`）。
+- **多实例歧义保护**：不再"第一个验证通过就返回"——收集全部验证通过的候选，若存在多个且按官方 `same()` 口径（id/version/url/pid）不属于同一实例，返回 `ambiguous` 要求显式指定 stateDir；同一实例的重复注册正常合并。发现优先级：`NIENIE_OPENCODE_STATE_DIR`（显式）→ `XDG_STATE_HOME` → `~/.local/state`，注册文件按 `service.json` → `service-local.json` → 其他 channel 文件排序。
+- **规划修正**（ChatGPT 厘清）：J0 遗留的"数据恢复问题"= ToolCallCardItem.status 丢失（Snapshot 恢复后 running/completed/failed 丢失、UI 用 `resultContent != null` 推断状态），与 partId/revision 幂等归约是两个独立问题，均归 J0.4，在 J0.7 之前必须收尾；diffId 映射归 P2 在 J0.6b v2 Diff 适配时用稳定派生 ID 解决（v2 FileDiff 只有 patch/additions/deletions/status，无 diffId/before/after）。
+- 测试 39 个（新增非法 URL 不发请求、503 HTML、可选字段类型、歧义、同实例合并、NIENIE_OPENCODE_STATE_DIR 优先级等）；真机冒烟继续正确发现桌面 v2.2.5 服务。

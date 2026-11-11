@@ -30,6 +30,7 @@ export { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './norma
 export { parseSseStream } from './sse.js';
 export {
   discoverOpenCodeService,
+  normalizeLocalServiceUrl,
   openCodeRegistrationFiles,
   openCodeServiceAuthHeader,
   openCodeStateDir,
