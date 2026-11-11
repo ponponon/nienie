@@ -80,31 +80,37 @@ function matchTruncation(
   sessionId: string,
   v1Output: string,
   v2Output: string,
-  toolCallIdA: string,
-  toolCallIdB: string,
+  toolCallId: string,
+  allowlist: KnownTruncationEntry[],
 ): boolean {
-  if (toolCallIdA.length === 0 || toolCallIdA !== toolCallIdB) return false;
-  const entry = KNOWN_TRUNCATED_OUTPUTS.find(
+  const entry = allowlist.find(
     (candidate) =>
       candidate.sessionId === sessionId &&
-      candidate.toolCallId === toolCallIdA &&
+      candidate.toolCallId === toolCallId &&
       candidate.v1OutputSha256 === sha256Hex(v1Output) &&
       candidate.v2OutputSha256 === sha256Hex(v2Output),
   );
   return entry !== undefined;
 }
 
-export function compareItems(sessionId: string, a: CompareItem, b: CompareItem): CompareResult {
+export function compareItems(
+  sessionId: string,
+  a: CompareItem,
+  b: CompareItem,
+  allowlist: KnownTruncationEntry[] = KNOWN_TRUNCATED_OUTPUTS,
+): CompareResult {
   if (a.kind !== b.kind) return 'mismatch';
   if (a.kind === 'tool' && b.kind === 'tool') {
     const headEqual =
+      a.toolCallId.length > 0 &&
+      a.toolCallId === b.toolCallId &&
       a.name === b.name &&
       normalizeInput(a.input) === normalizeInput(b.input) &&
       a.status === b.status &&
       a.isError === b.isError;
     if (!headEqual) return 'mismatch';
     if (a.output === b.output) return 'equal';
-    return matchTruncation(sessionId, a.output, b.output, a.toolCallId, b.toolCallId) ? 'v1-truncated' : 'mismatch';
+    return matchTruncation(sessionId, a.output, b.output, a.toolCallId, allowlist) ? 'v1-truncated' : 'mismatch';
   }
   if (a.kind === 'attachment' && b.kind === 'attachment') {
     if (a.name !== b.name || a.mime !== b.mime) return 'mismatch';
@@ -115,4 +121,29 @@ export function compareItems(sessionId: string, a: CompareItem, b: CompareItem):
     return 'mismatch';
   }
   return (a as { text: string }).text === (b as { text: string }).text ? 'equal' : 'mismatch';
+}
+
+export type DiffFailureSide = 'v1' | 'v2';
+
+/** Diff 失败分类：v2 已知旧迁移 500 可按白名单豁免；v1 失败/网络错误/未核实错误一律 fatal（fail-closed）。 */
+export function classifyDiffFailure(sessionId: string, side: DiffFailureSide): 'whitelisted-unverified' | 'fatal' {
+  if (side === 'v2' && isDiff500Whitelisted(sessionId)) return 'whitelisted-unverified';
+  return 'fatal';
+}
+
+/** 读取 v1 Diff API 的文件集合：非 2xx / 网络错误 / 非数组响应一律抛错（不得吞成空数组）。 */
+export async function fetchV1DiffFiles(
+  baseUrl: string,
+  sessionId: string,
+  doFetch: typeof globalThis.fetch,
+): Promise<string[]> {
+  const response = await doFetch(`${baseUrl.replace(/\/+$/, '')}/session/${encodeURIComponent(sessionId)}/diff`);
+  if (!response.ok) {
+    throw new Error(`v1 Diff API failed: ${response.status}`);
+  }
+  const data = (await response.json()) as unknown;
+  if (!Array.isArray(data)) {
+    throw new Error('Invalid v1 Diff response: expected an array');
+  }
+  return data.map((d) => String((d as Record<string, unknown>)['file'] ?? '')).sort();
 }

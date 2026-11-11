@@ -481,3 +481,10 @@
 - **附件补齐两处**：已有 UserPromptItem 的增量更新分支同样保存附件；快照 inline 资源（`inline:<hash>`）还原 `sourceType='inline'`+`contentHash`（不再误标 uri 型）。
 - **JSON 规范化**：工具 input 比对用键序稳定序列化（`stableStringify`）。
 - **测试**（新增 restore-compare 模块 6 例 + restore synthetic 2 例 + mobile 1 例）：白名单错误 v2 输出必须 mismatch、toolCallId 不等 mismatch、`file:` 前缀无豁免、附件 URI/哈希不混比、白名单外 diff 失败语义、更新分支附件、inline 还原。基线 192 vitest + 32 mobile 全绿。
+
+### 2026-11-10 J0.6b-3.4 Final Seal
+
+- **equal 路径补 toolCallId 身份校验**：工具比对 headEqual 含 `toolCallId 非空且双边相等`——toolCallId 不同但 output 相同也判 mismatch（含空 toolCallId）。
+- **v1 Diff fail-closed**：`fetchV1DiffFiles` 非 2xx/网络错误/非数组响应一律抛错（不再吞成空数组）；`classifyDiffFailure` 分侧——v2 已知旧迁移 500 仅按白名单豁免为 unverified，**v1 失败/网络错误/未核实错误一律 fatal 进 diffIssues（脚本非零退出）**，白名单不扩大为通用 API 失败豁免。
+- **测试补齐**：toolCallId 不同+output 相同→mismatch、空 toolCallId→mismatch、可注入白名单的 v1-truncated 正向命中（双哈希精确）、v2 输出变化不命中、v1 Diff 500/网络错误/非数组/正常四路 mock、失败分类四象限（v2 白名单内/外 × v1/v2）。adapter 114 测试。
+- 基线：196 vitest + 32 mobile 全绿。

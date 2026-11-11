@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyDiffFailure,
   compareItems,
+  fetchV1DiffFiles,
   isDiff500Whitelisted,
   normalizeInput,
   sha256Hex,
@@ -73,5 +75,57 @@ describe('isDiff500Whitelisted', () => {
   it('白名单内旧迁移会话放行，白名单外必须失败', () => {
     expect(isDiff500Whitelisted('ses_f2ea6263cffeV3IV9R1s9PF4BM')).toBe(true);
     expect(isDiff500Whitelisted('ses_brand_new_unknown')).toBe(false);
+  });
+});
+
+describe('J0.6b-3.4 Final Seal 覆盖', () => {
+  it('toolCallId 不同但 output 相同也必须 mismatch（equal 路径身份校验）', () => {
+    expect(
+      compareItems('ses_any', tool({ toolCallId: 'call_A', output: 'hello' }), tool({ toolCallId: 'call_B', output: 'hello' })),
+    ).toBe('mismatch');
+    expect(compareItems('ses_any', tool({ toolCallId: '', output: 'hello' }), tool({ toolCallId: '', output: 'hello' }))).toBe('mismatch');
+  });
+
+  it('真实白名单正向命中：可注入白名单 + 双哈希精确匹配 → v1-truncated', () => {
+    const v1Output = 'v1-truncated-output';
+    const v2Output = 'v2-full-output-complete';
+    const allowlist = [
+      {
+        sessionId: 'ses_test',
+        toolCallId: 'call_test',
+        v1OutputSha256: sha256Hex(v1Output),
+        v2OutputSha256: sha256Hex(v2Output),
+      },
+    ];
+    expect(
+      compareItems('ses_test', tool({ toolCallId: 'call_test', output: v1Output }), tool({ toolCallId: 'call_test', output: v2Output }), allowlist),
+    ).toBe('v1-truncated');
+    // v2 输出变了 → 白名单不命中
+    expect(
+      compareItems('ses_test', tool({ toolCallId: 'call_test', output: v1Output }), tool({ toolCallId: 'call_test', output: 'other' }), allowlist),
+    ).toBe('mismatch');
+  });
+
+  it('v1 Diff API 非 2xx / 网络错误 / 非数组响应一律抛错（不吞成空数组）', async () => {
+    const fail500 = (async () => new Response('boom', { status: 500 })) as typeof globalThis.fetch;
+    await expect(fetchV1DiffFiles('http://127.0.0.1:4096', 'ses_1', fail500)).rejects.toThrow(/v1 Diff API failed: 500/);
+
+    const netFail = (async () => {
+      throw new Error('ECONNREFUSED');
+    }) as typeof globalThis.fetch;
+    await expect(fetchV1DiffFiles('http://127.0.0.1:4096', 'ses_1', netFail)).rejects.toThrow(/ECONNREFUSED/);
+
+    const badBody = (async () => new Response('{"not":"array"}', { status: 200 })) as typeof globalThis.fetch;
+    await expect(fetchV1DiffFiles('http://127.0.0.1:4096', 'ses_1', badBody)).rejects.toThrow(/expected an array/);
+
+    const ok = (async () => new Response('[{"file":"a.ts"}]', { status: 200 })) as typeof globalThis.fetch;
+    await expect(fetchV1DiffFiles('http://127.0.0.1:4096', 'ses_1', ok)).resolves.toEqual(['a.ts']);
+  });
+
+  it('失败分类：v2 白名单豁免仅限 v2；v1 失败/网络错误一律 fatal', () => {
+    expect(classifyDiffFailure('ses_f2ea6263cffeV3IV9R1s9PF4BM', 'v2')).toBe('whitelisted-unverified');
+    expect(classifyDiffFailure('ses_unknown', 'v2')).toBe('fatal');
+    expect(classifyDiffFailure('ses_f2ea6263cffeV3IV9R1s9PF4BM', 'v1')).toBe('fatal');
+    expect(classifyDiffFailure('ses_unknown', 'v1')).toBe('fatal');
   });
 });
