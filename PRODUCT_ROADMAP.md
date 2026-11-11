@@ -63,4 +63,22 @@
 
 ## 已完成
 
-- **1. 通知系统**（2026-11-11，commit 见 git log `feat: 路线图#1`）：webhook 发送器（Bark/ntfy/自建）+ 完成/待审批/出错三类推送 + 会话标题注入 + 全局/会话静音 + 免打扰时段（跨午夜）+ 设置页测试按钮；pushToken 去重防重复推送。真机 HTTP 冒烟 + Node/undici 头编码回归（UTF-8 中文标题经 latin1 字节通道还原）通过。待 ChatGPT 验收。
+（暂无——第 1 项通知系统首轮 NOT ACCEPTED，见下）
+
+## 第 1 项通知系统：ChatGPT 终审 NOT ACCEPTED（74c58b2）必修清单
+
+P0 功能阻塞：
+- [ ] R1 preview-server IPC 映射缺失（setNotifications/testNotification 在真实 Electron 窗口调不通）——且应从 NIENIE_IPC_CHANNELS 统一生成映射防漏
+- [ ] R2 Webhook 模式不依赖设备注册（registrations.size===0 会静默吞掉一切；手机端 registerPushToken 无调用点）——Webhook 直接以桌面配置 URL 为目标
+- [ ] R3 Sender 运行时更新（改 URL 后保存不生效，sender 在 startBridge 时定死；测试按钮自建 sender 掩盖问题）
+- [ ] R4 通知发送异常隔离（void notifyEvent 无 .catch，webhook 500/超时 → 未处理 rejection → 可能崩 Electron 主进程）
+- [ ] R5 ntfy 请求格式（Topic URL 应 body=正文+Title header；JSON Root API 需 topic+message 字段）——拆 BarkPushSender/NtfyPushSender/GenericWebhookSender
+
+P1：
+- [ ] R6 多设备目标与去重语义（Webhook 单目标只发一次；APNS/FCM 按设备）
+- [ ] R7 注册持久化 + 撤销清理（registrations 内存 Map 重启丢失；revokeDevice 不清理注册）
+- [ ] R8 外发隐私（路径脱敏、隐私提示文案、URL 校验 http/https+禁 userinfo、凭据安全存储）
+- [ ] R9 通知点击跳转与审批入口（ntfy X-Click/X-Actions、Bark url 字段；审批不走未认证 HTTP Action，只深链到 App 内审批页）——含 E2E：配置→发送→手机收到→点击进会话→完成审批
+- [ ] R10 测试按钮吃草稿 URL（应测输入框当前值，非旧配置；文案改「Webhook 连接成功」）
+
+补充验收测试（12 项）见审查记录；P2：会话标题冷启动预热、事件级去重（eventId）、免打扰时区说明。

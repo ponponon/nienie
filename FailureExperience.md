@@ -1030,3 +1030,9 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - 排查：对比两组会话——diff 失败的 `ses_fe7779740ffe...` 有 72/73 条 assistant 消息带 `snapshot:{start,end}` 引用；diff 成功（0 文件）的 `ses_e6908e193ffe...` 0 条引用。指向服务端按 snapshot 引用算 diff 时快照存储内容缺失（v1→v2 迁移年代的数据）→ 计算崩溃。
 - 结论：这是 OpenCode 服务端对悬空快照引用的容错缺失，非 Nienie 客户端问题。影响面：老会话（迁移批次）查看文件差异会失败；新建 v2 会话无此问题。手机端 Diff 卡片对该错误应展示空态而非崩溃。
 - 经验：对照/集成测试遇到 500 先做「参数正确性对照」（错误参数应 404/400）排除自身请求问题，再对比新旧数据找差异字段（本例 snapshot ref 有无）定位数据年代限制。
+
+### 2026-11-11 通知系统首轮 NOT ACCEPTED：mock 测试绿 ≠ 端到端成立（路线图#1 终审教训）
+
+- 真机 HTTP 冒烟抓到 mock 测不出的 bug：`fetch` 拒绝非 latin1 header 值（中文标题直接抛错）；且 **Bun 与 Node/undici 对 header 字符串编码行为不同**（Bun 会二次 UTF-8 编码），验证必须在生产运行时（Node/Electron）做。教训：涉编码/网络语义的验证必须真实传输层，mock 只能验证调用形状。
+- ChatGPT 终审抓出 4 个 P0 功能阻塞，全部源于「组件各自正确但链路没打通」：a) preload API 加了但 preview-server 的 IPC 映射表没加（真实 Electron 窗口调不通）；b) sender 在 startBridge 时定死，改配置不生效（测试按钮自建 sender 反而掩盖）；c) 手机端 registerPushToken 从未被调用，registrations 空导致通知全被静默吞掉；d) 通知异常无 .catch 可能崩主进程。教训：**每加一条配置链路要验证「UI→IPC→运行时对象」全路径生效**；通知这类旁路系统的失败必须隔离在主链路之外。
+- 产品判断教训：路线图 [x] 不能只凭「代码写了+单测绿」就打勾——ChatGPT 以「桌面配置→发送→手机收到→点击进会话→完成审批」的用户闭环为验收标准，点击跳转/审批入口缺失就不算完成。打勾标准=用户闭环，不是代码完成度。
