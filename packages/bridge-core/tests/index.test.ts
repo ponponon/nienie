@@ -789,8 +789,8 @@ describe('bridge core', () => {
       platform: 'ios',
       provider: 'apns',
       pushToken: 'apns_tok_abc',
-      title: 'Nienie Permission Needed',
-      body: 'Permission requested: bash',
+      title: 'Nienie · 等待你的批准',
+      body: 'ses_seed_1：Permission requested: bash',
     });
     expect(dispatched[1]?.body).not.toContain('sk-secret999');
     expect(dispatched[1]?.body).toContain('[REDACTED]');

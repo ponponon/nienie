@@ -6,6 +6,7 @@ import * as Collapsible from '@radix-ui/react-collapsible';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Toaster, toast } from 'sonner';
 import {
+  Bell,
   Bot,
   Check,
   ChevronDown,
@@ -56,6 +57,12 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
   const [customRelayInput, setCustomRelayInput] = useState<string>(
     initialState.relay.customRelayUrl,
   );
+  const [notifWebhookInput, setNotifWebhookInput] = useState<string>('');
+  const [notifQuietStart, setNotifQuietStart] = useState<string>('');
+  const [notifQuietEnd, setNotifQuietEnd] = useState<string>('');
+  const [notifMutedInput, setNotifMutedInput] = useState<string>('');
+  const [notifEnabled, setNotifEnabled] = useState<boolean>(true);
+  const [notifTestState, setNotifTestState] = useState<'idle' | 'sending' | 'ok' | 'fail'>('idle');
   const [machineNameInput, setMachineNameInput] = useState<string>(
     initialState.bridge.machineId,
   );
@@ -205,6 +212,50 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Invalid Relay URL');
+    }
+  };
+
+  React.useEffect(() => {
+    const n = state.notifications;
+    if (!n) return;
+    setNotifWebhookInput(n.webhookUrl);
+    setNotifQuietStart(n.quietStart);
+    setNotifQuietEnd(n.quietEnd);
+    setNotifMutedInput(n.mutedSessionIds.join(', '));
+    setNotifEnabled(n.enabled);
+  }, [state.notifications]);
+
+  const handleSaveNotifications = async () => {
+    const api = window.nienieDesktop;
+    if (!api?.setNotifications) return;
+    try {
+      const next = await api.setNotifications({
+        enabled: notifEnabled,
+        webhookUrl: notifWebhookInput.trim(),
+        quietStart: notifQuietStart.trim(),
+        quietEnd: notifQuietEnd.trim(),
+        mutedSessionIds: notifMutedInput.split(',').map((id) => id.trim()).filter(Boolean),
+      });
+      if (next && next.bridge) {
+        setState(next);
+        toast.success(t.toastSaved);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.notificationTestFail);
+    }
+  };
+
+  const handleTestNotification = async () => {
+    const api = window.nienieDesktop;
+    if (!api?.testNotification) return;
+    setNotifTestState('sending');
+    try {
+      await api.testNotification();
+      setNotifTestState('ok');
+      toast.success(t.notificationTestOk);
+    } catch (error) {
+      setNotifTestState('fail');
+      toast.error(error instanceof Error ? error.message : t.notificationTestFail);
     }
   };
 
@@ -711,6 +762,109 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
                     {t.saveMachineBtn}
                   </button>
                 </div>
+              </div>
+            </div>
+
+            <div className="wetype-group">
+              <div className="wetype-row">
+                <div className="row-left">
+                  <div className="agent-icon-box">
+                    <Bell size={15} strokeWidth={1.85} />
+                  </div>
+                  <div>
+                    <div className="row-title">{t.notificationTitle}</div>
+                    <div className="row-desc">{t.notificationDesc}</div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  id="toggle-notif-enabled"
+                  checked={notifEnabled}
+                  onChange={(e) => setNotifEnabled(e.target.checked)}
+                />
+              </div>
+              <div
+                className="wetype-row"
+                style={{ flexDirection: 'column', alignItems: 'stretch', gap: '11px' }}
+              >
+                <div>
+                  <div className="row-title">{t.notificationWebhookLabel}</div>
+                  <div className="row-desc">{t.notificationWebhookPlaceholder}</div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input
+                    className="wetype-input"
+                    id="input-notif-webhook"
+                    style={{ flex: 1, width: 'auto' }}
+                    type="text"
+                    placeholder={t.notificationWebhookPlaceholder}
+                    value={notifWebhookInput}
+                    onChange={(e) => setNotifWebhookInput(e.target.value)}
+                  />
+                  <button
+                    className="wetype-btn"
+                    id="btn-test-notification"
+                    type="button"
+                    disabled={notifTestState === 'sending'}
+                    onClick={handleTestNotification}
+                  >
+                    {t.notificationTestBtn}
+                  </button>
+                  <button
+                    className="wetype-btn primary"
+                    id="btn-save-notifications"
+                    type="button"
+                    onClick={handleSaveNotifications}
+                  >
+                    {t.saveMachineBtn}
+                  </button>
+                </div>
+              </div>
+              <div
+                className="wetype-row"
+                style={{ flexDirection: 'column', alignItems: 'stretch', gap: '11px' }}
+              >
+                <div>
+                  <div className="row-title">{t.notificationQuietLabel}</div>
+                  <div className="row-desc">{t.notificationQuietDesc}</div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input
+                    className="wetype-input"
+                    id="input-notif-quiet-start"
+                    type="text"
+                    placeholder="22:00"
+                    style={{ width: '96px' }}
+                    value={notifQuietStart}
+                    onChange={(e) => setNotifQuietStart(e.target.value)}
+                  />
+                  <span>→</span>
+                  <input
+                    className="wetype-input"
+                    id="input-notif-quiet-end"
+                    type="text"
+                    placeholder="08:00"
+                    style={{ width: '96px' }}
+                    value={notifQuietEnd}
+                    onChange={(e) => setNotifQuietEnd(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div
+                className="wetype-row"
+                style={{ flexDirection: 'column', alignItems: 'stretch', gap: '11px' }}
+              >
+                <div>
+                  <div className="row-title">{t.notificationMutedLabel}</div>
+                  <div className="row-desc">{t.notificationMutedDesc}</div>
+                </div>
+                <input
+                  className="wetype-input"
+                  id="input-notif-muted"
+                  type="text"
+                  value={notifMutedInput}
+                  onChange={(e) => setNotifMutedInput(e.target.value)}
+                />
               </div>
             </div>
 

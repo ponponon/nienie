@@ -814,7 +814,9 @@ export class BridgeServer {
       }
     }
     if (deliveredCount === 0 && this.pushRouter) {
-      void this.pushRouter.notifyEvent(event);
+      void this.pushRouter.notifyEvent(event, {
+        sessionTitle: this.sessionIndex.get(event.sessionId)?.title,
+      });
     }
   }
 

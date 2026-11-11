@@ -39,6 +39,19 @@ export type DesktopTranslation = {
   machineLabel: string;
   machineDesc: string;
   saveMachineBtn: string;
+  notificationTitle: string;
+  notificationDesc: string;
+  notificationWebhookLabel: string;
+  notificationWebhookPlaceholder: string;
+  notificationEnabledLabel: string;
+  notificationQuietLabel: string;
+  notificationQuietDesc: string;
+  notificationMutedLabel: string;
+  notificationMutedDesc: string;
+  notificationTestBtn: string;
+  notificationTestOk: string;
+  notificationTestFail: string;
+  notificationNeedUrl: string;
   endpointLabel: string;
   connectedDevicesLabel: string;
   connectedDevicesDesc: string;
@@ -113,6 +126,19 @@ export const DESKTOP_I18N: Record<DesktopLocale, DesktopTranslation> = {
     machineLabel: '本机名称',
     machineDesc: '手机连接时显示的电脑名称，默认读取系统主机名',
     saveMachineBtn: '保存',
+    notificationTitle: '手机推送通知',
+    notificationDesc: '手机不在线时，把重要事件推送到你的手机（支持 Bark / ntfy / 自建 Webhook）',
+    notificationWebhookLabel: 'Webhook URL',
+    notificationWebhookPlaceholder: 'https://api.day.app/你的key',
+    notificationEnabledLabel: '启用推送',
+    notificationQuietLabel: '免打扰时段',
+    notificationQuietDesc: '格式 HH:mm，跨午夜支持（如 22:00 → 08:00），留空关闭',
+    notificationMutedLabel: '免打扰会话',
+    notificationMutedDesc: '会话 ID 列表，逗号分隔，这些会话不推送',
+    notificationTestBtn: '发送测试通知',
+    notificationTestOk: '测试通知已发送',
+    notificationTestFail: '测试通知发送失败',
+    notificationNeedUrl: '请先填写通知 Webhook URL',
     endpointLabel: '监听地址',
     connectedDevicesLabel: '已连接手机',
     connectedDevicesDesc: '管理已授权访问这台 Mac 的移动设备',
@@ -185,6 +211,19 @@ export const DESKTOP_I18N: Record<DesktopLocale, DesktopTranslation> = {
     machineLabel: 'Computer Name',
     machineDesc: 'Display name shown on paired phones (defaults to system hostname)',
     saveMachineBtn: 'Save',
+    notificationTitle: 'Phone Push Notifications',
+    notificationDesc: 'Push important events to your phone when it is offline (Bark / ntfy / self-hosted webhook)',
+    notificationWebhookLabel: 'Webhook URL',
+    notificationWebhookPlaceholder: 'https://api.day.app/your-key',
+    notificationEnabledLabel: 'Enable push',
+    notificationQuietLabel: 'Quiet hours',
+    notificationQuietDesc: 'HH:mm format, overnight supported (e.g. 22:00 → 08:00); leave empty to disable',
+    notificationMutedLabel: 'Muted sessions',
+    notificationMutedDesc: 'Comma-separated session IDs that will not trigger pushes',
+    notificationTestBtn: 'Send test notification',
+    notificationTestOk: 'Test notification sent',
+    notificationTestFail: 'Failed to send test notification',
+    notificationNeedUrl: 'Please fill in the webhook URL first',
     endpointLabel: 'Local Endpoint',
     connectedDevicesLabel: 'Paired Phones',
     connectedDevicesDesc: 'Manage mobile devices authorized for this Mac',
@@ -257,6 +296,19 @@ export const DESKTOP_I18N: Record<DesktopLocale, DesktopTranslation> = {
     machineLabel: 'コンピュータ名',
     machineDesc: 'スマホ側に表示されるこの Mac の名前（初期値はホスト名）',
     saveMachineBtn: '保存',
+    notificationTitle: 'スマホプッシュ通知',
+    notificationDesc: 'スマホがオフラインのときに重要なイベントをプッシュします（Bark / ntfy / 自作 Webhook）',
+    notificationWebhookLabel: 'Webhook URL',
+    notificationWebhookPlaceholder: 'https://api.day.app/your-key',
+    notificationEnabledLabel: 'プッシュを有効にする',
+    notificationQuietLabel: '通知オフ時間',
+    notificationQuietDesc: 'HH:mm 形式、日跨ぎ対応（例: 22:00 → 08:00）、空欄で無効',
+    notificationMutedLabel: '通知しないセッション',
+    notificationMutedDesc: 'カンマ区切りのセッション ID、これらは通知しません',
+    notificationTestBtn: 'テスト通知を送信',
+    notificationTestOk: 'テスト通知を送信しました',
+    notificationTestFail: 'テスト通知の送信に失敗しました',
+    notificationNeedUrl: '先に Webhook URL を入力してください',
     endpointLabel: 'ローカルアドレス',
     connectedDevicesLabel: 'ペアリング済み端末',
     connectedDevicesDesc: 'この Mac へのアクセスを許可したスマホを管理します',
@@ -329,6 +381,19 @@ export const DESKTOP_I18N: Record<DesktopLocale, DesktopTranslation> = {
     machineLabel: '컴퓨터 이름',
     machineDesc: '휴대폰 연결 시 표시되는 컴퓨터 이름 (기본값: 시스템 호스트명)',
     saveMachineBtn: '저장',
+    notificationTitle: '폰 푸시 알림',
+    notificationDesc: '폰이 오프라인일 때 중요한 이벤트를 푸시합니다 (Bark / ntfy / 자체 Webhook)',
+    notificationWebhookLabel: 'Webhook URL',
+    notificationWebhookPlaceholder: 'https://api.day.app/your-key',
+    notificationEnabledLabel: '푸시 사용',
+    notificationQuietLabel: '방해 금지 시간',
+    notificationQuietDesc: 'HH:mm 형식, 자정 넘김 지원(예: 22:00 → 08:00), 비우면 해제',
+    notificationMutedLabel: '알림 제외 세션',
+    notificationMutedDesc: '쉼표로 구분한 세션 ID, 해당 세션은 알리지 않습니다',
+    notificationTestBtn: '테스트 알림 보내기',
+    notificationTestOk: '테스트 알림을 보냈습니다',
+    notificationTestFail: '테스트 알림 전송 실패',
+    notificationNeedUrl: '먼저 Webhook URL을 입력하세요',
     endpointLabel: '로컬 주소',
     connectedDevicesLabel: '연결된 휴대폰',
     connectedDevicesDesc: '이 Mac에 접근 권한이 있는 모바일 기기 관리',

@@ -501,3 +501,11 @@
 - ChatGPT 终审九维全过：ToolCall 身份一致性 / 严格文本比较 / 附件一致性 / Synthetic 处理 / Snapshot 一致性 / v1-truncated 精确白名单 / Diff fail-closed / HTTP 500 最小授权 / catch 作用域隔离。J0.6b 不再追加验收要求。
 - **J0.6b 全程**：3a Schema/状态机 → 3b clientMessageId → 3c/3d v2 数据面（手机会话桌面可见闭环）→ 3e 最小 v2 SSE → 3f 严格对照（203/203）→ 3.1-3.5 五轮审查收尾，共 13 个 commit（97df99c…e73d5cd）。
 - **J0.7a GO**（Durable Log Client）设计三原则：`DurableCursor = string` opaque token（不解析/不假设格式）、Durable Cursor 与 Nienie Sequence 双序列空间由 Watermark 层映射、恢复语义优先（断线恢复/重复读取/游标推进/进程重启/并发消费一致性）；第一阶段只做接口+分页读取+游标传递，不混入 Snapshot/事件合并/移动端恢复。
+
+### 2026-11-11 路线图#1 通知系统（产品体验 P0）
+
+- **WebhookPushSender**（bridge-core/push.ts）：POST JSON `{title, body, sessionId, deviceId, platform, timestamp}` 到桌面配置的 Webhook URL（Bark/ntfy/自建通用）；附带 ntfy 兼容 `title` header（UTF-8 标题按 latin1 字节通道传递，规避 fetch 头值 latin1 限制，接收端按 UTF-8 还原——Node/undici 真实 HTTP 测试锁定该行为，Bun fetch 行为不同勿用于生产验证）。
+- **三类推送**：任务完成（status idle）、等待审批（status waiting）、执行出错（error）；正文注入会话标题（ws-server 用 sessionIndex 解析）更有信息量；正文过 redactLogText 脱敏。
+- **偏好**（路线图 1.5）：全局开关、会话静音列表、免打扰时段（HH:mm，start 含 end 不含，支持跨午夜）；pushToken 去重（多设备同通道只发一份）；`notifyTest` 测试链路。
+- **桌面设置页**（Tab 4）：通知配置区（Webhook URL/开关/免打扰时段/静音会话）+ 保存 + 发送测试通知按钮，4 语言文案入 DESKTOP_I18N；偏好持久化 preferences.json；IPC `set-notifications`/`test-notification`。
+- 测试：bridge-core +7（webhook 真实 HTTP 中文标题还原、完成/审批/出错、偏好过滤、去重、免打扰边界、测试发送），全仓 208 vitest 全绿。

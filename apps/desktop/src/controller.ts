@@ -8,6 +8,8 @@ import {
   BridgeServer,
   DEFAULT_RELAY_URL,
   PairingManager,
+  PushNotificationRouter,
+  WebhookPushSender,
   redactLogText,
   resolveRelayUrl,
   type AgentInfo,
@@ -29,7 +31,25 @@ export const NIENIE_IPC_CHANNELS = {
   SET_MACHINE_NAME: 'desktop:set-machine-name',
   SET_AUTO_UPDATE: 'desktop:set-auto-update',
   REVOKE_DEVICE: 'desktop:revoke-device',
+  SET_NOTIFICATIONS: 'desktop:set-notifications',
+  TEST_NOTIFICATION: 'desktop:test-notification',
 } as const;
+
+export type DesktopNotificationConfig = {
+  enabled: boolean;
+  webhookUrl: string;
+  quietStart: string;
+  quietEnd: string;
+  mutedSessionIds: string[];
+};
+
+export type SetNotificationsInput = {
+  enabled?: boolean | undefined;
+  webhookUrl?: string | undefined;
+  quietStart?: string | undefined;
+  quietEnd?: string | undefined;
+  mutedSessionIds?: string[] | undefined;
+};
 
 export type DesktopLogEntry = {
   id: string;
@@ -68,6 +88,7 @@ export type DesktopDashboardState = {
   pairing: DesktopPairingView | null;
   devices: PairedDevice[];
   relay: DesktopRelayConfig;
+  notifications: DesktopNotificationConfig;
   logs: DesktopLogEntry[];
 };
 
@@ -109,6 +130,12 @@ export class DesktopBridgeController {
   private pairingView: DesktopPairingView | null = null;
   private relayMode: 'default' | 'custom' = 'default';
   private customRelayUrl = '';
+  private notificationEnabled = true;
+  private notificationWebhookUrl = '';
+  private notificationQuietStart = '';
+  private notificationQuietEnd = '';
+  private notificationMutedSessionIds: string[] = [];
+  private pushRouter: PushNotificationRouter | undefined;
   private readonly logs: DesktopLogEntry[] = [];
   private logSequence = 0;
 
@@ -188,8 +215,72 @@ export class DesktopBridgeController {
         customRelayUrl: this.customRelayUrl,
         activeRelayUrl: this.getActiveRelayUrl(),
       },
+      notifications: {
+        enabled: this.notificationEnabled,
+        webhookUrl: this.notificationWebhookUrl,
+        quietStart: this.notificationQuietStart,
+        quietEnd: this.notificationQuietEnd,
+        mutedSessionIds: [...this.notificationMutedSessionIds],
+      },
       logs: [...this.logs],
     };
+  }
+
+  private buildPushRouter(): PushNotificationRouter {
+    const webhookUrl = this.notificationWebhookUrl.trim();
+    const sender = webhookUrl ? new WebhookPushSender({ url: webhookUrl }) : undefined;
+    return new PushNotificationRouter({
+      sender: sender
+        ? (message) => sender.send({ ...message, timestamp: Date.now() })
+        : undefined,
+      preferences: {
+        enabled: this.notificationEnabled,
+        mutedSessionIds: [...this.notificationMutedSessionIds],
+        ...(this.notificationQuietStart && this.notificationQuietEnd
+          ? { quietHours: { start: this.notificationQuietStart, end: this.notificationQuietEnd } }
+          : {}),
+      },
+    });
+  }
+
+  setNotifications(input: SetNotificationsInput): DesktopDashboardState {
+    if (input.enabled !== undefined) this.notificationEnabled = input.enabled;
+    if (input.webhookUrl !== undefined) this.notificationWebhookUrl = input.webhookUrl.trim();
+    if (input.quietStart !== undefined) this.notificationQuietStart = input.quietStart.trim();
+    if (input.quietEnd !== undefined) this.notificationQuietEnd = input.quietEnd.trim();
+    if (input.mutedSessionIds !== undefined) {
+      this.notificationMutedSessionIds = input.mutedSessionIds
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0);
+    }
+    this.pushRouter?.setPreferences({
+      enabled: this.notificationEnabled,
+      mutedSessionIds: [...this.notificationMutedSessionIds],
+      ...(this.notificationQuietStart && this.notificationQuietEnd
+        ? { quietHours: { start: this.notificationQuietStart, end: this.notificationQuietEnd } }
+        : { quietHours: undefined }),
+    });
+    this.savePreferences();
+    return this.getState();
+  }
+
+  async sendTestNotification(): Promise<void> {
+    const webhookUrl = this.notificationWebhookUrl.trim();
+    if (!webhookUrl) {
+      throw new Error('请先填写通知 Webhook URL');
+    }
+    const sender = new WebhookPushSender({ url: webhookUrl });
+    await sender.send({
+      deviceId: 'test',
+      platform: 'unknown',
+      provider: 'webhook',
+      pushToken: webhookUrl,
+      sessionId: 'test-session',
+      title: 'Nienie 测试通知',
+      body: '通知链路正常：你可以在手机上收到推送了。',
+      timestamp: Date.now(),
+    });
+    this.appendLog('info', 'Test notification sent');
   }
 
   async startBridge(): Promise<DesktopDashboardState> {
@@ -198,12 +289,14 @@ export class DesktopBridgeController {
     }
 
     try {
+      this.pushRouter = this.buildPushRouter();
       const server = new BridgeServer({
         registry: this.registry,
         pairingManager: this.pairingManager,
         host: this.host,
         port: this.requestedPort,
         machineId: this.machineId,
+        pushRouter: this.pushRouter,
       });
 
       const address = await server.start();
@@ -368,6 +461,11 @@ export class DesktopBridgeController {
         autoUpdate?: boolean;
         relayMode?: 'default' | 'custom';
         customRelayUrl?: string;
+        notificationEnabled?: boolean;
+        notificationWebhookUrl?: string;
+        notificationQuietStart?: string;
+        notificationQuietEnd?: string;
+        notificationMutedSessionIds?: string[];
       };
       if (typeof raw.machineId === 'string' && raw.machineId.trim()) {
         this.machineId = raw.machineId.trim();
@@ -389,6 +487,24 @@ export class DesktopBridgeController {
       if (typeof raw.customRelayUrl === 'string') {
         this.customRelayUrl = raw.customRelayUrl;
       }
+      if (typeof raw.notificationEnabled === 'boolean') {
+        this.notificationEnabled = raw.notificationEnabled;
+      }
+      if (typeof raw.notificationWebhookUrl === 'string') {
+        this.notificationWebhookUrl = raw.notificationWebhookUrl;
+      }
+      if (typeof raw.notificationQuietStart === 'string') {
+        this.notificationQuietStart = raw.notificationQuietStart;
+      }
+      if (typeof raw.notificationQuietEnd === 'string') {
+        this.notificationQuietEnd = raw.notificationQuietEnd;
+      }
+      if (Array.isArray(raw.notificationMutedSessionIds)) {
+        this.notificationMutedSessionIds = raw.notificationMutedSessionIds
+          .filter((id): id is string => typeof id === 'string')
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0);
+      }
     } catch {
       // Ignore corrupted preferences file
     }
@@ -406,6 +522,11 @@ export class DesktopBridgeController {
           autoUpdate: this.autoUpdate,
           relayMode: this.relayMode,
           customRelayUrl: this.customRelayUrl,
+          notificationEnabled: this.notificationEnabled,
+          notificationWebhookUrl: this.notificationWebhookUrl,
+          notificationQuietStart: this.notificationQuietStart,
+          notificationQuietEnd: this.notificationQuietEnd,
+          notificationMutedSessionIds: this.notificationMutedSessionIds,
         },
         null,
         2,
@@ -443,6 +564,12 @@ export function registerDesktopIpcHandlers(
   ipcMain.handle(NIENIE_IPC_CHANNELS.SET_AUTO_UPDATE, (_event, enabled) =>
     controller.setAutoUpdate(Boolean(enabled)),
   );
+  ipcMain.handle(NIENIE_IPC_CHANNELS.SET_NOTIFICATIONS, (_event, input) =>
+    controller.setNotifications((input ?? {}) as SetNotificationsInput),
+  );
+  ipcMain.handle(NIENIE_IPC_CHANNELS.TEST_NOTIFICATION, () =>
+    controller.sendTestNotification(),
+  );
   ipcMain.handle(NIENIE_IPC_CHANNELS.REVOKE_DEVICE, (_event, deviceId) =>
     controller.revokeDevice(String(deviceId)),
   );
@@ -463,6 +590,8 @@ export type DesktopPreloadApi = {
   setMachineName(name: string): Promise<DesktopDashboardState>;
   setAutoUpdate(enabled: boolean): Promise<DesktopDashboardState>;
   revokeDevice(deviceId: string): Promise<DesktopDashboardState>;
+  setNotifications(input: SetNotificationsInput): Promise<DesktopDashboardState>;
+  testNotification(): Promise<void>;
 };
 
 export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPreloadApi {
@@ -496,6 +625,13 @@ export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPr
         NIENIE_IPC_CHANNELS.REVOKE_DEVICE,
         deviceId,
       ) as Promise<DesktopDashboardState>,
+    setNotifications: (input: SetNotificationsInput) =>
+      ipcRenderer.invoke(
+        NIENIE_IPC_CHANNELS.SET_NOTIFICATIONS,
+        input,
+      ) as Promise<DesktopDashboardState>,
+    testNotification: () =>
+      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.TEST_NOTIFICATION) as Promise<void>,
   };
 }
 
