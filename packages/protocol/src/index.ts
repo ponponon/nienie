@@ -93,6 +93,8 @@ export type ModelInfo = {
 };
 
 export type SessionFileDiff = {
+  /** 稳定差异标识（J0.6b）：sha256 派生，跨重连/重放不变。 */
+  diffId: string;
   file: string;
   before: string;
   after: string;

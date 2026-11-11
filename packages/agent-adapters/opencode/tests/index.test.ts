@@ -621,15 +621,9 @@ describe('OpenCodeAdapter', () => {
 
     // 6. cancel(), replyPermission(), & getSessionDiff()
     const diffs = await adapter.getSessionDiff('ses_alpha');
-    expect(diffs).toEqual([
-      {
-        file: 'src/index.ts',
-        before: 'const a = 1;',
-        after: 'const a = 2;',
-        additions: 1,
-        deletions: 1,
-      },
-    ]);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]).toMatchObject({ file: 'src/index.ts', before: 'const a = 1;', after: 'const a = 2;', additions: 1, deletions: 1 });
+    expect(diffs[0]!.diffId).toMatch(/^[0-9a-f]{64}$/);
 
     await adapter.replyPermission('ses_alpha', 'perm_99', 'allow_always');
     expect(receivedPermissions).toEqual([

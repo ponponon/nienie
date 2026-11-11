@@ -679,7 +679,7 @@ class MobileBridgeClient extends ChangeNotifier {
         final map = Map<String, dynamic>.from(raw as Map);
         items.add(
           FileDiffCardItem(
-            diffId: map['file'] as String? ?? '',
+            diffId: map['diffId'] as String? ?? map['file'] as String? ?? '',
             file: map['file'] as String? ?? '',
             before: map['before'] as String? ?? '',
             after: map['after'] as String? ?? '',

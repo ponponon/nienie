@@ -427,3 +427,12 @@
 - **手机端**（J0.4b 遗留 P1 正式解决）：`UserPromptItem.messageId` 字段；`sendMessage` 发送前生成 `msg_<ts>_<seq>` 打标到本地乐观消息、随请求发送、响应回填权威 ID；reducer 认领语义——同 messageId 的未认领乐观消息只绑定 partId/revision 并以权威文本对账（不重复追加首个全文）；后续增量按 J0.4 partId/revision 门禁；无匹配才新建。消除「SSE 先于 send 响应到达」与「断线重连后历史重放重复用户消息」两个竞态。
 - 测试：手机端新增认领用例（打标断言 + 首次认领不重复 + 重放门禁），29 mobile + 141 vitest 全绿。
 - **附带排障**（记入 FailureExperience）：flutter/dart 进程静默卡死是 `bin/cache/lockfile` 残留锁 + dart 二进制被 macOS quarantine 卡在 dyld Gatekeeper 校验，删锁文件后放行。
+
+### 2026-11-10 J0.6b-3c/3d 适配器数据面切换 v2（会话 CRUD/写入/历史/快照/差异）
+
+- **v2 模式**（`OpenCodeAdapter` 新增 `mode: 'v1'|'v2'` + `v2Endpoint`）：默认 v2——attach 桌面 OpenCode 共享服务（`discoverOpenCodeService()` 发现，仅连接不启动，服务不可用则明确报错提示启动 Desktop，不回退 v1）；`NIENIE_OPENCODE_API=v1` 或显式 baseUrl/fetch/envUrl 配置时走 v1 回退路径（含 mimo 适配器保持 v1）。
+- **会话层切 v2**：`listSessions`（`GET /api/session?parentID=null&order=desc`）/ `createSession`（`{title, location:{directory}, parentID}`）/ `loadSession` / `sendMessage`（`switchModel` 后 `prompt {id: clientMessageId, text}`，**校验回显 messageId 一致否则抛错**，返回 `{messageId}`）/ `cancel`（interrupt）/ `replyPermission`（allow_once→once、allow_always→always、reject→reject）/ `listModels`（model/default/provider 三接口 + drafts.sqlite 可见性过滤）全部走 `OpenCodeV2Client`。
+- **读取层切 v2（3d）**：`loadSession` 触发 `emitV2MessageHistory`（`listAllMessages` 完整分页 → `restoreHistoryEvents` → 稳定 eventId `history:{sid}:{partId}:{revision}` 回放）；`getSessionSnapshot` 用 Message API + `buildSnapshotParts`（显式 tool status、revision 与事件同口径）；`getSessionDiff` 用 `resolveDiffTurnRange`（缺省最新用户消息 turn）+ v2 Diff API + `deriveDiffId`（真实 turn 范围哈希）。
+- **diffId 正式修复（J0 P2 结清）**：`SessionFileDiff` 增加必填 `diffId`（sha256 稳定派生）；v1 回退路径用 `legacy-v1` 哨兵范围派生（确定性）；手机端 FileDiffCardItem 改用 `map['diffId']`（不再拿文件路径当 ID）。v2 的 patch 文本暂由 `after` 字段承载（before 空），J0.7 UI 重构时换 patch 结构。
+- 测试 147 vitest（新增 v2 模式适配器 6 用例：detect/list/create/send 模型切换+回显校验/cancel/权限映射/历史恢复 eventId/快照/turn 范围 diffId）+ 29 mobile 全绿。
+- **状态**：6b-3c/3d 完成；剩余 3e（最小 v2 SSE）、3f（真实数据对照）、3g（移除 v1 SQLite）。

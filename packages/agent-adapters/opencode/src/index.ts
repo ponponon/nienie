@@ -25,6 +25,11 @@ import type {
 } from '@nienie/protocol';
 import { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
 import { parseSseStream } from './sse.js';
+import { discoverOpenCodeService, type OpenCodeServiceEndpoint } from './service-discovery.js';
+import { OpenCodeV2Client } from './v2/client.js';
+import { deriveDiffId } from './v2/diff-id.js';
+import { buildSnapshotParts, resolveDiffTurnRange, restoreHistoryEvents } from './v2/message-restore.js';
+import type { OpenCodeV2SessionInfo } from './v2/types.js';
 
 export { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
 export { parseSseStream } from './sse.js';
@@ -108,6 +113,10 @@ const capabilities = {
 } as const;
 
 export type OpenCodeAdapterOptions = OpenCodeNormalizerOptions & {
+  /** v2=attach OpenCode Desktop 共享服务（默认）；v1=回退旧 4096 路径（NIENIE_OPENCODE_API=v1 或显式 baseUrl 时）。 */
+  mode?: 'v1' | 'v2' | undefined;
+  /** 显式 v2 服务端点（跳过服务发现，测试/自定义部署用）。 */
+  v2Endpoint?: { baseUrl: string; password?: string | undefined } | undefined;
   baseUrl?: string | undefined;
   executablePath?: string | undefined;
   autoStartServer?: boolean | undefined;
@@ -148,6 +157,9 @@ export class OpenCodeAdapter implements AgentAdapter {
   private readonly directory: string | undefined;
   private readonly detectTimeoutMs: number;
   private readonly fetchImpl: typeof globalThis.fetch;
+  private readonly v2Mode: boolean;
+  private readonly v2Endpoint: OpenCodeServiceEndpoint | undefined;
+  private v2Client: OpenCodeV2Client | undefined;
   private readonly normalizer: OpenCodeEventNormalizer;
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
 
@@ -197,6 +209,20 @@ export class OpenCodeAdapter implements AgentAdapter {
     this.directory = options.directory;
     this.detectTimeoutMs = options.detectTimeoutMs ?? DEFAULT_DETECT_TIMEOUT_MS;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
+    const explicitV1 = options.baseUrl !== undefined || options.fetch !== undefined || envUrl !== undefined;
+    this.v2Mode =
+      this.id !== 'mimo' &&
+      options.mode !== 'v1' &&
+      (options.mode === 'v2' || (!explicitV1 && process.env.NIENIE_OPENCODE_API !== 'v1'));
+    this.v2Endpoint = options.v2Endpoint
+      ? {
+          baseUrl: options.v2Endpoint.baseUrl,
+          pid: process.pid,
+          version: 'explicit',
+          username: 'opencode',
+          password: options.v2Endpoint.password,
+        }
+      : undefined;
     this.normalizer = new OpenCodeEventNormalizer({ ...options, agentId: this.id });
     this.eventManager = new AgentEventConnectionManager<unknown>({
       connect: (key, signal) => this.connectEventStream(key, signal),
@@ -209,7 +235,81 @@ export class OpenCodeAdapter implements AgentAdapter {
     });
   }
 
+  private async ensureV2Client(): Promise<OpenCodeV2Client> {
+    if (this.v2Client) return this.v2Client;
+    if (this.v2Endpoint) {
+      this.v2Client = new OpenCodeV2Client({
+        baseUrl: this.v2Endpoint.baseUrl,
+        password: this.v2Endpoint.password,
+        fetch: this.fetchImpl,
+      });
+      return this.v2Client;
+    }
+    const found = await discoverOpenCodeService({ fetch: this.fetchImpl });
+    if (!found.ok) {
+      throw new Error(
+        `OpenCode v2 service unavailable (${found.reason}); start OpenCode Desktop and retry`,
+      );
+    }
+    this.v2Client = new OpenCodeV2Client({
+      baseUrl: found.endpoint.baseUrl,
+      password: found.endpoint.password,
+      fetch: this.fetchImpl,
+    });
+    return this.v2Client;
+  }
+
+  private mapV2Session(raw: OpenCodeV2SessionInfo): AgentSession {
+    const cachedStatus = this.normalizer.getSessionStatus(raw.id);
+    const directory = raw.location.directory || this.directory || '';
+    if (directory) this.sessionDirectories.set(raw.id, directory);
+    return {
+      id: raw.id,
+      agentId: this.id,
+      title: raw.title?.trim() || 'Untitled session',
+      projectPath: directory,
+      status: cachedStatus ?? 'idle',
+      createdAt: toIsoTimestamp(raw.time.created),
+      updatedAt: toIsoTimestamp(raw.time.updated ?? raw.time.created),
+    };
+  }
+
+  /** v2 历史恢复：Message API 全量分页 → 恢复层事件规格 → 稳定 eventId 回放（幂等）。 */
+  private async emitV2MessageHistory(sessionId: string): Promise<void> {
+    try {
+      const client = await this.ensureV2Client();
+      const messages = await client.listAllMessages(sessionId);
+      for (const spec of restoreHistoryEvents(messages)) {
+        const partId = spec.payload['partId'] as string | undefined;
+        const revision = spec.payload['partRevision'] as number | undefined;
+        this.emit(
+          createCanonicalEvent({
+            eventId: `history:${sessionId}:${partId ?? `seq_${++this.historySeqCounter}`}:${revision ?? 0}`,
+            streamEpoch: this.normalizer.streamEpoch,
+            agentId: this.id,
+            sessionId,
+            sequence: this.normalizer.nextSequence(sessionId),
+            timestamp: new Date().toISOString(),
+            type: spec.type,
+            payload: spec.payload,
+          }),
+        );
+      }
+    } catch {
+      this.emitDiagnosticWarning(`v2 history restore failed for ${sessionId}`);
+    }
+  }
+
   async detect() {
+    if (this.v2Mode) {
+      try {
+        const client = await this.ensureV2Client();
+        const info = await client.getServerInfo();
+        return createAgentInfo(this, true, info.version);
+      } catch {
+        return createAgentInfo(this, false);
+      }
+    }
     const health = await this.checkHealth();
     if (health.healthy) {
       return createAgentInfo(this, true, health.version);
@@ -307,6 +407,11 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async listSessions(): Promise<AgentSession[]> {
+    if (this.v2Mode) {
+      const client = await this.ensureV2Client();
+      const page = await client.listSessions({ parentID: 'null', order: 'desc', limit: 120 });
+      return page.data.map((raw) => this.mapV2Session(raw));
+    }
     if (this.autoStartServer) {
       const dbSessions = this.readLocalSqliteSessions();
       if (dbSessions.length > 0) {
@@ -368,6 +473,26 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async listModels(): Promise<ModelInfo[]> {
+    if (this.v2Mode) {
+      const client = await this.ensureV2Client();
+      const query = this.directory ? { directory: this.directory } : {};
+      const [modelsRes, defaultRes, providersRes] = await Promise.all([
+        client.listModels(query),
+        client.getDefaultModel(query),
+        client.listProviders(query),
+      ]);
+      const providerNames = new Map(providersRes.data.map((pr) => [pr.id, pr.name]));
+      const defaultRefId = defaultRes.data?.id;
+      const models: ModelInfo[] = modelsRes.data.map((m) => ({
+        id: `${m.providerID}/${m.modelID}`,
+        name: m.name ?? m.modelID,
+        providerId: m.providerID,
+        providerName: providerNames.get(m.providerID) ?? m.providerID,
+        isDefault: m.id === defaultRefId,
+      }));
+      const visibility = this.readModelVisibility();
+      return visibility ? models.filter((m) => visibility[m.id] !== 'hide') : models;
+    }
     const data = await this.requestJson<{
       providers?: Array<{
         id: string;
@@ -407,6 +532,15 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {
+    if (this.v2Mode) {
+      const client = await this.ensureV2Client();
+      const raw = await client.createSession({
+        title: input.title,
+        ...(input.projectPath ? { location: { directory: input.projectPath } } : {}),
+        ...(input.parentSessionId ? { parentID: input.parentSessionId } : {}),
+      });
+      return this.mapV2Session(raw);
+    }
     if (this.autoStartServer) {
       await this.ensureManagedServerRunning();
     }
@@ -429,6 +563,14 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async loadSession(sessionId: string): Promise<AgentSession> {
+    if (this.v2Mode) {
+      const client = await this.ensureV2Client();
+      if (!this.loadedHistorySessions.has(sessionId)) {
+        this.loadedHistorySessions.add(sessionId);
+        await this.emitV2MessageHistory(sessionId);
+      }
+      return this.mapV2Session(await client.getSession(sessionId));
+    }
     if (this.autoStartServer) {
       if (!this.loadedHistorySessions.has(sessionId)) {
         this.loadedHistorySessions.add(sessionId);
@@ -614,6 +756,24 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   /** 获取会话完整快照（Part 全量状态），供 resetRequired/truncated 时原子重建。 */
   async getSessionSnapshot(sessionId: string): Promise<SessionSnapshot> {
+    if (this.v2Mode) {
+      const client = await this.ensureV2Client();
+      const messages = await client.listAllMessages(sessionId);
+      const parts = buildSnapshotParts(messages);
+      return {
+        schemaVersion: SESSION_SNAPSHOT_SCHEMA_VERSION,
+        snapshotId: `snap_${Date.now()}_${sessionId}`,
+        sessionId,
+        agentId: this.id,
+        streamEpoch: this.normalizer.streamEpoch,
+        watermark: this.normalizer.peekSequence(sessionId),
+        capturedAt: new Date().toISOString(),
+        complete: true,
+        hasMore: false,
+        totalParts: parts.length,
+        parts,
+      };
+    }
     const empty: SessionSnapshot = {
       schemaVersion: SESSION_SNAPSHOT_SCHEMA_VERSION,
       snapshotId: `snap_${Date.now()}`,
@@ -761,10 +921,56 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async getSessionDiff(sessionId: string): Promise<SessionFileDiff[]> {
+    if (this.v2Mode) {
+      return this.getSessionDiffV2(sessionId);
+    }
     const encodedId = encodeURIComponent(sessionId);
-    return this.requestJson<SessionFileDiff[]>(`/session/${encodedId}/diff`, {
+    const raw = await this.requestJson<Array<Record<string, unknown>>>(`/session/${encodedId}/diff`, {
       method: 'GET',
     });
+    return raw.map((d) => {
+      const file = String(d['file'] ?? '');
+      const before = String(d['before'] ?? '');
+      const after = String(d['after'] ?? '');
+      return {
+        diffId: deriveDiffId({
+          sessionId,
+          fromMessageId: 'legacy-v1',
+          toMessageId: 'legacy-v1',
+          file,
+          patch: after || before,
+        }),
+        file,
+        before,
+        after,
+        additions: Number(d['additions'] ?? 0),
+        deletions: Number(d['deletions'] ?? 0),
+      };
+    });
+  }
+
+  private async getSessionDiffV2(sessionId: string): Promise<SessionFileDiff[]> {
+    const client = await this.ensureV2Client();
+    const messages = await client.listAllMessages(sessionId);
+    const range = resolveDiffTurnRange(messages);
+    const files = await client.getSessionDiff(sessionId, {
+      from: range.fromMessageId,
+      to: range.toMessageId,
+    });
+    return files.map((f) => ({
+      diffId: deriveDiffId({
+        sessionId,
+        fromMessageId: range.fromMessageId,
+        toMessageId: range.toMessageId,
+        file: f.file,
+        patch: f.patch,
+      }),
+      file: f.file,
+      before: '',
+      after: f.patch,
+      additions: f.additions,
+      deletions: f.deletions,
+    }));
   }
 
   async sendMessage(
@@ -772,6 +978,26 @@ export class OpenCodeAdapter implements AgentAdapter {
     message: string,
     options?: { modelId?: string | undefined; clientMessageId?: string | undefined },
   ): Promise<{ messageId?: string | undefined } | void> {
+    if (this.v2Mode) {
+      const client = await this.ensureV2Client();
+      const modelId = options?.modelId;
+      if (modelId) {
+        const slash = modelId.indexOf('/');
+        const providerID = slash > 0 ? modelId.slice(0, slash) : modelId;
+        const id = slash > 0 ? modelId.slice(slash + 1) : modelId;
+        await client.switchModel(sessionId, { id, providerID });
+      }
+      const result = await client.prompt(sessionId, {
+        ...(options?.clientMessageId ? { id: options.clientMessageId } : {}),
+        text: message,
+      });
+      if (options?.clientMessageId && result.id !== options.clientMessageId) {
+        throw new Error(
+          `OpenCode message ID mismatch: expected ${options.clientMessageId}, got ${result.id}`,
+        );
+      }
+      return { messageId: result.id };
+    }
     if (this.autoStartServer) {
       await this.ensureManagedServerRunning();
     }
@@ -821,6 +1047,11 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   async cancel(sessionId: string): Promise<void> {
+    if (this.v2Mode) {
+      const client = await this.ensureV2Client();
+      await client.interrupt(sessionId);
+      return;
+    }
     const encodedId = encodeURIComponent(sessionId);
     const response = await this.fetchImpl(this.buildUrl(`/session/${encodedId}/abort`), {
       method: 'POST',
@@ -840,6 +1071,12 @@ export class OpenCodeAdapter implements AgentAdapter {
     permissionId: string,
     decision: PermissionDecision,
   ): Promise<void> {
+    if (this.v2Mode) {
+      const client = await this.ensureV2Client();
+      const mapped = decision === 'allow_always' ? 'always' : decision === 'allow_once' ? 'once' : 'reject';
+      await client.replyPermission(sessionId, permissionId, mapped);
+      return;
+    }
     const encodedSessionId = encodeURIComponent(sessionId);
     const encodedPermId = encodeURIComponent(permissionId);
     const body =
