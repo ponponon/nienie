@@ -362,3 +362,11 @@
 - **`redirect: 'error'` 补直接断言**：fetch mock 校验请求确实带 `redirect: 'error'`。
 - **FEATURE.md 自洽**：修正 J0.5 条目里"第一个验证通过的胜出"的过期描述（J0.5.1 起已是收集全部有效候选+歧义判定）。
 - 测试 41 个；真机冒烟继续正确发现桌面 v2.2.5 服务。ChatGPT 结论：J0.5 核心功能正式通过，J0.5.2 后封板，批准并行启动 J0.6a（OpenCodeV2Client）。
+
+### 2026-11-10 J0.6a OpenCodeV2Client（v2 HTTP API 客户端）
+
+- **新增 `packages/agent-adapters/opencode/src/v2/client.ts` + `v2/types.ts`**：独立封装 `OpenCodeV2Client`（HTTP 请求逻辑不散落在 Adapter 里），统一 Basic Auth（`opencode:<password>`）、JSON 序列化、`redirect: 'error'`、AbortSignal 超时（默认 15s）、ID 全部 `encodeURIComponent`。Schema 严格对照 OpenCode v2.2.5 官方契约（`packages/protocol/src/groups/*.ts` + `openapi.json`），不引入 v1 兼容层。
+- **端点覆盖**（J0.6a 范围，不含事件/快照/SQLite）：`GET /api/info`；Session List（扁平查询参数 `limit/order/search/parentID/archived/directory/project/subpath/cursor`，响应 `{data, cursor:{previous,next}}` 游标分页）/ Create（`{title, location:{directory}, model:{id,providerID,variant?}}`）/ Get / Delete（204）；Model List（`location[directory]` deepObject 参数 + `types` 重复参数，响应 `{location, data}`）/ Default（`data` 可为 null）/ Provider List；Model Switch（`POST /api/session/:id/model`，body `{model:{id,providerID,variant?}}`，204）；Prompt（`{text, id?, files?, agents?, skills?, metadata?, delivery?: steer|queue, resume?}`，**无 model 字段**，返回 `{data: Inbox.User}` = 入队回执而非执行完成）；Interrupt（无 body，`resume?: "true"|"false"` 字符串查询参数，返回 `{interrupted}`）；Permission Reply（`{decision: once|always|reject, message?}`，204）。
+- **错误处理**：非 2xx 抛 `OpenCodeV2ClientError`（`status` + `tag`（响应体 `_tag`，如 `SessionNotFoundError`）+ `message`），网络失败/超时 `status: 0`，非 JSON 错误体回退状态码消息。
+- **Schema 关键坑位（写入测试防回归）**：模型引用字段是 `id` 不是 `modelID`；Session 列表是扁平 `directory` 参数而 Model/Provider 是 `location[directory]`；Prompt 响应是入队回执（`type: 'user'` 的 Inbox 记录），不能当执行完成；Interrupt 的 `resume` 是字符串布尔。
+- 测试 57 个（新增 v2-client 16 个：全端点请求形状/查询编码/204 空体/URL 编码/错误提取/网络失败/无密码不发认证头/redirect 断言）；真机只读冒烟成功列出桌面 v2 会话（crawler_console 的 K8s 排查、ideaboom 的 RabbitMQ 研究），确认与桌面同库同源。

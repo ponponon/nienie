@@ -44,6 +44,22 @@ export {
   type OpenCodeServiceRegistration,
   type VerifyOpenCodeServiceOptions,
 } from './service-discovery.js';
+export { OpenCodeV2Client, OpenCodeV2ClientError, type OpenCodeV2ClientOptions } from './v2/client.js';
+export type {
+  OpenCodeV2CreateSessionInput,
+  OpenCodeV2InboxUserMessage,
+  OpenCodeV2LocationResponse,
+  OpenCodeV2ModelInfo,
+  OpenCodeV2ModelListQuery,
+  OpenCodeV2ModelRef,
+  OpenCodeV2PermissionDecision,
+  OpenCodeV2PromptInput,
+  OpenCodeV2ProviderInfo,
+  OpenCodeV2ServerInfo,
+  OpenCodeV2SessionInfo,
+  OpenCodeV2SessionListQuery,
+  OpenCodeV2SessionListResponse,
+} from './v2/types.js';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_OPENCODE_URL = 'http://127.0.0.1:4096';

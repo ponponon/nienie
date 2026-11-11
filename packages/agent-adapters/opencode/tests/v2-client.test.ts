@@ -1,0 +1,307 @@
+import { describe, expect, it } from 'vitest';
+import { OpenCodeV2Client, OpenCodeV2ClientError } from '../src/v2/client.js';
+
+type CapturedRequest = {
+  method: string;
+  url: string;
+  auth: string | undefined;
+  contentType: string | undefined;
+  redirect: RequestRedirect | undefined;
+  body: unknown;
+};
+
+function mockFetch(
+  responder: (req: { method: string; path: string; search: URLSearchParams }) => Response | Promise<Response>,
+  captured: CapturedRequest[] = [],
+): typeof globalThis.fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const req = {
+      method: init?.method ?? 'GET',
+      path: url.pathname,
+      search: url.searchParams,
+    };
+    captured.push({
+      method: req.method,
+      url: url.toString(),
+      auth: (init?.headers as Record<string, string> | undefined)?.['authorization'],
+      contentType: (init?.headers as Record<string, string> | undefined)?.['content-type'],
+      redirect: init?.redirect,
+      body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+    });
+    return responder(req);
+  }) as typeof globalThis.fetch;
+}
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+}
+
+const sessionInfo = {
+  id: 'ses_1',
+  projectID: 'proj_1',
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  time: { created: 1760000000000, updated: 1760000000000 },
+  title: 'Mobile Session',
+  location: { directory: '/workspace/nienie' },
+};
+
+describe('OpenCodeV2Client', () => {
+  it('getServerInfo sends Basic auth and refuses redirects', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      password: 'secret-password',
+      fetch: mockFetch(() => json(200, { version: '2.2.5', pid: 28118, urls: [], paths: { tmp: '/tmp' } }), captured),
+    });
+    const info = await client.getServerInfo();
+    expect(info.version).toBe('2.2.5');
+    expect(captured[0]).toMatchObject({
+      method: 'GET',
+      url: 'http://127.0.0.1:49374/api/info',
+      auth: `Basic ${Buffer.from('opencode:secret-password').toString('base64')}`,
+      redirect: 'error',
+    });
+  });
+
+  it('sends no authorization header without a password', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { version: '2.2.5', pid: 28118, urls: [], paths: { tmp: '/tmp' } }), captured),
+    });
+    await client.getServerInfo();
+    expect(captured[0]?.auth).toBeUndefined();
+  });
+
+  it('listSessions encodes flat query params and returns the cursor pair', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(
+        () => json(200, { data: [sessionInfo], cursor: { next: 'cursor_next', previous: 'cursor_prev' } }),
+        captured,
+      ),
+    });
+    const page = await client.listSessions({
+      limit: 20,
+      order: 'desc',
+      search: 'ideaboom',
+      parentID: 'null',
+      archived: false,
+      directory: '/workspace/nienie',
+      subpath: 'src',
+      cursor: 'cursor_prev',
+    });
+    expect(page.data).toEqual([sessionInfo]);
+    expect(page.cursor.next).toBe('cursor_next');
+    const search = new URL(captured[0]!.url).searchParams;
+    expect(Object.fromEntries(search)).toEqual({
+      limit: '20',
+      order: 'desc',
+      search: 'ideaboom',
+      parentID: 'null',
+      archived: 'false',
+      directory: '/workspace/nienie',
+      subpath: 'src',
+      cursor: 'cursor_prev',
+    });
+  });
+
+  it('createSession sends the v2 body shape and unwraps data', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { data: sessionInfo }), captured),
+    });
+    const created = await client.createSession({
+      title: 'Mobile Session',
+      location: { directory: '/workspace/nienie' },
+      model: { id: 'claude-sonnet-4', providerID: 'anthropic' },
+    });
+    expect(created.id).toBe('ses_1');
+    expect(captured[0]).toMatchObject({
+      method: 'POST',
+      url: 'http://127.0.0.1:49374/api/session',
+      contentType: 'application/json',
+      body: {
+        title: 'Mobile Session',
+        location: { directory: '/workspace/nienie' },
+        model: { id: 'claude-sonnet-4', providerID: 'anthropic' },
+      },
+    });
+  });
+
+  it('getSession URL-encodes the session id', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { data: sessionInfo }), captured),
+    });
+    await client.getSession('ses a/b?c');
+    expect(new URL(captured[0]!.url).pathname).toBe('/api/session/ses%20a%2Fb%3Fc');
+  });
+
+  it('deleteSession treats 204 as success with no body', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => new Response(null, { status: 204 }), captured),
+    });
+    await expect(client.deleteSession('ses_1')).resolves.toBeUndefined();
+    expect(captured[0]).toMatchObject({ method: 'DELETE', url: 'http://127.0.0.1:49374/api/session/ses_1' });
+  });
+
+  it('listModels uses location[directory] and repeats types params', async () => {
+    const captured: CapturedRequest[] = [];
+    const modelInfo = { id: 'anthropic/claude-sonnet-4', modelID: 'claude-sonnet-4', providerID: 'anthropic' };
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(
+        () => json(200, { location: { directory: '/workspace/nienie' }, data: [modelInfo] }),
+        captured,
+      ),
+    });
+    const result = await client.listModels({ directory: '/workspace/nienie', types: ['chat', 'agent'] });
+    expect(result.location.directory).toBe('/workspace/nienie');
+    expect(result.data).toEqual([modelInfo]);
+    const url = new URL(captured[0]!.url);
+    expect(url.searchParams.get('location[directory]')).toBe('/workspace/nienie');
+    expect(url.searchParams.getAll('types')).toEqual(['chat', 'agent']);
+  });
+
+  it('getDefaultModel accepts a null model', async () => {
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { location: { directory: '/w' }, data: null })),
+    });
+    const result = await client.getDefaultModel({ directory: '/w' });
+    expect(result.data).toBeNull();
+  });
+
+  it('listProviders unwraps the location response', async () => {
+    const provider = { id: 'anthropic', name: 'Anthropic', activation: 'enabled', package: '@opencode/anthropic' };
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { location: { directory: '/w' }, data: [provider] })),
+    });
+    const result = await client.listProviders();
+    expect(result.data).toEqual([provider]);
+  });
+
+  it('switchModel posts {model:{id,providerID}} and expects 204', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => new Response(null, { status: 204 }), captured),
+    });
+    await client.switchModel('ses_1', { id: 'gpt-5.6', providerID: 'openai', variant: 'high' });
+    expect(captured[0]).toMatchObject({
+      method: 'POST',
+      url: 'http://127.0.0.1:49374/api/session/ses_1/model',
+      body: { model: { id: 'gpt-5.6', providerID: 'openai', variant: 'high' } },
+    });
+  });
+
+  it('prompt sends the v2 PromptInput shape and returns the queued inbox message', async () => {
+    const captured: CapturedRequest[] = [];
+    const inbox = {
+      id: 'msg_1',
+      sessionID: 'ses_1',
+      time: { created: 1760000000000 },
+      type: 'user',
+      payload: { text: '帮我分析这个项目' },
+      delivery: 'queue',
+    };
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { data: inbox }), captured),
+    });
+    const result = await client.prompt('ses_1', {
+      text: '帮我分析这个项目',
+      files: [{ uri: 'file:///w/a.ts', name: 'a.ts' }],
+      agents: [{ name: 'explore' }],
+      skills: [{ id: 'skill_1' }],
+      metadata: { source: 'mobile' },
+      delivery: 'queue',
+      resume: false,
+    });
+    expect(result).toEqual(inbox);
+    expect(captured[0]).toMatchObject({
+      method: 'POST',
+      url: 'http://127.0.0.1:49374/api/session/ses_1/prompt',
+      body: {
+        text: '帮我分析这个项目',
+        files: [{ uri: 'file:///w/a.ts', name: 'a.ts' }],
+        agents: [{ name: 'explore' }],
+        skills: [{ id: 'skill_1' }],
+        metadata: { source: 'mobile' },
+        delivery: 'queue',
+        resume: false,
+      },
+    });
+    expect(captured[0]?.body).not.toHaveProperty('model');
+    expect(result.type).toBe('user');
+  });
+
+  it('interrupt sends resume as a string query and returns the interrupted flag', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { interrupted: true }), captured),
+    });
+    const result = await client.interrupt('ses_1', { resume: true });
+    expect(result.interrupted).toBe(true);
+    expect(new URL(captured[0]!.url).searchParams.get('resume')).toBe('true');
+    expect(captured[0]?.body).toBeUndefined();
+  });
+
+  it('replyPermission URL-encodes the request id and maps decisions', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => new Response(null, { status: 204 }), captured),
+    });
+    await client.replyPermission('ses_1', 'perm/1', 'once');
+    await client.replyPermission('ses_1', 'perm_2', 'reject', 'not allowed');
+    expect(captured[0]).toMatchObject({
+      method: 'POST',
+      url: 'http://127.0.0.1:49374/api/session/ses_1/permission/perm%2F1/reply',
+      body: { decision: 'once' },
+    });
+    expect(captured[1]).toMatchObject({ body: { decision: 'reject', message: 'not allowed' } });
+  });
+
+  it('throws OpenCodeV2ClientError with tag and message from error bodies', async () => {
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(404, { _tag: 'SessionNotFoundError', sessionID: 'ses_1', message: 'Session not found' })),
+    });
+    const error = await client.getSession('ses_1').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OpenCodeV2ClientError);
+    expect(error).toMatchObject({ status: 404, tag: 'SessionNotFoundError', message: 'Session not found' });
+  });
+
+  it('keeps a status-based message for non-JSON error bodies', async () => {
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => new Response('<html>boom</html>', { status: 500 })),
+    });
+    const error = await client.getServerInfo().catch((e: unknown) => e);
+    expect(error).toMatchObject({ status: 500, tag: undefined });
+    expect((error as OpenCodeV2ClientError).message).toContain('500');
+  });
+
+  it('wraps network failures as status 0 errors', async () => {
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: (async () => {
+        throw new Error('ECONNREFUSED');
+      }) as typeof globalThis.fetch,
+    });
+    const error = await client.getServerInfo().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OpenCodeV2ClientError);
+    expect(error).toMatchObject({ status: 0, message: 'ECONNREFUSED' });
+  });
+});
