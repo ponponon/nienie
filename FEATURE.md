@@ -444,3 +444,10 @@
 - **适配器接线**：v2 模式事件流统一 key `v2-global`（全局流不再按 directory 订阅）；实时帧 eventId 从源 `evt_` id 派生（`v2:{id}`，跨重放稳定）；`sendMessage` 前强制建立事件流（强一致门禁保留）；断线重连补偿改为对所有已加载会话跑 `emitV2MessageHistory`（幂等 eventId+revision 门禁保证不重复）。
 - **真机冒烟**：连接桌面 v2 共享服务 `/api/event`（Basic Auth）8 秒收到帧、鉴权与解帧正常；映射器单测覆盖 delta/ended 补缺、工具四态、执行/权限/用量映射。
 - 测试 153 vitest（新增 v2-sse 6 用例）+ 29 mobile 全绿。**至此 6b-3c/3d/3e 完成：手机建会话（桌面可见）→ 发消息 → 实时流式回复的 v2 数据通路全链路打通**；剩余 3f（真实数据对照）/3g（移除 v1 SQLite）。
+
+### 2026-11-10 J0.6b-3f 新旧读取真实数据对照（证据链）
+
+- **新增 `scripts/compare-v1-v2-restore.ts`**（bun 运行）：对 `opencode.db` 中 v1∪v2 交集且含工具调用的真实会话，分别走 v1 SQLite 读取（适配器同款 SQL）与 v2 Message API 恢复（`restoreHistoryEvents`），归一化成语义项（user_text/assistant_text/tool{name,input,output,status,isError}）逐项语义比对（文本含 contains 语义、input JSON 规范化、工具状态同口径映射）。
+- **实测结果：8 个真实会话（含迁移批次）203/203 项全部一致（100% matched，0 missing）**——消息数量、顺序、User/Assistant 文本、Tool Input/Output/状态在新旧读取间语义相等。reasoning 作为 v2 相对 v1 的增量改进单独统计不计入缺失。
+- **Diff 维度**：v2 Diff API 请求构造与 diffId 稳定性验证通过（错误 from 正确 404）；发现老迁移会话带悬空 `assistant.snapshot` 引用时服务端 500（OpenCode 侧容错缺失，见 FailureExperience），新建 v2 会话 diff 正常。
+- **3g 划界待裁决**：v1 SQLite 读取代码物理删除会破坏 mimo 适配器（走 v1/mimocode.db 路径）与 `NIENIE_OPENCODE_API=v1` 回退；当前已按模式隔离（v2 模式绝不触碰 v1 SQLite）。建议保留隔离现状、待 mimo 迁移后统一删除。

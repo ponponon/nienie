@@ -1023,3 +1023,10 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - 现象：`flutter test` 超时零输出，随后 `flutter --version`、`dart --version` 全部无输出挂死；无 dart/僵死进程。
 - 根因：两个叠加——a) 上一轮测试被超时杀死后 `bin/cache/lockfile` 残留（flutter 工具会等锁）；b) dart 二进制带 `com.apple.quarantine` 属性，`sample` 显示卡在 `_dyld_start`（Gatekeeper 首次校验弹窗/等待）。删除 lockfile 后校验放行即恢复。
 - 经验：进程"静默零输出挂死"先 `ps -o stat` + `sample <pid>` 看卡点（quarantine 卡 dyld 会显示 `_dyld_start`），再查 `xattr <bin>` 是否有 `com.apple.quarantine`；flutter 相关挂死优先清 `bin/cache/lockfile`。注意 macOS 自带 xattr 不支持 `-r`，批量清除要用 `find ... -exec xattr -d com.apple.quarantine {} +` 或 `xattr -c`。
+
+### 2026-11-10 v2 Diff API 对老迁移会话 500：assistant.snapshot 引用悬空
+
+- 现象：`GET /api/session/:id/diff` 对部分会话返回 500「Unexpected server error」，但参数解析正常（错误 from 能正确 404「Message not found」）；新建 v2 会话 diff 正常。
+- 排查：对比两组会话——diff 失败的 `ses_fe7779740ffe...` 有 72/73 条 assistant 消息带 `snapshot:{start,end}` 引用；diff 成功（0 文件）的 `ses_e6908e193ffe...` 0 条引用。指向服务端按 snapshot 引用算 diff 时快照存储内容缺失（v1→v2 迁移年代的数据）→ 计算崩溃。
+- 结论：这是 OpenCode 服务端对悬空快照引用的容错缺失，非 Nienie 客户端问题。影响面：老会话（迁移批次）查看文件差异会失败；新建 v2 会话无此问题。手机端 Diff 卡片对该错误应展示空态而非崩溃。
+- 经验：对照/集成测试遇到 500 先做「参数正确性对照」（错误参数应 404/400）排除自身请求问题，再对比新旧数据找差异字段（本例 snapshot ref 有无）定位数据年代限制。
