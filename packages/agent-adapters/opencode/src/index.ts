@@ -48,11 +48,13 @@ export { OpenCodeV2Client, OpenCodeV2ClientError, type OpenCodeV2ClientOptions }
 export type {
   OpenCodeV2CreateSessionInput,
   OpenCodeV2InboxUserMessage,
+  OpenCodeV2LocationQuery,
   OpenCodeV2LocationResponse,
   OpenCodeV2ModelInfo,
   OpenCodeV2ModelListQuery,
   OpenCodeV2ModelRef,
   OpenCodeV2PermissionDecision,
+  OpenCodeV2PermissionRule,
   OpenCodeV2PromptInput,
   OpenCodeV2ProviderInfo,
   OpenCodeV2ServerInfo,

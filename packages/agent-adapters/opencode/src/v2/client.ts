@@ -1,7 +1,8 @@
-import { openCodeServiceAuthHeader } from '../service-discovery.js';
+import { normalizeLocalServiceUrl, openCodeServiceAuthHeader } from '../service-discovery.js';
 import type {
   OpenCodeV2CreateSessionInput,
   OpenCodeV2InboxUserMessage,
+  OpenCodeV2LocationQuery,
   OpenCodeV2LocationResponse,
   OpenCodeV2ModelInfo,
   OpenCodeV2ModelListQuery,
@@ -43,7 +44,11 @@ export class OpenCodeV2Client {
   private readonly timeoutMs: number;
 
   constructor(options: OpenCodeV2ClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    const normalized = normalizeLocalServiceUrl(options.baseUrl);
+    if (normalized === undefined) {
+      throw new OpenCodeV2ClientError('OpenCodeV2Client requires a local service root URL', 0);
+    }
+    this.baseUrl = normalized.origin;
     this.password = options.password;
     this.doFetch = options.fetch ?? globalThis.fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -78,18 +83,18 @@ export class OpenCodeV2Client {
   }
 
   async getDefaultModel(
-    query: OpenCodeV2ModelListQuery = {},
+    query: OpenCodeV2LocationQuery = {},
   ): Promise<OpenCodeV2LocationResponse<OpenCodeV2ModelInfo | null>> {
     return this.request<OpenCodeV2LocationResponse<OpenCodeV2ModelInfo | null>>('GET', '/api/model/default', {
-      query: modelQuery(query),
+      query: locationQuery(query),
     });
   }
 
   async listProviders(
-    query: OpenCodeV2ModelListQuery = {},
+    query: OpenCodeV2LocationQuery = {},
   ): Promise<OpenCodeV2LocationResponse<OpenCodeV2ProviderInfo[]>> {
     return this.request<OpenCodeV2LocationResponse<OpenCodeV2ProviderInfo[]>>('GET', '/api/provider', {
-      query: modelQuery(query),
+      query: locationQuery(query),
     });
   }
 
@@ -163,11 +168,26 @@ export class OpenCodeV2Client {
     if (response.status === 204) {
       return undefined as T;
     }
-    const text = await response.text();
-    if (text.length === 0) {
-      return undefined as T;
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      throw new OpenCodeV2ClientError(
+        `OpenCode service response body read failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        0,
+      );
     }
-    return JSON.parse(text) as T;
+    if (text.length === 0) {
+      throw new OpenCodeV2ClientError('OpenCode service returned an empty response body', response.status);
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch (error) {
+      throw new OpenCodeV2ClientError(
+        `OpenCode service returned invalid JSON: ${error instanceof Error ? error.message : 'unknown error'}`,
+        response.status,
+      );
+    }
   }
 }
 
@@ -189,9 +209,14 @@ function sessionListQuery(query: OpenCodeV2SessionListQuery): Record<string, str
   return out;
 }
 
-function modelQuery(query: OpenCodeV2ModelListQuery): Record<string, string | string[]> {
-  const out: Record<string, string | string[]> = {};
+function locationQuery(query: OpenCodeV2LocationQuery): Record<string, string> {
+  const out: Record<string, string> = {};
   if (query.directory !== undefined) out['location[directory]'] = query.directory;
+  return out;
+}
+
+function modelQuery(query: OpenCodeV2ModelListQuery): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = locationQuery(query);
   if (query.types !== undefined) out['types'] = Array.isArray(query.types) ? query.types : [query.types];
   return out;
 }

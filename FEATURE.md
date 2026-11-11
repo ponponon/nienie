@@ -370,3 +370,12 @@
 - **错误处理**：非 2xx 抛 `OpenCodeV2ClientError`（`status` + `tag`（响应体 `_tag`，如 `SessionNotFoundError`）+ `message`），网络失败/超时 `status: 0`，非 JSON 错误体回退状态码消息。
 - **Schema 关键坑位（写入测试防回归）**：模型引用字段是 `id` 不是 `modelID`；Session 列表是扁平 `directory` 参数而 Model/Provider 是 `location[directory]`；Prompt 响应是入队回执（`type: 'user'` 的 Inbox 记录），不能当执行完成；Interrupt 的 `resume` 是字符串布尔。
 - 测试 57 个（新增 v2-client 16 个：全端点请求形状/查询编码/204 空体/URL 编码/错误提取/网络失败/无密码不发认证头/redirect 断言）；真机只读冒烟成功列出桌面 v2 会话（crawler_console 的 K8s 排查、ideaboom 的 RabbitMQ 研究），确认与桌面同库同源。
+
+### 2026-11-10 J0.6a.1 OpenCodeV2Client 收尾（按 ChatGPT 审查意见）
+
+- **查询参数拆分**：`getDefaultModel`/`listProviders` 只接受 `OpenCodeV2LocationQuery`（仅 `location[directory]`），`types` 仅 `listModels` 可传（官方 `GET /api/model/default`、`GET /api/provider` 不接受 `types`）。
+- **类型按官方 openapi.json 修正**：`Model.Info.canonical`/`Provider.Info.canonical` 是 `string`（Provider.ID）不是 boolean；`Model.Cost.tier` 是 `{type:'context', size:number}` 对象；`Session.ForkBoundary` 为 `{type:'before'|'through', messageID}` 联合；`permissions` 为 `{action, resource, effect:'allow'|'deny'|'ask'}` 数组；`revert` 为 `{messageID, partID?, snapshot?, files?: FileDiff.Info[]}`；`Inbox.User` 响应侧文件附件是 `{data, mime, source, name?, description?, mention?}`（与请求侧 `{uri, source?, ...}` 不同），`skills` 响应含 `id`+`name`，`delivery` 收窄 `'steer'|'queue'`；`cursor.previous/next` 允许 null；补 Model/Provider 的 `compatibility`（含 reasoningField/maxTokensField/cacheFormat/mediaInput 等）与 `package/settings/headers/body` 字段。
+- **响应体严格化**：非 204 成功响应空 body 不再静默返回 undefined，抛 `OpenCodeV2ClientError`（协议错误）；JSON 解析失败包装为 `OpenCodeV2ClientError` 并保留 HTTP status；`response.text()` 读取失败也统一包装为 status 0 传输错误。
+- **构造防御**：`OpenCodeV2Client` 构造函数复用 `normalizeLocalServiceUrl` 校验 baseUrl 必须是本地服务根地址（防止未来误传任意 URL 把 Basic Auth 凭据外发）；baseUrl 统一取 `url.origin`。
+- 补测试：409 ConflictError / 400 InvalidCursorError 标签保留、空 body、坏 JSON、响应体读取失败、超时 status 0、构造拒绝非本地 URL、Default/Provider 不带 types。测试 64 个。
+- **开发顺序确认**（ChatGPT 决定）：J0.6a.1 封板 → J0.4（ToolCallCardItem.status + partId/revision 幂等归约）→ J0.6b（Diff + Message API + diffId 稳定派生 + 移除 v1 SQLite 读取）→ J0.7（Snapshot/事件集成）。

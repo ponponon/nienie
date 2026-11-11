@@ -15,10 +15,36 @@ export type OpenCodeV2TokenUsage = {
   cache: { read: number; write: number };
 };
 
+export type OpenCodeV2ForkBoundary =
+  | { type: 'before'; messageID: string }
+  | { type: 'through'; messageID: string };
+
+export type OpenCodeV2PermissionRule = {
+  action: string;
+  resource: string;
+  effect: 'allow' | 'deny' | 'ask';
+};
+
+export type OpenCodeV2FileDiffInfo = {
+  file: string;
+  patch: string;
+  additions: number;
+  deletions: number;
+  status: 'added' | 'deleted' | 'modified';
+  more?: true | undefined;
+};
+
+export type OpenCodeV2SessionRevert = {
+  messageID: string;
+  partID?: string | undefined;
+  snapshot?: string | undefined;
+  files?: OpenCodeV2FileDiffInfo[] | undefined;
+};
+
 export type OpenCodeV2SessionInfo = {
   id: string;
   parentID?: string | undefined;
-  fork?: { sessionID: string; boundary: unknown } | undefined;
+  fork?: { sessionID: string; boundary: OpenCodeV2ForkBoundary } | undefined;
   projectID: string;
   agent?: string | undefined;
   model?: OpenCodeV2ModelRef | undefined;
@@ -37,8 +63,8 @@ export type OpenCodeV2SessionInfo = {
   location: OpenCodeV2LocationRef;
   subpath?: string | undefined;
   metadata?: Record<string, unknown> | undefined;
-  permissions?: unknown;
-  revert?: unknown;
+  permissions?: OpenCodeV2PermissionRule[] | undefined;
+  revert?: OpenCodeV2SessionRevert | undefined;
 };
 
 export type OpenCodeV2SessionListQuery = {
@@ -55,7 +81,7 @@ export type OpenCodeV2SessionListQuery = {
 
 export type OpenCodeV2SessionListResponse = {
   data: OpenCodeV2SessionInfo[];
-  cursor: { previous?: string | undefined; next?: string | undefined };
+  cursor: { previous?: string | null | undefined; next?: string | null | undefined };
 };
 
 export type OpenCodeV2CreateSessionInput = {
@@ -66,36 +92,69 @@ export type OpenCodeV2CreateSessionInput = {
   model?: OpenCodeV2ModelRef | undefined;
   location?: OpenCodeV2LocationRef | undefined;
   metadata?: Record<string, unknown> | undefined;
-  permissions?: unknown;
+  permissions?: OpenCodeV2PermissionRule[] | undefined;
+};
+
+export type OpenCodeV2ProviderCompatibility = {
+  reasoningField?: string | undefined;
+  requireReasoning?: boolean | undefined;
+  maxTokensField?: 'max_completion_tokens' | 'max_tokens' | undefined;
+  requireFinishReason?: boolean | undefined;
+  requireAssistantAfterTool?: boolean | undefined;
+  supportsPromptCacheKey?: boolean | undefined;
+  streamUsage?: boolean | undefined;
+  cacheFormat?: 'anthropic' | 'alibaba' | undefined;
+  mediaInput?: 'assets' | 'state' | 'root' | undefined;
+};
+
+export type OpenCodeV2ModelCompatibility = OpenCodeV2ProviderCompatibility & {
+  supportsThinkingBlockBinding?: boolean | undefined;
+  supportsEffortUpdates?: boolean | undefined;
+};
+
+export type OpenCodeV2ModelCostTier = {
+  type: 'context';
+  size: number;
+};
+
+export type OpenCodeV2ModelCost = {
+  tier?: OpenCodeV2ModelCostTier | undefined;
+  input: number;
+  output: number;
+  cache: { read: number; write: number };
+};
+
+export type OpenCodeV2ModelCapabilities = {
+  tools: boolean;
+  input: string[];
+  output: string[];
+  temperature?: boolean | undefined;
+};
+
+export type OpenCodeV2ModelVariant = {
+  id: string;
+  settings?: Record<string, unknown> | undefined;
+  headers?: Record<string, string> | undefined;
+  body?: Record<string, unknown> | undefined;
 };
 
 export type OpenCodeV2ModelInfo = {
   id: string;
   modelID: string;
   providerID: string;
-  name: string;
-  canonical?: boolean | undefined;
+  canonical?: string | undefined;
   type?: string | undefined;
   family?: string | undefined;
-  capabilities: {
-    tools: boolean;
-    input: string[];
-    output: string[];
-    temperature?: boolean | undefined;
-  };
-  variants: Array<{
-    id: string;
-    settings?: Record<string, unknown> | undefined;
-    headers?: Record<string, string> | undefined;
-    body?: Record<string, unknown> | undefined;
-  }>;
+  name: string;
+  compatibility?: OpenCodeV2ModelCompatibility | undefined;
+  package?: string | undefined;
+  settings?: Record<string, unknown> | undefined;
+  headers?: Record<string, string> | undefined;
+  body?: Record<string, unknown> | undefined;
+  capabilities: OpenCodeV2ModelCapabilities;
+  variants: OpenCodeV2ModelVariant[];
   time: { released: number };
-  cost: Array<{
-    tier?: string | undefined;
-    input: number;
-    output: number;
-    cache: { read: number; write: number };
-  }>;
+  cost: OpenCodeV2ModelCost[];
   status: 'alpha' | 'beta' | 'deprecated' | 'active';
   enabled: boolean;
   limit: { context: number; input?: number | undefined; output: number };
@@ -106,9 +165,9 @@ export type OpenCodeV2ProviderInfo = {
   name: string;
   activation: 'auto' | 'enabled' | 'disabled';
   package: string;
-  canonical?: boolean | undefined;
+  canonical?: string | undefined;
   integrationID?: string | undefined;
-  compatibility?: unknown;
+  compatibility?: OpenCodeV2ProviderCompatibility | undefined;
   settings?: Record<string, unknown> | undefined;
   headers?: Record<string, string> | undefined;
   body?: Record<string, unknown> | undefined;
@@ -129,9 +188,11 @@ export type OpenCodeV2PromptMention = {
   text: string;
 };
 
+export type OpenCodeV2PromptFileSource = { type: 'inline' } | { type: 'uri'; uri: string };
+
 export type OpenCodeV2PromptFileAttachment = {
   uri: string;
-  source?: { type: 'inline' } | { type: 'uri'; uri: string } | undefined;
+  source?: OpenCodeV2PromptFileSource | undefined;
   name?: string | undefined;
   description?: string | undefined;
   mention?: OpenCodeV2PromptMention | undefined;
@@ -158,6 +219,27 @@ export type OpenCodeV2PromptInput = {
   resume?: boolean | undefined;
 };
 
+export type OpenCodeV2InboxFileAttachment = {
+  data: string;
+  mime: string;
+  source: OpenCodeV2PromptFileSource;
+  name?: string | undefined;
+  description?: string | undefined;
+  mention?: OpenCodeV2PromptMention | undefined;
+};
+
+export type OpenCodeV2InboxAgentAttachment = {
+  name: string;
+  mention?: OpenCodeV2PromptMention | undefined;
+};
+
+export type OpenCodeV2InboxSkillAttachment = {
+  id: string;
+  name: string;
+  text?: string | undefined;
+  mention?: OpenCodeV2PromptMention | undefined;
+};
+
 export type OpenCodeV2InboxUserMessage = {
   id: string;
   sessionID: string;
@@ -165,18 +247,21 @@ export type OpenCodeV2InboxUserMessage = {
   type: 'user';
   payload: {
     text: string;
-    files?: unknown;
-    agents?: unknown;
-    skills?: unknown;
+    files?: OpenCodeV2InboxFileAttachment[] | undefined;
+    agents?: OpenCodeV2InboxAgentAttachment[] | undefined;
+    skills?: OpenCodeV2InboxSkillAttachment[] | undefined;
     metadata?: Record<string, unknown> | undefined;
   };
-  delivery: string;
+  delivery: 'steer' | 'queue';
 };
 
 export type OpenCodeV2PermissionDecision = 'once' | 'always' | 'reject';
 
-export type OpenCodeV2ModelListQuery = {
+export type OpenCodeV2LocationQuery = {
   directory?: string | undefined;
+};
+
+export type OpenCodeV2ModelListQuery = OpenCodeV2LocationQuery & {
   types?: string | string[] | undefined;
 };
 

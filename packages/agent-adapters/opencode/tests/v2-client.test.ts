@@ -304,4 +304,96 @@ describe('OpenCodeV2Client', () => {
     expect(error).toBeInstanceOf(OpenCodeV2ClientError);
     expect(error).toMatchObject({ status: 0, message: 'ECONNREFUSED' });
   });
+
+  it('getDefaultModel and listProviders never send a types param', async () => {
+    const captured: CapturedRequest[] = [];
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(200, { location: { directory: '/w' }, data: [] }), captured),
+    });
+    await client.getDefaultModel({ directory: '/w' });
+    await client.listProviders({ directory: '/w' });
+    for (const request of captured) {
+      const url = new URL(request.url);
+      expect([...url.searchParams.keys()]).toEqual(['location[directory]']);
+    }
+  });
+
+  it('preserves error tags across statuses (409 ConflictError, 400 InvalidCursorError)', async () => {
+    const conflict = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(409, { _tag: 'ConflictError', message: 'Session is busy', resource: 'ses_1' })),
+    });
+    const cursor = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => json(400, { _tag: 'InvalidCursorError', message: 'Cursor is invalid' })),
+    });
+    expect(await conflict.prompt('ses_1', { text: 'hi' }).catch((e: unknown) => e)).toMatchObject({
+      status: 409,
+      tag: 'ConflictError',
+      message: 'Session is busy',
+    });
+    expect(await cursor.listSessions({ cursor: 'bad' }).catch((e: unknown) => e)).toMatchObject({
+      status: 400,
+      tag: 'InvalidCursorError',
+    });
+  });
+
+  it('rejects a non-204 success with an empty body instead of returning undefined', async () => {
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => new Response('', { status: 200 })),
+    });
+    const error = await client.getSession('ses_1').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OpenCodeV2ClientError);
+    expect(error).toMatchObject({ status: 200, message: expect.stringContaining('empty response body') });
+  });
+
+  it('wraps invalid JSON success bodies while keeping the HTTP status', async () => {
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: mockFetch(() => new Response('<html>oops</html>', { status: 200 })),
+    });
+    const error = await client.getSession('ses_1').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OpenCodeV2ClientError);
+    expect(error).toMatchObject({ status: 200, message: expect.stringContaining('invalid JSON') });
+  });
+
+  it('wraps response body read failures as transport errors', async () => {
+    const brokenBody = {
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new Error('socket hang up');
+      },
+    } as unknown as Response;
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: (async () => brokenBody) as typeof globalThis.fetch,
+    });
+    const error = await client.getSession('ses_1').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OpenCodeV2ClientError);
+    expect(error).toMatchObject({ status: 0, message: expect.stringContaining('socket hang up') });
+  });
+
+  it('wraps request timeouts as status 0 errors', async () => {
+    const hangingFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')));
+      })) as typeof globalThis.fetch;
+    const client = new OpenCodeV2Client({
+      baseUrl: 'http://127.0.0.1:49374',
+      fetch: hangingFetch,
+      timeoutMs: 5,
+    });
+    const error = await client.getServerInfo().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OpenCodeV2ClientError);
+    expect(error).toMatchObject({ status: 0 });
+  });
+
+  it('refuses to construct with a non-local or non-root baseUrl', () => {
+    expect(() => new OpenCodeV2Client({ baseUrl: 'https://attacker.example' })).toThrow(OpenCodeV2ClientError);
+    expect(() => new OpenCodeV2Client({ baseUrl: 'http://127.0.0.1:49374/prefix' })).toThrow(OpenCodeV2ClientError);
+    expect(() => new OpenCodeV2Client({ baseUrl: 'http://127.0.0.1:49374' })).not.toThrow();
+  });
 });
