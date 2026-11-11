@@ -641,8 +641,18 @@ export class BridgeServer {
       case 'session.send': {
         if (!bypassAuth) this.requireAuthenticated(client);
         const session = await this.resolveSession(request.sessionId, request.agentId);
-        await this.router.sendMessage(session, request.message, request.modelId);
-        return { accepted: true, sessionId: session.id };
+        const result = await this.router.sendMessage(
+          session,
+          request.message,
+          request.modelId,
+          request.clientMessageId,
+        );
+        const messageId = result && typeof result === 'object' ? result.messageId : undefined;
+        return {
+          accepted: true,
+          sessionId: session.id,
+          ...(messageId ? { messageId } : {}),
+        };
       }
 
       case 'session.cancel': {

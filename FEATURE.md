@@ -418,3 +418,12 @@
 - **Schema 严格化**：Assistant.agent/model 必填、ToolState.Running.metadata 必填、Completed.content 非空元组、OtherMessage 九种类型按官方逐字段建模（Shell/Skill/Synthetic/System/Compaction/Idle/AgentSelected/ModelSelected/LocationSwitched）、limit 收敛 number|string 口径。
 - **分页**：新增 `listAllMessages` 完整分页器（首页显式 order=asc、后续页 cursor-only 且过滤条件不变）；restore/resolve 强制升序输入（降序抛错）。
 - 测试 141 vitest + 28 mobile 全绿。剩余 J0.6b-3b..g（clientMessageId 协议、Session CRUD/写入切 v2、Message/Snapshot/Diff 实际接入、最小 v2 SSE、真实数据对照、移除 v1 SQLite）按序进行。
+
+### 2026-11-10 J0.6b-3b clientMessageId/messageId 乐观消息关联（裁决 C 落地）
+
+- **协议**（向后兼容，PROTOCOL_VERSION 保持 1）：`session.send` 请求新增可选 `clientMessageId`；响应 `data.messageId` 可回传服务端权威消息 ID。已更新 `docs/protocols/mobile-bridge.md` 样例与兼容性说明。
+- **链路贯通**：`AgentAdapter.sendMessage` options 增加 `clientMessageId`、返回 `{messageId?}`（既有适配器 `Promise<void>` 实现无需改动）；`SessionRouter.sendMessage`/`ws-server` 透传并回传 messageId；OpenCode 适配器签名同步（v2 prompt 将在 6b-3c 用 `body.id = clientMessageId` 并校验回显一致）。
+- **v1 历史回放补 messageId**：`emitSqliteSessionHistory` 的 SQL 取 `m.id AS message_id`，user/assistant 文本增量与 tool 事件 payload 均携带 messageId——认领机制在现有链路即刻生效，不用等 v2 切换。
+- **手机端**（J0.4b 遗留 P1 正式解决）：`UserPromptItem.messageId` 字段；`sendMessage` 发送前生成 `msg_<ts>_<seq>` 打标到本地乐观消息、随请求发送、响应回填权威 ID；reducer 认领语义——同 messageId 的未认领乐观消息只绑定 partId/revision 并以权威文本对账（不重复追加首个全文）；后续增量按 J0.4 partId/revision 门禁；无匹配才新建。消除「SSE 先于 send 响应到达」与「断线重连后历史重放重复用户消息」两个竞态。
+- 测试：手机端新增认领用例（打标断言 + 首次认领不重复 + 重放门禁），29 mobile + 141 vitest 全绿。
+- **附带排障**（记入 FailureExperience）：flutter/dart 进程静默卡死是 `bin/cache/lockfile` 残留锁 + dart 二进制被 macOS quarantine 卡在 dyld Gatekeeper 校验，删锁文件后放行。

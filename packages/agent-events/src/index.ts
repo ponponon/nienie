@@ -29,7 +29,11 @@ export type AgentAdapter = {
   getSessionDiff?(sessionId: string): Promise<SessionFileDiff[]>;
   /** 获取会话完整快照（Part 状态），供 resetRequired 时原子重建。 */
   getSessionSnapshot?(sessionId: string): Promise<SessionSnapshot>;
-  sendMessage(sessionId: string, message: string, options?: { modelId?: string | undefined }): Promise<void>;
+  sendMessage(
+    sessionId: string,
+    message: string,
+    options?: { modelId?: string | undefined; clientMessageId?: string | undefined },
+  ): Promise<{ messageId?: string | undefined } | void>;
   replyPermission?(
     sessionId: string,
     permissionId: string,

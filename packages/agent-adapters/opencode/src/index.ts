@@ -471,13 +471,14 @@ export class OpenCodeAdapter implements AgentAdapter {
       const maxRows = 20000;
       let totalRead = 0;
       for (let offset = 0; ; offset += pageSize) {
-        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output, json_extract(p.data, '$.state.input') AS tool_input, json_extract(p.data, '$.state.status') AS tool_status, json_extract(p.data, '$.state.error') AS tool_error FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
+        const sql = `SELECT m.id AS message_id, json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output, json_extract(p.data, '$.state.input') AS tool_input, json_extract(p.data, '$.state.status') AS tool_status, json_extract(p.data, '$.state.error') AS tool_error FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
         const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
           encoding: 'utf8',
           timeout: 2000,
           stdio: ['ignore', 'pipe', 'ignore'],
         });
         const rows = JSON.parse(out || '[]') as Array<{
+          message_id?: string | null;
           part_id?: string | null;
           role?: string;
           part_type?: string;
@@ -508,7 +509,7 @@ export class OpenCodeAdapter implements AgentAdapter {
             }
             if (text.length > emitted) {
               this.emittedPartLength.set(partId, text.length);
-              this.emitTextDelta(sessionId, partId, text.length, text.slice(emitted), 'user');
+              this.emitTextDelta(sessionId, partId, text.length, text.slice(emitted), 'user', row.message_id ?? undefined);
             }
           } else if (row.role === 'assistant' && row.part_type === 'text') {
             if (trimmed.startsWith('<system-reminder>')) {
@@ -517,7 +518,7 @@ export class OpenCodeAdapter implements AgentAdapter {
             }
             if (text.length > emitted) {
               this.emittedPartLength.set(partId, text.length);
-              this.emitTextDelta(sessionId, partId, text.length, text.slice(emitted), undefined);
+              this.emitTextDelta(sessionId, partId, text.length, text.slice(emitted), undefined, row.message_id ?? undefined);
             }
           } else if (row.role === 'assistant' && row.part_type === 'tool' && row.tool) {
             const callId = row.call_id || `call_${++this.historySeqCounter}`;
@@ -533,7 +534,7 @@ export class OpenCodeAdapter implements AgentAdapter {
                   sequence: this.normalizer.nextSequence(sessionId),
                   timestamp: new Date().toISOString(),
                   type: 'tool_use',
-                  payload: { toolCallId: callId, name: row.tool, input: {} },
+                  payload: { toolCallId: callId, name: row.tool, input: {}, ...(row.message_id ? { messageId: row.message_id } : {}) },
                 }),
               );
             }
@@ -555,6 +556,7 @@ export class OpenCodeAdapter implements AgentAdapter {
                     toolCallId: callId,
                     content: output,
                     isError: false,
+                    ...(row.message_id ? { messageId: row.message_id } : {}),
                   },
                 }),
               );
@@ -588,6 +590,7 @@ export class OpenCodeAdapter implements AgentAdapter {
     revision: number,
     delta: string,
     role: string | undefined,
+    messageId?: string | undefined,
   ): void {
     this.emit(
       createCanonicalEvent({
@@ -603,6 +606,7 @@ export class OpenCodeAdapter implements AgentAdapter {
           partId,
           partRevision: revision,
           ...(role ? { role } : {}),
+          ...(messageId ? { messageId } : {}),
         },
       }),
     );
@@ -641,13 +645,14 @@ export class OpenCodeAdapter implements AgentAdapter {
       let sawUnhandled = false;
       let truncated = false;
       for (let offset = 0; offset < safetyMaxRows; offset += pageSize) {
-        const sql = `SELECT json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output, json_extract(p.data, '$.state.input') AS tool_input, json_extract(p.data, '$.state.status') AS tool_status, json_extract(p.data, '$.state.error') AS tool_error FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
+        const sql = `SELECT m.id AS message_id, json_extract(p.data, '$.id') AS part_id, json_extract(m.data, '$.role') AS role, json_extract(p.data, '$.type') AS part_type, json_extract(p.data, '$.text') AS text, json_extract(p.data, '$.tool') AS tool, json_extract(p.data, '$.callID') AS call_id, json_extract(p.data, '$.state.output') AS tool_output, json_extract(p.data, '$.state.input') AS tool_input, json_extract(p.data, '$.state.status') AS tool_status, json_extract(p.data, '$.state.error') AS tool_error FROM part p JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId}' AND json_extract(p.data, '$.synthetic') IS NOT 1 ORDER BY p.rowid ASC LIMIT ${offset}, ${pageSize};`;
         const out = execFileSync('sqlite3', ['-json', dbPath, sql], {
           encoding: 'utf8',
           timeout: 5000,
           stdio: ['ignore', 'pipe', 'ignore'],
         });
         const rows = JSON.parse(out || '[]') as Array<{
+          message_id?: string | null;
           part_id?: string | null;
           role?: string;
           part_type?: string;
@@ -765,8 +770,8 @@ export class OpenCodeAdapter implements AgentAdapter {
   async sendMessage(
     sessionId: string,
     message: string,
-    options?: { modelId?: string | undefined },
-  ): Promise<void> {
+    options?: { modelId?: string | undefined; clientMessageId?: string | undefined },
+  ): Promise<{ messageId?: string | undefined } | void> {
     if (this.autoStartServer) {
       await this.ensureManagedServerRunning();
     }

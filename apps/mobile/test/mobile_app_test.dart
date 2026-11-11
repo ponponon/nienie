@@ -1139,4 +1139,36 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('J0.6b-3b 乐观消息认领：clientMessageId 打标 + 首次认领不重复 + 重放门禁', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '你好');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+
+    // 发送前生成 clientMessageId 并打标到本地乐观消息
+    final msgId = transport.sentClientMessageIds.single;
+    expect(msgId, isNotNull);
+    final optimistic = client.timelineFor('ses_alpha').whereType<UserPromptItem>().single;
+    expect(optimistic.messageId, msgId);
+
+    // 历史补偿带同 messageId 的用户全文 → 认领归属（不重复创建、以权威文本对账）
+    transport.emitServerEvent(j04Evt(eventId: 'h_u1', seq: 1, type: 'text_delta',
+        payload: {'delta': '你好', 'role': 'user', 'partId': 'msg_x:0', 'partRevision': 2, 'messageId': msgId}));
+    // 同 partId+revision 重放（不同 eventId）→ revision 门禁丢弃
+    transport.emitServerEvent(j04Evt(eventId: 'h_u1r', seq: 2, type: 'text_delta',
+        payload: {'delta': '你好', 'role': 'user', 'partId': 'msg_x:0', 'partRevision': 2, 'messageId': msgId}));
+    await tester.pump();
+
+    final prompts = client.timelineFor('ses_alpha').whereType<UserPromptItem>().toList();
+    expect(prompts.length, 1); // 不重复
+    expect(prompts.single.message, '你好');
+    expect(prompts.single.partId, 'msg_x:0');
+    client.dispose();
+  });
+
 }

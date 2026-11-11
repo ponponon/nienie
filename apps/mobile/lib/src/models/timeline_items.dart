@@ -7,7 +7,9 @@ class UserPromptItem extends SessionTimelineItem {
   /// 内容归属标识与状态版本（J0.4）：同 partId 的用户消息增量精确追加，重放不重复。
   String? partId;
   int revision;
-  UserPromptItem(this.message, {this.partId, this.revision = 0});
+  /// 服务端（或客户端预生成）消息关联 ID（J0.6b-3b）：历史/事件按此认领本地乐观消息，防止重复。
+  String? messageId;
+  UserPromptItem(this.message, {this.partId, this.revision = 0, this.messageId});
 }
 
 /// 发送后、回复到达前的「等待中」占位卡片。

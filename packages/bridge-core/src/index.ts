@@ -122,12 +122,23 @@ export class SessionRouter {
     return adapter.getSessionDiff(session.id);
   }
 
-  async sendMessage(session: AgentSession, message: string, modelId?: string): Promise<void> {
+  async sendMessage(
+    session: AgentSession,
+    message: string,
+    modelId?: string,
+    clientMessageId?: string,
+  ): Promise<{ messageId?: string | undefined } | void> {
     const adapter = this.registry.get(session.agentId);
     if (!adapter) {
       throw new Error(`No adapter registered for agent: ${session.agentId}`);
     }
-    await adapter.sendMessage(session.id, message, modelId ? { modelId } : undefined);
+    return await adapter.sendMessage(
+      session.id,
+      message,
+      modelId || clientMessageId
+        ? { ...(modelId ? { modelId } : {}), ...(clientMessageId ? { clientMessageId } : {}) }
+        : undefined,
+    ) ?? undefined;
   }
 
   async cancel(session: AgentSession): Promise<void> {

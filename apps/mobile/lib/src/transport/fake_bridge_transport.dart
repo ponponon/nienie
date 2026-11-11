@@ -7,6 +7,7 @@ class FakeBridgeTransport implements BridgeTransport {
       StreamController<Map<String, dynamic>>.broadcast();
   final List<String> sentPrompts = [];
   final List<String?> sentModelIds = [];
+  final List<String?> sentClientMessageIds = [];
   final List<String> cancelledSessionIds = [];
   final List<Map<String, String>> permissionReplies = [];
   final List<Map<String, String>> registeredPushes = [];
@@ -128,11 +129,17 @@ class FakeBridgeTransport implements BridgeTransport {
       case 'session.send':
         sentPrompts.add(request['message'] as String);
         sentModelIds.add(request['modelId'] as String?);
+        sentClientMessageIds.add(request['clientMessageId'] as String?);
         return {
           'type': 'response',
           'requestId': requestId,
           'ok': true,
-          'data': {'accepted': true, 'sessionId': request['sessionId']},
+          'data': {
+            'accepted': true,
+            'sessionId': request['sessionId'],
+            // 模拟 v2：服务端回显权威 messageId（与客户端预生成 ID 一致）
+            if (request['clientMessageId'] != null) 'messageId': request['clientMessageId'],
+          },
         };
       case 'session.snapshot':
         return {

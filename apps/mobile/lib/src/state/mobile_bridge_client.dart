@@ -911,7 +911,10 @@ class MobileBridgeClient extends ChangeNotifier {
     }
 
     final items = _timelineBySession.putIfAbsent(current.id, () => []);
-    items.add(UserPromptItem(trimmed));
+    // 本地乐观消息：发送前即生成 clientMessageId 并打标，历史/事件到达时按 messageId 认领（J0.6b-3b）
+    final clientMessageId = 'msg_${DateTime.now().microsecondsSinceEpoch}_${++_requestCounter}';
+    final optimistic = UserPromptItem(trimmed, messageId: clientMessageId);
+    items.add(optimistic);
     final pending = PendingResponseItem(promptText: trimmed);
     items.add(pending);
     _startPendingTimer(current.id, pending);
@@ -926,6 +929,7 @@ class MobileBridgeClient extends ChangeNotifier {
       'sessionId': current.id,
       'agentId': current.agentId,
       'message': trimmed,
+      'clientMessageId': clientMessageId,
       if (selectedModelId != null) 'modelId': selectedModelId,
     });
 
@@ -940,7 +944,15 @@ class MobileBridgeClient extends ChangeNotifier {
         ),
       );
       notifyListeners();
+      return;
     }
+    // 服务端权威 Message ID（可选）：与 clientMessageId 不同则以服务端为准，供后续认领
+    final data = res['data'] as Map<String, dynamic>?;
+    final authoritativeId = data?['messageId'] as String?;
+    if (authoritativeId != null && authoritativeId.isNotEmpty) {
+      optimistic.messageId = authoritativeId;
+    }
+    notifyListeners();
   }
 
   /// 启动「等待回复」超时计时器：到期若 Agent 仍在运行则继续等待，
@@ -1136,6 +1148,7 @@ class MobileBridgeClient extends ChangeNotifier {
         final role = event.payload['role'] as String?;
         if (role == 'user') {
           // 用户消息同样按 partId 归属：增量追加到原消息，重放由 revision 门禁丢弃（J0.4）
+          final messageId = event.payload['messageId'] as String?;
           if (partId != null) {
             UserPromptItem? target;
             for (final item in items) {
@@ -1150,10 +1163,27 @@ class MobileBridgeClient extends ChangeNotifier {
                 target.revision = partRevision;
               }
             } else {
-              items.add(UserPromptItem(delta, partId: partId, revision: partRevision ?? 0));
+              // 首次认领（J0.6b-3b）：同 messageId 的本地乐观消息只绑定归属、以权威文本对账，不重复追加
+              UserPromptItem? claimed;
+              if (messageId != null) {
+                for (final item in items) {
+                  if (item is UserPromptItem && item.messageId == messageId && item.partId == null) {
+                    claimed = item;
+                    break;
+                  }
+                }
+              }
+              if (claimed != null) {
+                claimed.partId = partId;
+                claimed.revision = partRevision ?? 0;
+                claimed.message = delta;
+              } else {
+                items.add(UserPromptItem(delta,
+                    partId: partId, revision: partRevision ?? 0, messageId: messageId));
+              }
             }
           } else {
-            items.add(UserPromptItem(delta));
+            items.add(UserPromptItem(delta, messageId: messageId));
           }
           markApplied();
           break;

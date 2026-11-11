@@ -244,6 +244,8 @@ export type BridgeRequest =
       message: string;
       agentId?: AgentId | undefined;
       modelId?: string | undefined;
+      /** 客户端生成的消息关联 ID（如 msg_xxx）：随 Prompt 传给 Agent，响应可回传权威 messageId 供乐观消息认领。 */
+      clientMessageId?: string | undefined;
     }
   | { type: 'session.cancel'; requestId: string; sessionId: string }
   | {

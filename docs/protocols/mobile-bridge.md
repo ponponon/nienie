@@ -39,9 +39,12 @@ screen.capture
   "type": "session.send",
   "requestId": "req_123",
   "sessionId": "ses_alpha",
-  "message": "运行测试"
+  "message": "运行测试",
+  "clientMessageId": "msg_1762800000000_1"
 }
 ```
+
+`clientMessageId`（可选，J0.6b-3b）：客户端生成的消息关联 ID，随 Prompt 传给 Agent。响应 `data.messageId` 可回传服务端权威消息 ID（v2 OpenCode 返回 Inbox.User.id；v1 缺省），手机端用它认领本地乐观用户消息，防止断线重连后历史回放造成消息重复。
 
 Bridge 返回对应的 `response` 或异步推送 `session.event`：
 

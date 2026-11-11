@@ -1017,3 +1017,9 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - 经验一：**"桌面能显示旧数据"≠"产品向下兼容"**，要分清一次性迁移导入和持续兼容两种机制；排查"数据 A 在客户端 X 看不到"先查两边各写哪个库/哪张表，再查有没有迁移标记（kv/state 表）短路逻辑。
 - 经验二：**两个进程共用一个 sqlite 文件 ≠ 可以双写**——WAL 只保证并发读和写串行化，不保证两个 Server 进程各自的 Event Bus/会话执行状态一致。官方自己就用固定端口防双服务。要共享会话必须共享同一个 Server 进程（attach 官方 service），而不是共享数据库文件。
 - 经验三：直接读 Agent 内部 sqlite 表的实现（Nienie v1 适配器的 readLocalSqliteSessions/emitSqliteSessionHistory）天生脆弱，上游一改 schema 就断；长期应走 HTTP API + 官方事件/日志接口（v2 的 `/api/session/:id/message` + `/api/experimental/session/:id/log` Durable Event Log），把 schema 变化挡在 API 层。
+
+### 2026-11-10 Flutter 工具静默卡死：残留 lockfile + quarantine
+
+- 现象：`flutter test` 超时零输出，随后 `flutter --version`、`dart --version` 全部无输出挂死；无 dart/僵死进程。
+- 根因：两个叠加——a) 上一轮测试被超时杀死后 `bin/cache/lockfile` 残留（flutter 工具会等锁）；b) dart 二进制带 `com.apple.quarantine` 属性，`sample` 显示卡在 `_dyld_start`（Gatekeeper 首次校验弹窗/等待）。删除 lockfile 后校验放行即恢复。
+- 经验：进程"静默零输出挂死"先 `ps -o stat` + `sample <pid>` 看卡点（quarantine 卡 dyld 会显示 `_dyld_start`），再查 `xattr <bin>` 是否有 `com.apple.quarantine`；flutter 相关挂死优先清 `bin/cache/lockfile`。注意 macOS 自带 xattr 不支持 `-r`，批量清除要用 `find ... -exec xattr -d com.apple.quarantine {} +` 或 `xattr -c`。
