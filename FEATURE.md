@@ -398,3 +398,12 @@
 - **UI**：展开的结果文本颜色也改按 `status == failed` 判断（原用 isError，与图标/边框口径不一致）。
 - **补测试**（ChatGPT 要求的 A-E）：用户文本 partId 幂等（重放不重复+高 revision 追加）；终态不可逆（含跨 epoch 无 partId 冲突结果、同终态内容更新）；Snapshot revision 播种真正生效（同/低 revision 补偿丢弃、高 revision 追加、revision=6 断言）；两个文本 Part 交错互不串扰；工具结果先于声明（name/input 补齐+终态不回退）。手机端 27 测试全绿。
 - **ChatGPT 划界确认记录**：v1 快照构建器问题（revision=1 与历史 partRevision=文本长度口径不可比、reasoning/step/patch/file part 构建抛错、v1 工具 `error` 状态映射缺失）全部归 J0.6b/J0.7 验收条件；实时事件缺 partId 戳记归 J0.7（新增验收项：同一文本 Part 跨 epoch 重补发不得重复追加）；J0.7 还需 Snapshot 请求串行化/generation 防护（旧快照不得覆盖新快照）。
+
+### 2026-11-10 J0.6b-1/2 v2 Message/Diff API + 消息恢复层（数据读取迁移第一步）
+
+- **J0.6b-1 客户端**（`v2/client.ts` + `v2/diff-id.ts`）：`listMessages`（`GET /api/session/:id/message`，limit/order/cursor/type；官方明确 cursor 不可与 order 同传——客户端直接拒绝并抛错）；`getSessionDiff`（`GET /api/session/:id/diff`，from/to/context，返回 `{data: FileDiff.Info[]}`）；`deriveDiffId` = `sha256(JSON.stringify(['diff:v1', sessionId, fromMessageId, toMessageId, file, patch]))`——五个字段必须是已解析的非空字符串（拒绝 undefined/null/空串），数组序列化天然无字段拼接歧义。
+- **J0.6b-2 消息恢复层**（`v2/message-restore.ts`，纯函数）：v2 `SessionMessageInfo[]`（user/assistant content[]，含 text/reasoning/tool）→ Nienie 历史事件规格 + `SessionSnapshotPart[]`。稳定 partId 派生：用户文本 `${messageID}:0`、assistant 内容块 `${messageID}:${ordinal}`（与 v2 实时事件的 (assistantMessageID, ordinal) 身份一致）；partRevision 沿用 J0.4 的单调版本约定（文本=累计长度、tool called=1/result=2）；payload 携带 `messageId` 供本地乐观消息关联（J0.4b 遗留 P1 的解法基础）。
+- **v2 工具状态映射**：streaming/running→running、completed→completed、error→**failed**（修复 v1 映射缺失的 error 态）；输出抽取：completed=Tool.Content 文本块连接（file 块标记 `file:name|uri`）、error=error.message；streaming 态的字符串 input 尝试 JSON 解析否则空对象。
+- **turn 范围解析**（`resolveDiffTurnRange`）：from 缺省=最新用户消息、to 缺省=from 自身，返回解析后的真实 User Message ID 供 diffId 使用；校验 from/to 必须是用户消息且 to 不早于 from（ChatGPT 要求的"实际生效 turn 范围"）。
+- 测试 79 个（新增 8：四态映射/输出抽取/事件规格顺序与 partId/revision/快照显式 status 与 ordinal/turn 范围默认与校验/diffId 公式与敏感性与空值拒绝）。
+- **待 ChatGPT 裁决的划界**（见下轮审查）：会话 CRUD/写入/事件切换与 v1 SQLite 读取删除的先后；streaming→running 还是 pending（两轮审查口径不一致）；乐观消息 messageId 需要 session.send 响应携带（协议小变更）。

@@ -46,6 +46,19 @@ export {
 } from './service-discovery.js';
 export { OpenCodeV2Client, OpenCodeV2ClientError, type OpenCodeV2ClientOptions } from './v2/client.js';
 export { deriveDiffId, type DiffIdInput } from './v2/diff-id.js';
+export {
+  assistantPartId,
+  buildSnapshotParts,
+  contentToText,
+  extractToolOutput,
+  mapV2ToolStatus,
+  resolveDiffTurnRange,
+  restoreHistoryEvents,
+  userPartId,
+  type DiffTurnRange,
+  type NienieToolStatus,
+  type RestoredEventSpec,
+} from './v2/message-restore.js';
 export type {
   OpenCodeV2AssistantContentPart,
   OpenCodeV2AssistantMessage,
