@@ -28,6 +28,21 @@ import { parseSseStream } from './sse.js';
 
 export { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
 export { parseSseStream } from './sse.js';
+export {
+  discoverOpenCodeService,
+  openCodeRegistrationFiles,
+  openCodeServiceAuthHeader,
+  openCodeStateDir,
+  openCodeStateDirs,
+  readOpenCodeServiceRegistration,
+  verifyOpenCodeService,
+  type DiscoverOpenCodeServiceOptions,
+  type OpenCodeServiceDiscoveryReason,
+  type OpenCodeServiceDiscoveryResult,
+  type OpenCodeServiceEndpoint,
+  type OpenCodeServiceRegistration,
+  type VerifyOpenCodeServiceOptions,
+} from './service-discovery.js';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_OPENCODE_URL = 'http://127.0.0.1:4096';

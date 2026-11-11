@@ -337,3 +337,11 @@
 - `website/index.html` 给 `favicon.ico`、`nienie-icon-16/32.png`、`apple-touch-icon.png`、`site.webmanifest` 全部加 `?v=2` 版本号，强制浏览器重新拉取；以后换 logo 只需递增版本号。
 - `website/_headers`：图标类资源不再走 `/assets/*` 的长缓存——`/assets/*` 统一改为 `max-age=3600, must-revalidate`，`favicon.ico` 与 `site.webmanifest` 单独设 `max-age=0, must-revalidate`。注意 CF Pages 会把多条匹配规则的 Cache-Control **合并**（不是覆盖），必须避免规则重叠产生自相矛盾的响应头。
 - 线上验证：5 个 `?v=2` 资源均 200 且内容与本地一致，首页 200，各资源只返回单条 Cache-Control。
+
+### 2026-11-10 J0.5 OpenCode v2 服务发现（只读连接验证）
+
+- **背景**：手机建的会话桌面 OpenCode.app 看不到，根因是 Nienie 对接的 OpenCode v1（`~/.bun/bin/opencode` 1.19.5，写 `opencode.db` 的 `session/message/part` 表）与桌面 OpenCode v2.2.5（写 `session_v2/session_message/session_part` 表）是两套存储，v1→v2 迁移是一次性的（详见 `FailureExperience.md`）。已定方案 A2：Nienie attach 桌面 v2 共享服务，不双写、不直连 sqlite。
+- **新增 `packages/agent-adapters/opencode/src/service-discovery.ts`**：按 OpenCode 官方 `service-probe.ts` 语义实现服务发现与身份验证——读注册文件（`<state>/opencode/service.json` / `service-local.json` / `service-<channel>.json`，字段 id/version/url/pid/password），用 `Basic opencode:<password>` 请求 `GET /api/info`，校验返回 `pid` 与注册一致、`version` 与注册一致后才返回 `{baseUrl, version, pid, username, password}` 端点。
+- **失败原因分级**（`OpenCodeServiceDiscoveryReason`）：`not_found`（无注册文件）/ `invalid_registration`（文件损坏）/ `unreachable` / `unauthorized` / `incompatible`（404 或响应体不合法）/ `identity_mismatch`（pid 不一致）/ `version_mismatch` / `failed`（500）/ `not_ready`（503 启动中）。错误信息与日志永不携带密码。
+- **状态根目录双候选**：官方规则是 `XDG_STATE_HOME || ~/.local/state`，但桌面 GUI 启动的 opencode-cli 在干净环境下注册到 `~/.local/state`，而终端环境（如本机 openctrlc）可能把 `XDG_STATE_HOME` 指到别处导致发现不到。发现逻辑按序探测两个根目录下的全部候选注册文件，第一个通过 `/api/info` 身份验证的胜出（验证本身保证不会误连到无关服务）。
+- **验收**：31 个单测覆盖（缺失/损坏/401/404/非 JSON/pid 不匹配/版本不匹配/500/503/网络失败/多注册回退/密码不泄漏/多根目录探测）；真机冒烟发现桌面 v2.2.5 服务 `http://127.0.0.1:49374`（`0xC0DE` 固定服务端口，pid 与桌面 `opencode-cli serve --service` 进程一致），确认 Nienie 可 attach 到与桌面同一个服务实例，不会启动第二个 Server。此为 J0.5（Phase 1 只读连接验证）验收点。

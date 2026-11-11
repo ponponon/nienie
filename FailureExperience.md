@@ -1005,3 +1005,15 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - 经验二：**favicon 必须靠 URL 版本号破缓存**（`favicon.ico?v=2` 等），仅靠服务器 Cache-Control 对 Chrome 的 favicon 缓存通常无效；以后每次换图标递增 `?v`。
 - 经验三：**Cloudflare Pages 的 `_headers` 多条规则匹配时，同名 header 会被逗号合并而不是覆盖**——曾写出 `max-age=86400, ..., max-age=0` 这种自相矛盾的响应头，浏览器取前面的长缓存，规则形同虚设。设计缓存规则时必须避免路径重叠，部署后用 `curl -I` 逐条确认只返回一条 Cache-Control。
 - 处理：5 个图标引用加 `?v=2`；`/assets/*` 统一缩短为 1 小时，`favicon.ico` / `site.webmanifest` 单独 no-cache；重新部署并逐项验证。
+
+---
+
+## 2026-11-10 手机会话桌面版看不到：OpenCode v1/v2 共用同一个 opencode.db 但不同表，迁移是一次性的
+
+- 现象：用户在 Nienie 手机端建的会话（ideaboom 新任务等）在桌面 OpenCode.app 里完全看不到；但 v1 时代建的旧会话（crawler_console 等）桌面又能看到，误以为 v2 向下兼容。
+- 根因（探索 OpenCode v2.2.5 源码 + sqlite 实测）：v1（`~/.bun/bin/opencode` 1.19.5）和 v2（桌面 OpenCode.app 2.2.5）**共用同一个 `~/.local/share/opencode/opencode.db` 文件，但读写不同的表**——v1 写 `session/message/part`，v2 写 `session_v2/session_message/session_part`。v2 启动时跑一次 `v1-migration.bun.ts` 把 v1 行拷进新表，状态标记 `kv.migration.v1-v2={"phase":"completed"}` 后**永不重扫**。所以迁移完成之后 v1 新建的会话（手机建的全部）v2 永远看不到。实测：v1-only 91 条（按 id anti-join）+ v2-only 3 条，净差 88 = 584-496。数量差要按 session id 做 anti-join 核对，别只比较 COUNT。
+- 致命陷阱：**不能删 kv 的 `migration.v1-v2` 标记重跑迁移来"补迁"**——迁移循环会 `DELETE FROM session_message` 后按 v1 源重建，会把已导入会话在 v2 时代的新消息覆盖掉（数据损坏）。官方补迁正道是 `POST /api/experimental/session/import`。
+- 另一个易错点：桌面 spawn 的 `opencode-cli serve --service` 监听 `127.0.0.1:49374`，**不是随机端口而是 `0xC0DE=49374` 固定服务端口**（官方故意固定，让第二个竞争者绑定失败退避，防双 Server 写同一库）。v2 HTTP API 在 `/api/` 前缀下（`GET /api/session`），直接 curl `/session` 会返回 web UI HTML——别据此误判"服务不可用"。
+- 经验一：**"桌面能显示旧数据"≠"产品向下兼容"**，要分清一次性迁移导入和持续兼容两种机制；排查"数据 A 在客户端 X 看不到"先查两边各写哪个库/哪张表，再查有没有迁移标记（kv/state 表）短路逻辑。
+- 经验二：**两个进程共用一个 sqlite 文件 ≠ 可以双写**——WAL 只保证并发读和写串行化，不保证两个 Server 进程各自的 Event Bus/会话执行状态一致。官方自己就用固定端口防双服务。要共享会话必须共享同一个 Server 进程（attach 官方 service），而不是共享数据库文件。
+- 经验三：直接读 Agent 内部 sqlite 表的实现（Nienie v1 适配器的 readLocalSqliteSessions/emitSqliteSessionHistory）天生脆弱，上游一改 schema 就断；长期应走 HTTP API + 官方事件/日志接口（v2 的 `/api/session/:id/message` + `/api/experimental/session/:id/log` Durable Event Log），把 schema 变化挡在 API 层。
