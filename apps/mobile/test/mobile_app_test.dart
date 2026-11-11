@@ -961,4 +961,145 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('J0.4b 用户文本按 partId 幂等：重放不重复、高 revision 增量追加', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.emitServerEvent(j04Evt(eventId: 'u1', seq: 1, type: 'text_delta',
+        payload: {'delta': 'Hello', 'partId': 'p1', 'partRevision': 5, 'role': 'user'}));
+    // 同 partId+revision 重放（不同 eventId）→ 不产生重复用户消息
+    transport.emitServerEvent(j04Evt(eventId: 'u1_replay', seq: 2, type: 'text_delta',
+        payload: {'delta': 'Hello', 'partId': 'p1', 'partRevision': 5, 'role': 'user'}));
+    // 高 revision 增量 → 追加到同一用户消息，而不是新建
+    transport.emitServerEvent(j04Evt(eventId: 'u2', seq: 3, type: 'text_delta',
+        payload: {'delta': ' world', 'partId': 'p1', 'partRevision': 11, 'role': 'user'}));
+    await tester.pump();
+
+    final prompts = client.timelineFor('ses_alpha').whereType<UserPromptItem>().toList();
+    expect(prompts.length, 1);
+    expect(prompts.single.message, 'Hello world');
+    client.dispose();
+  });
+
+  testWidgets('J0.4b 终态不可逆：completed/failed 是吸收态（含跨 epoch 无 partId 冲突结果）', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.emitServerEvent(j04Evt(eventId: 't1', seq: 1, type: 'tool_use',
+        payload: {'toolCallId': 't1', 'name': 'shell', 'input': {}, 'partId': 'pt1', 'partRevision': 1}));
+    transport.emitServerEvent(j04Evt(eventId: 't2', seq: 2, type: 'tool_result',
+        payload: {'toolCallId': 't1', 'content': 'done', 'isError': false, 'partId': 'pt1', 'partRevision': 2}));
+    // 更高 revision 但不同终态（failed）→ 不改变既有终态、不覆盖内容
+    transport.emitServerEvent(j04Evt(eventId: 't3', seq: 3, type: 'tool_result',
+        payload: {'toolCallId': 't1', 'content': 'boom', 'isError': true, 'partId': 'pt1', 'partRevision': 3}));
+    // 跨 epoch、无 partId/revision 的冲突结果 → 仍不得改变终态
+    transport.emitServerEvent(j04Evt(eventId: 't4', seq: 1, epoch: 'epX', type: 'tool_result',
+        payload: {'toolCallId': 't1', 'content': 'boom2', 'isError': true}));
+    await tester.pump();
+
+    final tool = client.timelineFor('ses_alpha').whereType<ToolCallCardItem>().single;
+    expect(tool.status, ToolCallStatus.completed);
+    expect(tool.resultContent, 'done');
+    // 同终态的更新仍允许（内容更新）
+    transport.emitServerEvent(j04Evt(eventId: 't5', seq: 2, epoch: 'epX', type: 'tool_result',
+        payload: {'toolCallId': 't1', 'content': 'done v2', 'isError': false}));
+    await tester.pump();
+    expect(tool.status, ToolCallStatus.completed);
+    expect(tool.resultContent, 'done v2');
+    client.dispose();
+  });
+
+  testWidgets('J0.4b Snapshot revision 播种生效：同/低 revision 补偿丢弃、高 revision 增量追加', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_seed',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep_snap',
+      'watermark': 5,
+      'capturedAt': '2026-11-10T00:00:00Z',
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {'kind': 'message', 'partId': 'p1', 'ordinal': 0, 'revision': 5, 'createdAt': 'x', 'updatedAt': 'x',
+          'role': 'assistant', 'content': [{'type': 'text', 'text': 'Hello'}]},
+      ],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    await tester.pump();
+
+    // 低 revision 补偿 → 丢弃
+    transport.emitServerEvent(j04Evt(eventId: 'r4', seq: 6, epoch: 'ep_snap', type: 'text_delta',
+        payload: {'delta': 'Hel', 'partId': 'p1', 'partRevision': 4}));
+    // 同 revision 重放 → 丢弃
+    transport.emitServerEvent(j04Evt(eventId: 'r5', seq: 7, epoch: 'ep_snap', type: 'text_delta',
+        payload: {'delta': 'Hello', 'partId': 'p1', 'partRevision': 5}));
+    // 高 revision 增量 → 追加
+    transport.emitServerEvent(j04Evt(eventId: 'r6', seq: 8, epoch: 'ep_snap', type: 'text_delta',
+        payload: {'delta': ' World', 'partId': 'p1', 'partRevision': 6}));
+    await tester.pump();
+
+    final texts = client.timelineFor('ses_alpha').whereType<StreamingTextItem>().toList();
+    expect(texts.length, 1);
+    expect(texts.single.text, 'Hello World');
+    expect(texts.single.revision, 6);
+    client.dispose();
+  });
+
+  testWidgets('J0.4b 两个文本 Part 交错：增量精确归属互不串扰', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.emitServerEvent(j04Evt(eventId: 'm1', seq: 1, type: 'text_delta',
+        payload: {'delta': 'Hello', 'partId': 'p1', 'partRevision': 5}));
+    transport.emitServerEvent(j04Evt(eventId: 'm2', seq: 2, type: 'text_delta',
+        payload: {'delta': 'World', 'partId': 'p2', 'partRevision': 5}));
+    transport.emitServerEvent(j04Evt(eventId: 'm3', seq: 3, type: 'text_delta',
+        payload: {'delta': '!', 'partId': 'p1', 'partRevision': 6}));
+    await tester.pump();
+
+    final texts = client.timelineFor('ses_alpha').whereType<StreamingTextItem>().toList();
+    expect(texts.length, 2);
+    expect(texts[0].text, 'Hello!'); // p1 的增量不落到 p2
+    expect(texts[1].text, 'World');
+    client.dispose();
+  });
+
+  testWidgets('J0.4b 工具结果先于声明：占位卡被补齐 name/input 且终态不回退', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.emitServerEvent(j04Evt(eventId: 'x1', seq: 1, type: 'tool_result',
+        payload: {'toolCallId': 't1', 'content': 'out', 'isError': false}));
+    transport.emitServerEvent(j04Evt(eventId: 'x2', seq: 2, type: 'tool_use',
+        payload: {'toolCallId': 't1', 'name': 'shell', 'input': {'command': 'ls'}}));
+    await tester.pump();
+
+    final tools = client.timelineFor('ses_alpha').whereType<ToolCallCardItem>().toList();
+    expect(tools.length, 1);
+    expect(tools.single.name, 'shell'); // 占位名被真实工具名补齐
+    expect(tools.single.input['command'], 'ls');
+    expect(tools.single.status, ToolCallStatus.completed); // 终态不被 tool_use 回退
+    client.dispose();
+  });
+
 }

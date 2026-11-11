@@ -3,8 +3,11 @@ sealed class SessionTimelineItem {
 }
 
 class UserPromptItem extends SessionTimelineItem {
-  final String message;
-  const UserPromptItem(this.message);
+  String message;
+  /// 内容归属标识与状态版本（J0.4）：同 partId 的用户消息增量精确追加，重放不重复。
+  String? partId;
+  int revision;
+  UserPromptItem(this.message, {this.partId, this.revision = 0});
 }
 
 /// 发送后、回复到达前的「等待中」占位卡片。
@@ -50,7 +53,8 @@ class StreamingTextItem extends SessionTimelineItem {
 
 class ToolCallCardItem extends SessionTimelineItem {
   final String toolCallId;
-  final String name;
+  /// 可被真实工具名补齐（占位卡先于 tool_use 创建时为 'tool'）。
+  String name;
   final Map<String, dynamic> input;
   String? resultContent;
   bool isError;
@@ -63,14 +67,14 @@ class ToolCallCardItem extends SessionTimelineItem {
   ToolCallCardItem({
     required this.toolCallId,
     required this.name,
-    required this.input,
+    required Map<String, dynamic> input,
     this.resultContent,
     this.isError = false,
     this.status = ToolCallStatus.running,
     this.partId,
     this.revision = 0,
     this.expanded = false,
-  });
+  }) : input = Map<String, dynamic>.of(input);
 }
 
 class ErrorCardItem extends SessionTimelineItem {

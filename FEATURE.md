@@ -387,5 +387,14 @@
 - **partId + revision 幂等归约**：per-session `_partRevisionBySession`（partId → 已应用最高 revision）；事件带 `partId`+`partRevision` 时——同 revision 重放丢弃、低 revision 晚到不覆盖新状态、高 revision 正确更新；文本按 partId 精确定位归属 item 增量追加（不再依赖「最后一个文本 item」启发式）；工具按 `toolCallId` 幂等 upsert（多次断线重连/epoch 切换重放不重复生成卡片）。无 partId 的事件走原有兼容路径。
 - **Snapshot 安装**：恢复 tool 状态/`partId`/`revision`，并以快照 revision 播种版本表（快照是权威状态，之后同/低 revision 的补偿事件被丢弃）。
 - **UI 按状态渲染**（`timeline_card_list.dart`）：状态图标来自 `status`（pending=circleDashed/running=loaderCircle/completed=check/failed=circleX），结果内容只决定可展开性；边框红色只看 `status == failed`。
-- **验收矩阵**（mobile_app_test.dart 新增 5 组）：Snapshot 恢复 running/completed(空输出)/failed(空错误) 三态正确 + UI 图标按 status；相同 partId+revision 重放不重复追加/不重复卡片；高 revision 更新、低 revision 晚到不覆盖（文本与工具终态均验证）；历史补偿与实时事件并发最终一致且单卡片；多次断线重连（3 个 epoch）不重复卡片、终态不回退。22 个手机端测试全绿，flutter analyze 无问题，仓库全量 127 vitest 全绿。
+- **验收矩阵**（mobile_app_test.dart 新增 5 组）：Snapshot 恢复 running/completed(空输出)/failed(空错误) 三态正确 + UI 图标按 status；相同 partId+revision 重放不重复追加/不重复卡片；高 revision 更新、低 revision 晚到不覆盖（文本与工具终态均验证）；历史补偿与实时事件并发最终一致且单卡片；多 epoch 重放（reducer 级模拟重连，非完整断线重连集成测试）不重复卡片、终态不回退。22 个手机端测试全绿，flutter analyze 无问题，仓库全量 127 vitest 全绿。
 - **明确留给后续的跨源一致性问题**（本轮不做，避免扩大范围）：a) v1 快照构建器 `revision` 硬编码 1、与历史事件 `partRevision`（文本累计长度）口径不可比，且 reasoning/step/patch/file part 会导致构建抛错（真实会话暂无法走快照路径）——随 J0.6b/J0.7 用 v2 Message API 重建快照时解决；b) 实时事件（normalizer）不携带 partId/revision，门禁目前只覆盖历史/合成事件——J0.7 统一归约时补齐。
+
+### 2026-11-10 J0.4b 归约修正（按 ChatGPT 首轮 Diff Review 反馈）
+
+- **P1 用户消息 part 归属**：`UserPromptItem` 增加 `partId`/`revision`，user `text_delta` 与 assistant 一样按 partId 精确定位、增量追加、`markApplied()` 记录版本（原实现直接 break 造成：重放产生重复用户消息、同 part 后续增量变成新消息）。
+- **P1 终态不可逆**：`tool_result` 原来无条件覆盖状态（completed↔failed 可互跳）。改为单向状态机：pending→running→completed/failed，completed/failed 为吸收态——不同终态的结果既不改状态也不覆盖内容；同终态只在版本更新时更新内容；tool_use 重放永不回退终态。
+- **P2 占位卡补齐**：`tool_result` 先到产生的占位卡，后到的 `tool_use` 补齐真实工具名（覆盖占位名 'tool'）与 input 缺失字段；`ToolCallCardItem` 构造时防御性拷贝 input map（原 `const {}` 不可变 map 会令补齐静默失败）。
+- **UI**：展开的结果文本颜色也改按 `status == failed` 判断（原用 isError，与图标/边框口径不一致）。
+- **补测试**（ChatGPT 要求的 A-E）：用户文本 partId 幂等（重放不重复+高 revision 追加）；终态不可逆（含跨 epoch 无 partId 冲突结果、同终态内容更新）；Snapshot revision 播种真正生效（同/低 revision 补偿丢弃、高 revision 追加、revision=6 断言）；两个文本 Part 交错互不串扰；工具结果先于声明（name/input 补齐+终态不回退）。手机端 27 测试全绿。
+- **ChatGPT 划界确认记录**：v1 快照构建器问题（revision=1 与历史 partRevision=文本长度口径不可比、reasoning/step/patch/file part 构建抛错、v1 工具 `error` 状态映射缺失）全部归 J0.6b/J0.7 验收条件；实时事件缺 partId 戳记归 J0.7（新增验收项：同一文本 Part 跨 epoch 重补发不得重复追加）；J0.7 还需 Snapshot 请求串行化/generation 防护（旧快照不得覆盖新快照）。

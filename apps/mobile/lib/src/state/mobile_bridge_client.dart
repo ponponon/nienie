@@ -505,7 +505,11 @@ class MobileBridgeClient extends ChangeNotifier {
             .join();
         if (content.isEmpty) continue;
         if (role == 'user') {
-          nextTimeline.add(UserPromptItem(content));
+          nextTimeline.add(UserPromptItem(
+            content,
+            partId: p['partId'] as String?,
+            revision: (p['revision'] as num?)?.toInt() ?? 0,
+          ));
         } else {
           nextTimeline.add(StreamingTextItem(
             text: content,
@@ -1131,7 +1135,27 @@ class MobileBridgeClient extends ChangeNotifier {
         if (delta.isEmpty) break;
         final role = event.payload['role'] as String?;
         if (role == 'user') {
-          items.add(UserPromptItem(delta));
+          // 用户消息同样按 partId 归属：增量追加到原消息，重放由 revision 门禁丢弃（J0.4）
+          if (partId != null) {
+            UserPromptItem? target;
+            for (final item in items) {
+              if (item is UserPromptItem && item.partId == partId) {
+                target = item;
+                break;
+              }
+            }
+            if (target != null) {
+              target.message += delta;
+              if (partRevision != null && partRevision > target.revision) {
+                target.revision = partRevision;
+              }
+            } else {
+              items.add(UserPromptItem(delta, partId: partId, revision: partRevision ?? 0));
+            }
+          } else {
+            items.add(UserPromptItem(delta));
+          }
+          markApplied();
           break;
         }
         // 回复内容开始到达：收起「等待中」占位
@@ -1218,14 +1242,17 @@ class MobileBridgeClient extends ChangeNotifier {
           }
         }
         if (existing != null) {
+          final card = existing;
           // 幂等 upsert：重放不新增卡片；终态（completed/failed）不回退为 running
-          if (existing.status == ToolCallStatus.pending || existing.status == ToolCallStatus.running) {
-            existing.status = ToolCallStatus.running;
+          if (card.status == ToolCallStatus.pending || card.status == ToolCallStatus.running) {
+            card.status = ToolCallStatus.running;
           }
-          if (existing.input.isEmpty && input.isNotEmpty) existing.input.addAll(input);
-          if (partId != null) existing.partId = partId;
-          if (partRevision != null && partRevision > existing.revision) {
-            existing.revision = partRevision;
+          // 结果先于声明时占位卡信息补齐：真实工具名覆盖占位名，input 只补缺失字段
+          if (card.name == 'tool' && name != 'tool') card.name = name;
+          input.forEach((key, value) => card.input.putIfAbsent(key, () => value));
+          if (partId != null) card.partId = partId;
+          if (partRevision != null && partRevision > card.revision) {
+            card.revision = partRevision;
           }
         } else {
           items.add(
@@ -1254,9 +1281,16 @@ class MobileBridgeClient extends ChangeNotifier {
           }
         }
         if (existing != null) {
+          final nextStatus = isError ? ToolCallStatus.failed : ToolCallStatus.completed;
+          final isTerminal = existing.status == ToolCallStatus.completed ||
+              existing.status == ToolCallStatus.failed;
+          if (isTerminal && existing.status != nextStatus) {
+            // 终态不可逆（J0.4）：不同终态的结果不改变既有状态，也不覆盖既有内容
+            break;
+          }
           existing.resultContent = content;
           existing.isError = isError;
-          existing.status = isError ? ToolCallStatus.failed : ToolCallStatus.completed;
+          existing.status = nextStatus;
           if (partId != null) existing.partId = partId;
           if (partRevision != null && partRevision > existing.revision) {
             existing.revision = partRevision;

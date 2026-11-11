@@ -317,7 +317,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                       style: TextStyle(
                         fontSize: 11.5,
                         fontFamily: 'monospace',
-                        color: item.isError
+                        color: item.status == ToolCallStatus.failed
                             ? const Color(0xFFDC2626)
                             : _textSecondary,
                       ),
