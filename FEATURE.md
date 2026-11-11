@@ -509,3 +509,18 @@
 - **偏好**（路线图 1.5）：全局开关、会话静音列表、免打扰时段（HH:mm，start 含 end 不含，支持跨午夜）；pushToken 去重（多设备同通道只发一份）；`notifyTest` 测试链路。
 - **桌面设置页**（Tab 4）：通知配置区（Webhook URL/开关/免打扰时段/静音会话）+ 保存 + 发送测试通知按钮，4 语言文案入 DESKTOP_I18N；偏好持久化 preferences.json；IPC `set-notifications`/`test-notification`。
 - 测试：bridge-core +7（webhook 真实 HTTP 中文标题还原、完成/审批/出错、偏好过滤、去重、免打扰边界、测试发送），全仓 208 vitest 全绿。
+
+### 2026-11-11 路线图#1 二轮修复 R1-R10（按 ChatGPT 终审清单）
+
+- **R1** IPC 映射单一源：`DESKTOP_PRELOAD_METHODS`（controller 导出）供 preview-server 注入层同步使用，杜绝两处手维护漏更新。
+- **R2** Webhook 模式不依赖设备注册：`notifyEvent` 移除 registrations 前置闸，webhookSender 为全局单目标每事件一次；deviceSender（apns/fcm 预留）按注册逐设备。
+- **R3** Sender 动态配置：webhookSender 闭包每次发送读取最新 URL/类型，改配置立即生效（原 startBridge 定死 sender 的 bug 修复）。
+- **R4** 异常隔离：`notifyEvent` 全链路吞错（onDeliveryError 上报日志），ws-server 双保险 `.catch`，通知失败绝不影响 Bridge 主进程。
+- **R5** 三类 Sender：BarkPushSender（JSON+url 深链）/ NtfyPushSender（Topic 模式正文纯文本 + Title RFC2047 + Click/Actions）/ WebhookPushSender（通用 JSON），`createPushSender` 按类型或 auto 特征（day.app→Bark、含 ntfy→ntfy）识别；URL 校验（http/https、禁 userinfo）。
+- **R6** 目标语义分离：webhook 单目标一次、设备级按 (provider,pushToken) 去重；真实 HTTP 测试锁定 Bark url 字段与 ntfy actions 中文经 latin1 字节通道还原（Bun/Node 差异再次确认：验证必须在 Node 运行时）。
+- **R7** 撤销联动 `revokeDevice→unregisterDevice`；webhook 模式天然无注册依赖（重启可用）；原生 token 持久化预留。
+- **R8** 外发隐私：`sanitizePushBody`（redactLogText + 默认脱敏家目录/绝对路径）、`detailed` 详细模式开关（默认关）、设置页隐私提示文案（4 语言）、凭据文件 chmod 0600。
+- **R9** 深链：通知带 `nienie://session/<id>`（Bark url 字段 / ntfy Click+Actions「打开会话」），手机端 `handleDeepLink` 未加载挂起、sessions 刷新后自动进入会话（app_links 接入 + Android/iOS scheme 配置）；审批入口=打开 App 内已认证审批页（不做未认证 HTTP Action）。
+- **R10** 测试按钮吃草稿 URL/类型（不经旧配置），文案「Webhook 连接成功」。
+- P2 顺手：ws-server 冷启动预热 sessionIndex（离线通知也有会话标题）、事件级去重（同 eventId 只推一次）。
+- 测试：bridge-core 46（+4）+ mobile 33（+1 深链）+ 全仓 210 vitest 全绿；另修 Flutter SDK ink_sparkle.frag 缺失问题（改用 InkRipple 水波纹，产品更克制且不依赖 shader 资源）。

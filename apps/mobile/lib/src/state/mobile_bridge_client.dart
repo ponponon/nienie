@@ -892,7 +892,32 @@ class MobileBridgeClient extends ChangeNotifier {
           .map((item) => AgentSession.fromJson(Map<String, dynamic>.from(item as Map)))
           .toList();
       notifyListeners();
+      await _consumePendingDeepLink();
     }
+  }
+
+  /// 深链目标会话（R9）：nienie://session/<id> 通知点击直达会话。
+  String? pendingDeepLinkSessionId;
+
+  /// 处理通知深链。返回是否识别。未配对/未加载时先挂起，sessions 刷新后自动进入。
+  bool handleDeepLink(Uri uri) {
+    if (uri.scheme != 'nienie') return false;
+    if (uri.host == 'session' && uri.pathSegments.isNotEmpty) {
+      pendingDeepLinkSessionId = uri.pathSegments.first;
+      unawaited(_consumePendingDeepLink());
+      notifyListeners();
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _consumePendingDeepLink() async {
+    final id = pendingDeepLinkSessionId;
+    if (id == null) return;
+    final match = sessions.where((s) => s.id == id).firstOrNull;
+    if (match == null) return;
+    pendingDeepLinkSessionId = null;
+    await openSession(match);
   }
 
   Future<AgentSession> createSession({

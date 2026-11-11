@@ -702,7 +702,7 @@ describe('bridge core', () => {
   it('registers mobile push tokens and dispatches redacted iOS/Android notifications when mobile is offline', async () => {
     const dispatched: PushNotificationMessage[] = [];
     const pushRouter = new PushNotificationRouter({
-      sender: async (notification) => {
+      deviceSender: async (notification) => {
         dispatched.push(notification);
       },
     });
@@ -790,7 +790,7 @@ describe('bridge core', () => {
       provider: 'apns',
       pushToken: 'apns_tok_abc',
       title: 'Nienie · 等待你的批准',
-      body: 'ses_seed_1：Permission requested: bash',
+      body: 'Seed Session：Permission requested: bash',
     });
     expect(dispatched[1]?.body).not.toContain('sk-secret999');
     expect(dispatched[1]?.body).toContain('[REDACTED]');

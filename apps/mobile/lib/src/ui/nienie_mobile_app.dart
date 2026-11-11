@@ -68,6 +68,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       theme: ThemeData.light(useMaterial3: true).copyWith(
         scaffoldBackgroundColor: Colors.white,
         cardColor: Colors.white,
+        // 水波纹而非 Material3 sparkle：产品更克制，也避免依赖 shader 资源（部分环境测试/低端 GPU 不可用）
+        splashFactory: InkRipple.splashFactory,
         colorScheme: ColorScheme.fromSeed(
           seedColor: _weTypeGreen,
           primary: _weTypeGreen,

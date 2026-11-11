@@ -220,14 +220,21 @@ export {
   type HeadlessDaemonStatus,
 } from './daemon.js';
 export {
+  BarkPushSender,
+  createPushSender,
   DEFAULT_PUSH_PREFERENCES,
   isWithinQuietHours,
+  NtfyPushSender,
   PushNotificationRouter,
+  sanitizePushBody,
+  validateWebhookUrl,
   WebhookPushSender,
   type PushNotificationMessage,
   type PushNotificationPreferences,
   type PushNotificationRouterOptions,
   type PushRegistration,
+  type PushSender,
+  type PushSenderType,
 } from './push.js';
 export {
   runDaemonCli,

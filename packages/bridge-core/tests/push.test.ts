@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BarkPushSender,
+  createPushSender,
   DEFAULT_PUSH_PREFERENCES,
   isWithinQuietHours,
+  NtfyPushSender,
   PushNotificationRouter,
   WebhookPushSender,
   type PushNotificationMessage,
 } from '../src/push.js';
 import type { CanonicalAgentEvent } from '@nienie/protocol';
 
+let eventSeq = 0;
 function event(over: Partial<CanonicalAgentEvent> & { type: CanonicalAgentEvent['type']; payload: Record<string, unknown> }): CanonicalAgentEvent {
   return {
     version: 1,
-    eventId: 'evt_1',
+    eventId: `evt_${++eventSeq}`,
     streamEpoch: 'ep1',
     sessionId: 'ses_1',
     sequence: 1,
@@ -67,13 +71,12 @@ describe('PushNotificationRouter（路线图 1.2-1.5）', () => {
 
   function makeRouter(sent: PushNotificationMessage[], prefs?: Parameters<PushNotificationRouter['setPreferences']>[0]) {
     const router = new PushNotificationRouter({
-      sender: async (message) => {
+      webhookSender: async (message) => {
         sent.push(message);
       },
       resolveSessionTitle: (id) => (id === 'ses_1' ? '修 GC Bug' : undefined),
       preferences: { ...(prefs ?? {}) },
     });
-    router.registerDevice(registration());
     return router;
   }
 
@@ -118,13 +121,52 @@ describe('PushNotificationRouter（路线图 1.2-1.5）', () => {
     expect(DEFAULT_PUSH_PREFERENCES.enabled).toBe(true);
   });
 
-  it('多设备同 pushToken 去重只投一份', async () => {
+  it('R2/R6：webhook 全局单目标每事件一次，无注册也发送；设备级按注册逐设备且同 token 去重', async () => {
+    const sent: PushNotificationMessage[] = [];
+    const deviceSent: PushNotificationMessage[] = [];
+    const router = new PushNotificationRouter({
+      webhookSender: async (message) => {
+        sent.push(message);
+      },
+      deviceSender: async (message) => {
+        deviceSent.push(message);
+      },
+      resolveSessionTitle: () => '修 GC Bug',
+    });
+    // 无任何注册：webhook 仍发送（R2）
+    await router.notifyEvent(event({ type: 'status', payload: { status: 'idle' } }), { now });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.clickUrl).toBe('nienie://session/ses_1');
+    // 3 个设备注册（2 个同 token）：webhook 仍只一次；设备级 2 次
+    router.registerDevice(registration('dev_2', 'tok_a'));
+    router.registerDevice(registration('dev_3', 'tok_a'));
+    router.registerDevice(registration('dev_4', 'tok_b'));
+    await router.notifyEvent(event({ type: 'status', payload: { status: 'waiting', detail: '审批' } }), { now });
+    expect(sent).toHaveLength(2);
+    expect(deviceSent).toHaveLength(2);
+  });
+
+  it('R4：投递异常被吞掉不外抛，经 onDeliveryError 上报', async () => {
+    const errors: unknown[] = [];
+    const router = new PushNotificationRouter({
+      webhookSender: async () => {
+        throw new Error('hook 500');
+      },
+      onDeliveryError: (error) => errors.push(error),
+    });
+    await expect(
+      router.notifyEvent(event({ type: 'status', payload: { status: 'idle' } }), { now }),
+    ).resolves.toBeUndefined();
+    expect(errors).toHaveLength(1);
+  });
+
+  it('事件级去重：同 eventId 重复投递只推一次', async () => {
     const sent: PushNotificationMessage[] = [];
     const router = makeRouter(sent);
-    router.registerDevice(registration('dev_2', 'https://hook.example/abc'));
-    router.registerDevice(registration('dev_3', 'https://hook.example/other'));
-    await router.notifyEvent(event({ type: 'status', payload: { status: 'idle' } }), { now });
-    expect(sent).toHaveLength(2);
+    const same = event({ type: 'status', payload: { status: 'idle' } });
+    await router.notifyEvent(same, { now });
+    await router.notifyEvent(same, { now });
+    expect(sent).toHaveLength(1);
   });
 
   it('isWithinQuietHours 边界：start 含 end 不含', () => {
@@ -174,5 +216,58 @@ describe('WebhookPushSender 真实 HTTP（Node/undici 运行时 = Electron 生�
     } finally {
       server.close();
     }
+  });
+});
+
+describe('三类 Sender 真实 HTTP（R5/R9）', () => {
+  it('Bark JSON 带 url 深链；ntfy Topic 模式正文纯文本 + Title RFC2047 + Click/Actions（actions 中文经 latin1 字节通道还原）', async () => {
+    const { createServer } = await import('node:http');
+    const got: Array<{ path: string; headers: Record<string, unknown>; body: string }> = [];
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c: Buffer) => (raw += c));
+      req.on('end', () => {
+        got.push({ path: req.url ?? '', headers: req.headers, body: raw });
+        res.writeHead(200).end('ok');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const port = (server.address() as { port: number }).port;
+    const base = `http://127.0.0.1:${port}`;
+    const message = {
+      deviceId: 'd', platform: 'unknown' as const, provider: 'webhook' as const, pushToken: 't',
+      sessionId: 'ses_1', title: 'Nienie · 任务完成', body: '修 GC Bug：已完成。',
+      clickUrl: 'nienie://session/ses_1', timestamp: 1,
+    };
+    try {
+      await createPushSender({ type: 'bark', url: `${base}/key` }).send(message);
+      await createPushSender({ type: 'ntfy', url: `${base}/mytopic` }).send(message);
+      await new Promise((r) => setTimeout(r, 200));
+      const bark = got.find((g) => g.path === '/key')!;
+      const barkBody = JSON.parse(bark.body) as { title: string; url: string };
+      expect(barkBody.title).toBe('Nienie · 任务完成');
+      expect(barkBody.url).toBe('nienie://session/ses_1');
+
+      const ntfy = got.find((g) => g.path === '/mytopic')!;
+      expect(ntfy.body).toBe('修 GC Bug：已完成。'); // Topic 模式正文是纯文本不是 JSON
+      const rawTitle = String(ntfy.headers['title']);
+      expect(rawTitle.startsWith('=?UTF-8?B?')).toBe(true); // RFC2047 ASCII 头
+      const decodedTitle = Buffer.from(rawTitle.slice('=?UTF-8?B?'.length, -2), 'base64').toString('utf8');
+      expect(decodedTitle).toBe('Nienie · 任务完成');
+      expect(ntfy.headers['click']).toBe('nienie://session/ses_1');
+      const actions = JSON.parse(Buffer.from(String(ntfy.headers['actions']), 'latin1').toString('utf8')) as Array<{ label: string }>;
+      expect(actions[0]!.label).toBe('打开会话');
+    } finally {
+      server.close();
+    }
+  });
+
+  it('createPushSender 自动识别：day.app→Bark、含 ntfy 主机→ntfy、其余→webhook；非法 URL 拒绝', () => {
+    expect(createPushSender({ type: 'auto', url: 'https://api.day.app/abc' })).toBeInstanceOf(BarkPushSender);
+    expect(createPushSender({ type: 'auto', url: 'https://ntfy.sh/topic' })).toBeInstanceOf(NtfyPushSender);
+    expect(createPushSender({ type: 'auto', url: 'https://hook.example/x' })).toBeInstanceOf(WebhookPushSender);
+    expect(() => createPushSender({ type: 'auto', url: 'file:///etc/passwd' })).toThrow(/Invalid/);
+    expect(() => createPushSender({ type: 'auto', url: 'https://user:pass@host/x' })).toThrow(/Invalid/);
+    expect(() => createPushSender({ type: 'ntfy', url: 'https://ntfy.sh/' })).toThrow(/topic/);
   });
 });

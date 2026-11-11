@@ -165,6 +165,13 @@ export class BridgeServer {
   }
 
   async start(): Promise<BridgeServerAddress> {
+    // 冷启动预热（P2）：手机离线期间发生的完成/审批通知也要有会话标题
+    void this.registry
+      .listSessions()
+      .then((sessions) => {
+        for (const session of sessions) this.sessionIndex.set(session.id, session);
+      })
+      .catch(() => undefined);
     if (this.httpServer) {
       return this.getAddress();
     }
@@ -814,9 +821,12 @@ export class BridgeServer {
       }
     }
     if (deliveredCount === 0 && this.pushRouter) {
-      void this.pushRouter.notifyEvent(event, {
-        sessionTitle: this.sessionIndex.get(event.sessionId)?.title,
-      });
+      // 通知失败绝不影响主链路（R4）：router 内部也吞错，这里双保险
+      this.pushRouter
+        .notifyEvent(event, {
+          sessionTitle: this.sessionIndex.get(event.sessionId)?.title,
+        })
+        .catch(() => undefined);
     }
   }
 

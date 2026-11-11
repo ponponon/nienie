@@ -52,6 +52,14 @@ export type DesktopTranslation = {
   notificationTestOk: string;
   notificationTestFail: string;
   notificationNeedUrl: string;
+  notificationTypeLabel: string;
+  notificationTypeAuto: string;
+  notificationTypeBark: string;
+  notificationTypeNtfy: string;
+  notificationTypeWebhook: string;
+  notificationDetailedLabel: string;
+  notificationDetailedDesc: string;
+  notificationPrivacyNotice: string;
   endpointLabel: string;
   connectedDevicesLabel: string;
   connectedDevicesDesc: string;
@@ -139,6 +147,14 @@ export const DESKTOP_I18N: Record<DesktopLocale, DesktopTranslation> = {
     notificationTestOk: '测试通知已发送',
     notificationTestFail: '测试通知发送失败',
     notificationNeedUrl: '请先填写通知 Webhook URL',
+    notificationTypeLabel: '通知服务类型',
+    notificationTypeAuto: '自动识别',
+    notificationTypeBark: 'Bark（iOS）',
+    notificationTypeNtfy: 'ntfy',
+    notificationTypeWebhook: '通用 Webhook（自建）',
+    notificationDetailedLabel: '详细通知内容',
+    notificationDetailedDesc: '开启后通知可含完整命令与本机路径；默认关闭以防敏感信息外发',
+    notificationPrivacyNotice: '通知将发送到你配置的第三方或自建服务，可能包含会话标题、审批摘要与错误信息。请勿配置不可信地址；免打扰时段按本电脑系统时区计算。',
     endpointLabel: '监听地址',
     connectedDevicesLabel: '已连接手机',
     connectedDevicesDesc: '管理已授权访问这台 Mac 的移动设备',
@@ -224,6 +240,14 @@ export const DESKTOP_I18N: Record<DesktopLocale, DesktopTranslation> = {
     notificationTestOk: 'Test notification sent',
     notificationTestFail: 'Failed to send test notification',
     notificationNeedUrl: 'Please fill in the webhook URL first',
+    notificationTypeLabel: 'Notification Service',
+    notificationTypeAuto: 'Auto detect',
+    notificationTypeBark: 'Bark (iOS)',
+    notificationTypeNtfy: 'ntfy',
+    notificationTypeWebhook: 'Generic Webhook',
+    notificationDetailedLabel: 'Detailed notification content',
+    notificationDetailedDesc: 'When on, notifications may include full commands and local paths; off by default to avoid leaking sensitive data',
+    notificationPrivacyNotice: 'Notifications are sent to your configured third-party or self-hosted service and may include session titles, approval summaries and errors. Do not use untrusted URLs. Quiet hours follow the system timezone of this computer.',
     endpointLabel: 'Local Endpoint',
     connectedDevicesLabel: 'Paired Phones',
     connectedDevicesDesc: 'Manage mobile devices authorized for this Mac',
@@ -309,6 +333,14 @@ export const DESKTOP_I18N: Record<DesktopLocale, DesktopTranslation> = {
     notificationTestOk: 'テスト通知を送信しました',
     notificationTestFail: 'テスト通知の送信に失敗しました',
     notificationNeedUrl: '先に Webhook URL を入力してください',
+    notificationTypeLabel: '通知サービス',
+    notificationTypeAuto: '自動判定',
+    notificationTypeBark: 'Bark（iOS）',
+    notificationTypeNtfy: 'ntfy',
+    notificationTypeWebhook: '汎用 Webhook',
+    notificationDetailedLabel: '詳細な通知内容',
+    notificationDetailedDesc: 'オンにすると完全なコマンドやローカルパスを含みます。既定はオフ（機密情報の流出防止）',
+    notificationPrivacyNotice: '通知は設定したサードパーティまたは自作サービスへ送信されます。セッションタイトル・承認要約・エラーを含む場合があります。信頼できない URL は設定しないでください。通知オフ時間はこのパソコンのタイムゾーン基準です。',
     endpointLabel: 'ローカルアドレス',
     connectedDevicesLabel: 'ペアリング済み端末',
     connectedDevicesDesc: 'この Mac へのアクセスを許可したスマホを管理します',
@@ -394,6 +426,14 @@ export const DESKTOP_I18N: Record<DesktopLocale, DesktopTranslation> = {
     notificationTestOk: '테스트 알림을 보냈습니다',
     notificationTestFail: '테스트 알림 전송 실패',
     notificationNeedUrl: '먼저 Webhook URL을 입력하세요',
+    notificationTypeLabel: '알림 서비스',
+    notificationTypeAuto: '자동 인식',
+    notificationTypeBark: 'Bark (iOS)',
+    notificationTypeNtfy: 'ntfy',
+    notificationTypeWebhook: '범용 Webhook',
+    notificationDetailedLabel: '상세 알림 내용',
+    notificationDetailedDesc: '켜면 전체 명령과 로컬 경로가 포함될 수 있습니다. 기본은 꺼짐(민감 정보 유출 방지)',
+    notificationPrivacyNotice: '알림은 설정한 타사 또는 자체 호스팅 서비스로 전송되며 세션 제목, 승인 요약, 오류가 포함될 수 있습니다. 신뢰할 수 없는 URL은 설정하지 마세요. 방해 금지 시간은 이 컴퓨터의 시스템 시간대 기준입니다.',
     endpointLabel: '로컬 주소',
     connectedDevicesLabel: '연결된 휴대폰',
     connectedDevicesDesc: '이 Mac에 접근 권한이 있는 모바일 기기 관리',

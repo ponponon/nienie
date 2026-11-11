@@ -62,6 +62,8 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
   const [notifQuietEnd, setNotifQuietEnd] = useState<string>('');
   const [notifMutedInput, setNotifMutedInput] = useState<string>('');
   const [notifEnabled, setNotifEnabled] = useState<boolean>(true);
+  const [notifType, setNotifType] = useState<'auto' | 'bark' | 'ntfy' | 'webhook'>('auto');
+  const [notifDetailed, setNotifDetailed] = useState<boolean>(false);
   const [notifTestState, setNotifTestState] = useState<'idle' | 'sending' | 'ok' | 'fail'>('idle');
   const [machineNameInput, setMachineNameInput] = useState<string>(
     initialState.bridge.machineId,
@@ -223,6 +225,8 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
     setNotifQuietEnd(n.quietEnd);
     setNotifMutedInput(n.mutedSessionIds.join(', '));
     setNotifEnabled(n.enabled);
+    setNotifType(n.senderType ?? 'auto');
+    setNotifDetailed(n.detailed ?? false);
   }, [state.notifications]);
 
   const handleSaveNotifications = async () => {
@@ -232,6 +236,8 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
       const next = await api.setNotifications({
         enabled: notifEnabled,
         webhookUrl: notifWebhookInput.trim(),
+        senderType: notifType,
+        detailed: notifDetailed,
         quietStart: notifQuietStart.trim(),
         quietEnd: notifQuietEnd.trim(),
         mutedSessionIds: notifMutedInput.split(',').map((id) => id.trim()).filter(Boolean),
@@ -250,7 +256,7 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
     if (!api?.testNotification) return;
     setNotifTestState('sending');
     try {
-      await api.testNotification();
+      await api.testNotification({ webhookUrl: notifWebhookInput.trim(), senderType: notifType });
       setNotifTestState('ok');
       toast.success(t.notificationTestOk);
     } catch (error) {
@@ -818,6 +824,44 @@ export function DesktopApp({ initialState, initialLocale }: DesktopAppProps) {
                   >
                     {t.saveMachineBtn}
                   </button>
+                </div>
+              </div>
+              <div
+                className="wetype-row"
+                style={{ flexDirection: 'column', alignItems: 'stretch', gap: '11px' }}
+              >
+                <div>
+                  <div className="row-title">{t.notificationTypeLabel}</div>
+                </div>
+                <select
+                  className="wetype-input"
+                  id="select-notif-type"
+                  value={notifType}
+                  onChange={(e) => setNotifType(e.target.value as 'auto' | 'bark' | 'ntfy' | 'webhook')}
+                >
+                  <option value="auto">{t.notificationTypeAuto}</option>
+                  <option value="bark">{t.notificationTypeBark}</option>
+                  <option value="ntfy">{t.notificationTypeNtfy}</option>
+                  <option value="webhook">{t.notificationTypeWebhook}</option>
+                </select>
+              </div>
+              <div className="wetype-row">
+                <div className="row-left">
+                  <div>
+                    <div className="row-title">{t.notificationDetailedLabel}</div>
+                    <div className="row-desc">{t.notificationDetailedDesc}</div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  id="toggle-notif-detailed"
+                  checked={notifDetailed}
+                  onChange={(e) => setNotifDetailed(e.target.checked)}
+                />
+              </div>
+              <div className="wetype-row">
+                <div>
+                  <div className="row-desc" id="notif-privacy-notice">{t.notificationPrivacyNotice}</div>
                 </div>
               </div>
               <div

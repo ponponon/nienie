@@ -1268,6 +1268,21 @@ void main() {
     client.dispose();
   });
 
+  test('路线图#1 R9 通知深链：nienie://session/<id> 直达会话（未加载时挂起、刷新后自动进入）', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    expect(client.handleDeepLink(Uri.parse('https://example.com')), isFalse);
+    expect(client.handleDeepLink(Uri.parse('nienie://session/ses_alpha')), isTrue);
+    expect(client.pendingDeepLinkSessionId, 'ses_alpha');
+    await client.refreshSessions(); // fake 返回 ses_alpha → 消费深链
+    expect(client.pendingDeepLinkSessionId, isNull);
+    expect(client.activeSession?.id, 'ses_alpha');
+    client.dispose();
+  });
+
   testWidgets('J0.6b-3.3 已有消息的更新分支保存附件 + 快照 inline 附件还原 sourceType/contentHash', (
     WidgetTester tester,
   ) async {

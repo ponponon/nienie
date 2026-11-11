@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname, networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import qrcode from 'qrcode-generator';
@@ -6,10 +6,10 @@ import type { CodexAdapterOptions } from '@nienie/adapter-codex';
 import type { OpenCodeAdapterOptions } from '@nienie/adapter-opencode';
 import {
   BridgeServer,
+  createPushSender,
   DEFAULT_RELAY_URL,
   PairingManager,
   PushNotificationRouter,
-  WebhookPushSender,
   redactLogText,
   resolveRelayUrl,
   type AgentInfo,
@@ -38,17 +38,21 @@ export const NIENIE_IPC_CHANNELS = {
 export type DesktopNotificationConfig = {
   enabled: boolean;
   webhookUrl: string;
+  senderType: 'auto' | 'bark' | 'ntfy' | 'webhook';
   quietStart: string;
   quietEnd: string;
   mutedSessionIds: string[];
+  detailed: boolean;
 };
 
 export type SetNotificationsInput = {
   enabled?: boolean | undefined;
   webhookUrl?: string | undefined;
+  senderType?: 'auto' | 'bark' | 'ntfy' | 'webhook' | undefined;
   quietStart?: string | undefined;
   quietEnd?: string | undefined;
   mutedSessionIds?: string[] | undefined;
+  detailed?: boolean | undefined;
 };
 
 export type DesktopLogEntry = {
@@ -132,6 +136,8 @@ export class DesktopBridgeController {
   private customRelayUrl = '';
   private notificationEnabled = true;
   private notificationWebhookUrl = '';
+  private notificationSenderType: 'auto' | 'bark' | 'ntfy' | 'webhook' = 'auto';
+  private notificationDetailed = false;
   private notificationQuietStart = '';
   private notificationQuietEnd = '';
   private notificationMutedSessionIds: string[] = [];
@@ -218,34 +224,50 @@ export class DesktopBridgeController {
       notifications: {
         enabled: this.notificationEnabled,
         webhookUrl: this.notificationWebhookUrl,
+        senderType: this.notificationSenderType,
         quietStart: this.notificationQuietStart,
         quietEnd: this.notificationQuietEnd,
         mutedSessionIds: [...this.notificationMutedSessionIds],
+        detailed: this.notificationDetailed,
       },
       logs: [...this.logs],
     };
   }
 
   private buildPushRouter(): PushNotificationRouter {
-    const webhookUrl = this.notificationWebhookUrl.trim();
-    const sender = webhookUrl ? new WebhookPushSender({ url: webhookUrl }) : undefined;
     return new PushNotificationRouter({
-      sender: sender
-        ? (message) => sender.send({ ...message, timestamp: Date.now() })
-        : undefined,
-      preferences: {
-        enabled: this.notificationEnabled,
-        mutedSessionIds: [...this.notificationMutedSessionIds],
-        ...(this.notificationQuietStart && this.notificationQuietEnd
-          ? { quietHours: { start: this.notificationQuietStart, end: this.notificationQuietEnd } }
-          : {}),
+      // R3：发送器每次发送时读取最新配置，改 URL 保存后立即生效
+      webhookSender: async (message) => {
+        const url = this.notificationWebhookUrl.trim();
+        if (!url) return;
+        const sender = createPushSender({ type: this.notificationSenderType, url });
+        await sender.send(message);
+      },
+      resolveSessionTitle: undefined,
+      preferences: this.notificationPreferences(),
+      onDeliveryError: (error) => {
+        this.appendLog('warn', `Push delivery failed: ${error instanceof Error ? error.message : String(error)}`);
       },
     });
+  }
+
+  private notificationPreferences() {
+    return {
+      enabled: this.notificationEnabled,
+      mutedSessionIds: [...this.notificationMutedSessionIds],
+      detailed: this.notificationDetailed,
+      quietHours:
+        this.notificationQuietStart && this.notificationQuietEnd
+          ? { start: this.notificationQuietStart, end: this.notificationQuietEnd }
+          : undefined,
+    };
   }
 
   setNotifications(input: SetNotificationsInput): DesktopDashboardState {
     if (input.enabled !== undefined) this.notificationEnabled = input.enabled;
     if (input.webhookUrl !== undefined) this.notificationWebhookUrl = input.webhookUrl.trim();
+    if (input.senderType !== undefined) this.notificationSenderType = input.senderType;
+    if (input.detailed !== undefined) this.notificationDetailed = input.detailed;
     if (input.quietStart !== undefined) this.notificationQuietStart = input.quietStart.trim();
     if (input.quietEnd !== undefined) this.notificationQuietEnd = input.quietEnd.trim();
     if (input.mutedSessionIds !== undefined) {
@@ -253,33 +275,19 @@ export class DesktopBridgeController {
         .map((id) => id.trim())
         .filter((id) => id.length > 0);
     }
-    this.pushRouter?.setPreferences({
-      enabled: this.notificationEnabled,
-      mutedSessionIds: [...this.notificationMutedSessionIds],
-      ...(this.notificationQuietStart && this.notificationQuietEnd
-        ? { quietHours: { start: this.notificationQuietStart, end: this.notificationQuietEnd } }
-        : { quietHours: undefined }),
-    });
+    this.pushRouter?.setPreferences(this.notificationPreferences());
     this.savePreferences();
     return this.getState();
   }
 
-  async sendTestNotification(): Promise<void> {
-    const webhookUrl = this.notificationWebhookUrl.trim();
-    if (!webhookUrl) {
+  async sendTestNotification(input?: { webhookUrl?: string | undefined; senderType?: 'auto' | 'bark' | 'ntfy' | 'webhook' | undefined }): Promise<void> {
+    // R10：测试当前输入框草稿，而非旧配置
+    const url = (input?.webhookUrl ?? this.notificationWebhookUrl).trim();
+    if (!url) {
       throw new Error('请先填写通知 Webhook URL');
     }
-    const sender = new WebhookPushSender({ url: webhookUrl });
-    await sender.send({
-      deviceId: 'test',
-      platform: 'unknown',
-      provider: 'webhook',
-      pushToken: webhookUrl,
-      sessionId: 'test-session',
-      title: 'Nienie 测试通知',
-      body: '通知链路正常：你可以在手机上收到推送了。',
-      timestamp: Date.now(),
-    });
+    const sender = createPushSender({ type: input?.senderType ?? this.notificationSenderType, url });
+    await this.pushRouter?.notifyTest(sender.send);
     this.appendLog('info', 'Test notification sent');
   }
 
@@ -414,6 +422,7 @@ export class DesktopBridgeController {
   }
 
   revokeDevice(deviceId: string): DesktopDashboardState {
+    this.pushRouter?.unregisterDevice(deviceId);
     const revoked = this.pairingManager.revokeDevice(deviceId);
     if (revoked) {
       this.appendLog('warn', `Revoked paired device ${deviceId}`);
@@ -463,6 +472,8 @@ export class DesktopBridgeController {
         customRelayUrl?: string;
         notificationEnabled?: boolean;
         notificationWebhookUrl?: string;
+        notificationSenderType?: 'auto' | 'bark' | 'ntfy' | 'webhook';
+        notificationDetailed?: boolean;
         notificationQuietStart?: string;
         notificationQuietEnd?: string;
         notificationMutedSessionIds?: string[];
@@ -489,6 +500,17 @@ export class DesktopBridgeController {
       }
       if (typeof raw.notificationEnabled === 'boolean') {
         this.notificationEnabled = raw.notificationEnabled;
+      }
+      if (
+        raw.notificationSenderType === 'auto' ||
+        raw.notificationSenderType === 'bark' ||
+        raw.notificationSenderType === 'ntfy' ||
+        raw.notificationSenderType === 'webhook'
+      ) {
+        this.notificationSenderType = raw.notificationSenderType;
+      }
+      if (typeof raw.notificationDetailed === 'boolean') {
+        this.notificationDetailed = raw.notificationDetailed;
       }
       if (typeof raw.notificationWebhookUrl === 'string') {
         this.notificationWebhookUrl = raw.notificationWebhookUrl;
@@ -524,6 +546,8 @@ export class DesktopBridgeController {
           customRelayUrl: this.customRelayUrl,
           notificationEnabled: this.notificationEnabled,
           notificationWebhookUrl: this.notificationWebhookUrl,
+          notificationSenderType: this.notificationSenderType,
+          notificationDetailed: this.notificationDetailed,
           notificationQuietStart: this.notificationQuietStart,
           notificationQuietEnd: this.notificationQuietEnd,
           notificationMutedSessionIds: this.notificationMutedSessionIds,
@@ -533,6 +557,11 @@ export class DesktopBridgeController {
       ),
       'utf8',
     );
+    try {
+      chmodSync(this.preferencesFilePath, 0o600);
+    } catch {
+      // 平台不支持时忽略；凭据文件尽力限制为仅本用户可读写
+    }
   }
 }
 
@@ -567,8 +596,8 @@ export function registerDesktopIpcHandlers(
   ipcMain.handle(NIENIE_IPC_CHANNELS.SET_NOTIFICATIONS, (_event, input) =>
     controller.setNotifications((input ?? {}) as SetNotificationsInput),
   );
-  ipcMain.handle(NIENIE_IPC_CHANNELS.TEST_NOTIFICATION, () =>
-    controller.sendTestNotification(),
+  ipcMain.handle(NIENIE_IPC_CHANNELS.TEST_NOTIFICATION, (_event, input) =>
+    controller.sendTestNotification((input ?? {}) as { webhookUrl?: string; senderType?: 'auto' | 'bark' | 'ntfy' | 'webhook' }),
   );
   ipcMain.handle(NIENIE_IPC_CHANNELS.REVOKE_DEVICE, (_event, deviceId) =>
     controller.revokeDevice(String(deviceId)),
@@ -578,6 +607,22 @@ export function registerDesktopIpcHandlers(
 export type IpcRendererLike = {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
 };
+
+/** preload 方法 → IPC 通道的唯一映射源（preview-server 注入层同步使用，防两处手维护漏更新）。 */
+export const DESKTOP_PRELOAD_METHODS = {
+  getState: NIENIE_IPC_CHANNELS.GET_STATE,
+  startBridge: NIENIE_IPC_CHANNELS.START_BRIDGE,
+  stopBridge: NIENIE_IPC_CHANNELS.STOP_BRIDGE,
+  refreshAgents: NIENIE_IPC_CHANNELS.REFRESH_AGENTS,
+  refreshPairing: NIENIE_IPC_CHANNELS.REFRESH_PAIRING,
+  setRelay: NIENIE_IPC_CHANNELS.SET_RELAY,
+  setLocale: NIENIE_IPC_CHANNELS.SET_LOCALE,
+  setMachineName: NIENIE_IPC_CHANNELS.SET_MACHINE_NAME,
+  setAutoUpdate: NIENIE_IPC_CHANNELS.SET_AUTO_UPDATE,
+  revokeDevice: NIENIE_IPC_CHANNELS.REVOKE_DEVICE,
+  setNotifications: NIENIE_IPC_CHANNELS.SET_NOTIFICATIONS,
+  testNotification: NIENIE_IPC_CHANNELS.TEST_NOTIFICATION,
+} as const;
 
 export type DesktopPreloadApi = {
   getState(): Promise<DesktopDashboardState>;
@@ -591,7 +636,7 @@ export type DesktopPreloadApi = {
   setAutoUpdate(enabled: boolean): Promise<DesktopDashboardState>;
   revokeDevice(deviceId: string): Promise<DesktopDashboardState>;
   setNotifications(input: SetNotificationsInput): Promise<DesktopDashboardState>;
-  testNotification(): Promise<void>;
+  testNotification(input?: { webhookUrl?: string | undefined; senderType?: 'auto' | 'bark' | 'ntfy' | 'webhook' | undefined }): Promise<void>;
 };
 
 export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPreloadApi {
@@ -630,8 +675,8 @@ export function createDesktopPreloadApi(ipcRenderer: IpcRendererLike): DesktopPr
         NIENIE_IPC_CHANNELS.SET_NOTIFICATIONS,
         input,
       ) as Promise<DesktopDashboardState>,
-    testNotification: () =>
-      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.TEST_NOTIFICATION) as Promise<void>,
+    testNotification: (input?: { webhookUrl?: string; senderType?: 'auto' | 'bark' | 'ntfy' | 'webhook' }) =>
+      ipcRenderer.invoke(NIENIE_IPC_CHANNELS.TEST_NOTIFICATION, input) as Promise<void>,
   };
 }
 

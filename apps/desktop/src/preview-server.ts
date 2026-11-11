@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   createDesktopPreloadApi,
+  DESKTOP_PRELOAD_METHODS,
   registerDesktopIpcHandlers,
   type DesktopBridgeController,
 } from './controller.js';
@@ -163,18 +164,7 @@ export class DesktopPreviewServer {
         return data;
       };
       window.nienieDesktop = ${ JSON.stringify(Object.keys(createDesktopPreloadApi({ invoke: async () => ({}) }))) }.reduce((acc, method) => {
-        const map = {
-          getState: 'desktop:get-state',
-          startBridge: 'desktop:start-bridge',
-          stopBridge: 'desktop:stop-bridge',
-          refreshAgents: 'desktop:refresh-agents',
-          refreshPairing: 'desktop:refresh-pairing',
-          setRelay: 'desktop:set-relay',
-          setLocale: 'desktop:set-locale',
-          setMachineName: 'desktop:set-machine-name',
-          setAutoUpdate: 'desktop:set-auto-update',
-          revokeDevice: 'desktop:revoke-device',
-        };
+        const map = ${ JSON.stringify(DESKTOP_PRELOAD_METHODS) };
         acc[method] = (...args) => invoke(map[method], ...args);
         return acc;
       }, {});
