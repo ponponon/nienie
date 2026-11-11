@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { SessionSnapshotPart } from '@nienie/protocol';
 import type {
   OpenCodeV2AssistantContentPart,
@@ -69,8 +70,31 @@ export function assistantPartId(messageId: string, ordinal: number): string {
   return `${messageId}:${ordinal}`;
 }
 
-/** 用户消息附件保留策略：有文本时展示文本；仅附件无文本时合成可检索摘要（name/uri/mime 不丢失）。
- *  v2 响应侧文件附件是 Prompt.FileAttachment（data/mime/source），URI 在 source.type='uri' 上。 */
+export type RestoredAttachment = {
+  name?: string | undefined;
+  mime: string;
+  sourceType: 'uri' | 'inline';
+  uri?: string | undefined;
+  contentHash?: string | undefined;
+};
+
+/** 附件结构化保留（J0.6b-3.1）：text 与附件并存时附件不再丢失；inline 数据保留 SHA-256 摘要用于一致性校验。 */
+export function userMessageAttachments(message: OpenCodeV2UserMessage): RestoredAttachment[] {
+  const out: RestoredAttachment[] = [];
+  for (const file of message.files ?? []) {
+    const sourceType = file.source !== undefined && file.source.type === 'uri' ? 'uri' : 'inline';
+    out.push({
+      name: file.name ?? undefined,
+      mime: file.mime,
+      sourceType,
+      uri: sourceType === 'uri' ? (file.source as { type: 'uri'; uri: string }).uri : undefined,
+      contentHash: sourceType === 'inline' ? createHash('sha256').update(file.data, 'base64').digest('hex') : undefined,
+    });
+  }
+  return out;
+}
+
+/** 用户消息展示文本：有文本时原样返回；仅附件无文本时合成可检索摘要（消息不消失）。 */
 export function userMessageText(message: OpenCodeV2UserMessage): string {
   if (message.text.length > 0) return message.text;
   const lines: string[] = [];
@@ -114,6 +138,7 @@ export function restoreHistoryEvents(messages: OpenCodeV2SessionMessageInfo[]): 
           partId: userPartId(message.id),
           partRevision: text.length || 1,
           messageId: message.id,
+          attachments: userMessageAttachments(message),
         },
       });
       continue;
@@ -189,12 +214,24 @@ export function buildSnapshotParts(messages: OpenCodeV2SessionMessageInfo[]): Se
     if (message.type === 'user') {
       const text = userMessageText(message);
       if (text.length === 0) continue;
+      const content: Array<
+        | { type: 'text'; text: string }
+        | { type: 'resource'; uri: string; name?: string | undefined; mimeType?: string | undefined }
+      > = [{ type: 'text', text }];
+      for (const attachment of userMessageAttachments(message)) {
+        content.push({
+          type: 'resource',
+          uri: attachment.uri ?? `inline:${attachment.contentHash ?? ''}`,
+          name: attachment.name,
+          mimeType: attachment.mime,
+        });
+      }
       parts.push({
         ...base(),
         kind: 'message',
         messageId: message.id,
         role: 'user',
-        content: [{ type: 'text', text }],
+        content,
         partId: userPartId(message.id),
         revision: text.length || 1,
       });

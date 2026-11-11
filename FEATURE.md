@@ -451,3 +451,14 @@
 - **实测结果：8 个真实会话（含迁移批次）203/203 项全部一致（100% matched，0 missing）**——消息数量、顺序、User/Assistant 文本、Tool Input/Output/状态在新旧读取间语义相等。reasoning 作为 v2 相对 v1 的增量改进单独统计不计入缺失。
 - **Diff 维度**：v2 Diff API 请求构造与 diffId 稳定性验证通过（错误 from 正确 404）；发现老迁移会话带悬空 `assistant.snapshot` 引用时服务端 500（OpenCode 侧容错缺失，见 FailureExperience），新建 v2 会话 diff 正常。
 - **3g 划界待裁决**：v1 SQLite 读取代码物理删除会破坏 mimo 适配器（走 v1/mimocode.db 路径）与 `NIENIE_OPENCODE_API=v1` 回退；当前已按模式隔离（v2 模式绝不触碰 v1 SQLite）。建议保留隔离现状、待 mimo 迁移后统一删除。
+
+### 2026-11-10 J0.6b-3.1 终审修复（2 P1 + 对照严格化 + 附件 + Diff 降级）
+
+- **P1-1 协议解析丢 clientMessageId**：`parseBridgeRequest` 的 session.send 分支原来漏提取该字段（裁决 C 实际断链——prompt 不带 body.id、认领失效）。已补提取 + `^msg_[A-Za-z0-9_-]+$` 格式校验（缺省/空串/非法格式不透传）+ wire 解析穿透测试（present/absent/empty/invalid/类型错 5 例）。
+- **P1-2 一帧多事件 eventId 互吞**：`session.execution.failed` 映射 error+status 两事件共用 `v2:{frame.id}` 被手机 eventId 去重吞掉其一（状态卡 running）。改为 `v2LiveEventId(frameId, type, index)` 稳定子 ID（`v2:evt_x:error:0`/`v2:evt_x:status:1`），重放稳定且互不吞。
+- **Mapper 水位播种**（3c/3d 遗留）：`seedPartLength`——历史恢复时把各 partId 已有长度种入实时映射器，打开生成中的会话后实时 delta 的 partRevision 续接历史（原从 0 重来被门禁丢弃）。
+- **附件结构化保留**（不再随文本静默丢失）：`userMessageAttachments` 输出结构化元数据（name/mime/sourceType/uri 或 inline SHA-256 摘要），历史事件 payload 带 `attachments`、快照 message part 以 `resource` 块承载（手机快照校验放行 resource 块）；纯附件无文本消息仍合成摘要防消失。
+- **对照脚本严格化**：按时间线顺序逐位匹配（不再任意位置 findIndex）、严格相等（工具 input JSON 规范化后精确比、output 精确比）、synthetic 摘要/明确豁免外**多余即失败**、附件入比对项、新增 plain（纯对话）模式与迁移统计（v1_only/v2_only/intersection）、diffId 拆双指标（跨请求 deterministic + 单响应 unique）+ v1/v2 文件集合对比。实测：tools 8 会话 203/203 有序匹配、plain 6 会话 12/12、**2 项已知 v1 截断**单列（v1 `state.output` 尾部多字节截断、v2 content[] 完整，前缀关系验证后归入 knownV1Truncations）。
+- **Diff 500 降级态**：`session.diff` 失败返回 `{diffs: [], unavailable: true}`（「无变更」≠「算不出」），手机端 `diffUnavailableFor` + 明确提示「此历史会话的文件差异暂不可用，可能与旧版本迁移数据有关」，可重试。
+- **分页防御**：`listAllMessages` 补 cursor 死循环检测、重复消息 ID 检测、空页带 next 报错、limit 正整数校验。
+- 测试 155 vitest（协议 9 + adapter 102）+ 29 mobile 全绿。

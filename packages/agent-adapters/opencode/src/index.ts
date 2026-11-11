@@ -29,7 +29,7 @@ import { discoverOpenCodeService, type OpenCodeServiceEndpoint } from './service
 import { OpenCodeV2Client } from './v2/client.js';
 import { deriveDiffId } from './v2/diff-id.js';
 import { buildSnapshotParts, resolveDiffTurnRange, restoreHistoryEvents } from './v2/message-restore.js';
-import { streamV2EventFrames, V2LiveEventMapper, type V2EventFrame } from './v2/sse.js';
+import { streamV2EventFrames, v2LiveEventId, V2LiveEventMapper, type V2EventFrame } from './v2/sse.js';
 import type { OpenCodeV2SessionInfo } from './v2/types.js';
 
 export { OpenCodeEventNormalizer, type OpenCodeNormalizerOptions } from './normalizer.js';
@@ -56,6 +56,7 @@ export {
   assistantPartId,
   buildSnapshotParts,
   contentToText,
+  userMessageAttachments,
   extractToolOutput,
   mapV2ToolStatus,
   resolveDiffTurnRange,
@@ -63,6 +64,7 @@ export {
   userPartId,
   type DiffTurnRange,
   type NienieToolStatus,
+  type RestoredAttachment,
   type RestoredEventSpec,
 } from './v2/message-restore.js';
 export type {
@@ -268,14 +270,15 @@ export class OpenCodeAdapter implements AgentAdapter {
     return this.v2Client;
   }
 
-  /** v2 实时帧 → 统一事件（eventId 从源 evt_ id 派生，partId 身份与恢复层一致）。 */
+  /** v2 实时帧 → 统一事件（eventId 从源 evt_ id 派生；一帧多事件时以 type+序号区分，防手机端去重互吞）。 */
   private emitV2LiveFrame(frame: V2EventFrame): void {
     const sessionId = String(frame.data['sessionID'] ?? '');
     if (!sessionId) return;
-    for (const spec of this.v2Mapper.map(frame)) {
+    const specs = this.v2Mapper.map(frame);
+    for (const [index, spec] of specs.entries()) {
       this.emit(
         createCanonicalEvent({
-          eventId: frame.id ? `v2:${frame.id}` : `v2:${randomUUID()}`,
+          eventId: frame.id ? v2LiveEventId(frame.id, spec.type, index) : `v2:${randomUUID()}`,
           streamEpoch: this.normalizer.streamEpoch,
           agentId: this.id,
           sessionId,
@@ -311,6 +314,9 @@ export class OpenCodeAdapter implements AgentAdapter {
       for (const spec of restoreHistoryEvents(messages)) {
         const partId = spec.payload['partId'] as string | undefined;
         const revision = spec.payload['partRevision'] as number | undefined;
+        if (partId && revision && (spec.type === 'text_delta' || spec.type === 'thinking_delta')) {
+          this.v2Mapper.seedPartLength(partId, revision);
+        }
         this.emit(
           createCanonicalEvent({
             eventId: `history:${sessionId}:${partId ?? `seq_${++this.historySeqCounter}`}:${revision ?? 0}`,

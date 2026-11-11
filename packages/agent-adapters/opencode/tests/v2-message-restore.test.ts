@@ -105,6 +105,7 @@ describe('restoreHistoryEvents', () => {
       partId: 'msg_u1:0',
       partRevision: 4,
       messageId: 'msg_u1',
+      attachments: [],
     });
     expect(events[1]!.payload).toMatchObject({ partId: 'msg_a1:0', partRevision: 2, messageId: 'msg_a1' });
     expect(events[2]!.payload).toMatchObject({ partId: 'msg_a1:1', partRevision: 5 });
@@ -244,5 +245,37 @@ describe('J0.6b-3a 保真策略', () => {
     expect(() => restoreHistoryEvents(descending)).toThrow(/ascending/);
     expect(() => buildSnapshotParts(descending)).toThrow(/ascending/);
     expect(() => resolveDiffTurnRange(descending)).toThrow(/ascending/);
+  });
+});
+
+describe('附件结构化保留（J0.6b-3.1）', () => {
+  const withTextAndFile: OpenCodeV2UserMessage = {
+    id: 'msg_att',
+    time: { created: 1760000000000 },
+    type: 'user',
+    text: '请分析这个图片',
+    files: [
+      { data: 'AA==', mime: 'image/png', source: { type: 'uri', uri: 'file:///w/image.png' }, name: 'image.png' },
+      { data: 'SGVsbG8=', mime: 'text/plain', source: { type: 'inline' }, name: 'note.txt' },
+    ],
+  };
+
+  it('文本与附件并存时附件不再丢失（payload.attachments 结构化）', () => {
+    const events = restoreHistoryEvents([withTextAndFile]);
+    expect(events).toHaveLength(1);
+    const attachments = events[0]!.payload['attachments'] as Array<Record<string, unknown>>;
+    expect(attachments).toHaveLength(2);
+    expect(attachments[0]).toMatchObject({ name: 'image.png', mime: 'image/png', sourceType: 'uri', uri: 'file:///w/image.png' });
+    expect(attachments[1]!.sourceType).toBe('inline');
+    expect(attachments[1]!.contentHash).toMatch(/^[0-9a-f]{64}$/); // inline 数据保留 SHA-256 摘要
+    expect(events[0]!.payload['delta']).toBe('请分析这个图片');
+  });
+
+  it('快照 message part 以 resource 块保留附件元数据', () => {
+    const parts = buildSnapshotParts([withTextAndFile]);
+    const content = (parts[0] as unknown as { content: Array<Record<string, unknown>> }).content;
+    expect(content[0]).toMatchObject({ type: 'text', text: '请分析这个图片' });
+    expect(content[1]).toMatchObject({ type: 'resource', uri: 'file:///w/image.png', mimeType: 'image/png' });
+    expect(String(content[2]!['uri'])).toMatch(/^inline:[0-9a-f]{64}$/);
   });
 });

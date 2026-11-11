@@ -464,3 +464,24 @@ describe('OpenCodeV2Client', () => {
     expect(queries[2]).toEqual({'limit': '1', 'type': 'user', 'cursor': 'c3'});
   });
 });
+
+describe('listAllMessages 分页防御（P2）', () => {
+  it('拒绝重复 cursor、重复消息 ID、空页带 next、非法 limit', async () => {
+    let loopCall = 0;
+    const loopFetch = mockFetch(() =>
+      json(200, { data: [{ id: `m${++loopCall}`, time: { created: 1 }, type: 'user', text: 'x' }], cursor: { next: 'c_same' } }));
+    const loopClient = new OpenCodeV2Client({ baseUrl: 'http://127.0.0.1:49374', fetch: loopFetch });
+    await expect(loopClient.listAllMessages('ses_1')).rejects.toThrow(/repeated pagination cursor/);
+
+    const dupFetch = mockFetch(() => json(200, { data: [{ id: 'm1', time: { created: 1 }, type: 'user', text: 'x' }, { id: 'm1', time: { created: 2 }, type: 'user', text: 'y' }], cursor: {} }));
+    const dupClient = new OpenCodeV2Client({ baseUrl: 'http://127.0.0.1:49374', fetch: dupFetch });
+    await expect(dupClient.listAllMessages('ses_1')).rejects.toThrow(/repeated message id/);
+
+    const emptyFetch = mockFetch(() => json(200, { data: [], cursor: { next: 'c1' } }));
+    const emptyClient = new OpenCodeV2Client({ baseUrl: 'http://127.0.0.1:49374', fetch: emptyFetch });
+    await expect(emptyClient.listAllMessages('ses_1')).rejects.toThrow(/empty page/);
+
+    const badLimit = new OpenCodeV2Client({ baseUrl: 'http://127.0.0.1:49374', fetch: mockFetch(() => json(200, { data: [], cursor: {} })) });
+    await expect(badLimit.listAllMessages('ses_1', { limit: -1 })).rejects.toThrow(/positive integer/);
+  });
+});

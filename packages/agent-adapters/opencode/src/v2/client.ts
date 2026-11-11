@@ -154,16 +154,34 @@ export class OpenCodeV2Client {
     options: { limit?: number | string | undefined; type?: OpenCodeV2MessageListQuery['type'] } = {},
   ): Promise<OpenCodeV2SessionMessageInfo[]> {
     const pageSize = options.limit ?? 200;
+    if (typeof pageSize === 'number' && (!Number.isInteger(pageSize) || pageSize <= 0)) {
+      throw new OpenCodeV2ClientError('OpenCode message pagination: limit must be a positive integer', 0);
+    }
     const messages: OpenCodeV2SessionMessageInfo[] = [];
+    const seenIds = new Set<string>();
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
     for (;;) {
       const page: OpenCodeV2MessageListResponse =
         cursor === undefined
           ? await this.listMessages(sessionId, { limit: pageSize, order: 'asc', type: options.type })
           : await this.listMessages(sessionId, { limit: pageSize, type: options.type, cursor });
-      messages.push(...page.data);
+      for (const message of page.data) {
+        if (seenIds.has(message.id)) {
+          throw new OpenCodeV2ClientError(`OpenCode message pagination: repeated message id ${message.id}`, 0);
+        }
+        seenIds.add(message.id);
+        messages.push(message);
+      }
       const next = page.cursor.next;
       if (next === undefined || next === null) return messages;
+      if (page.data.length === 0) {
+        throw new OpenCodeV2ClientError('OpenCode message pagination: empty page with a next cursor', 0);
+      }
+      if (seenCursors.has(next)) {
+        throw new OpenCodeV2ClientError(`OpenCode message pagination: repeated pagination cursor ${next}`, 0);
+      }
+      seenCursors.add(next);
       cursor = next;
     }
   }

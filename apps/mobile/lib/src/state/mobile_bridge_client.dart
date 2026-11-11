@@ -52,6 +52,8 @@ class MobileBridgeClient extends ChangeNotifier {
   final Map<String, String> _sessionStatusBySession = {};
   // partId → 已应用的最高 revision（J0.4 幂等归约）：同 revision 重放丢弃、低 revision 晚到不覆盖
   final Map<String, Map<String, int>> _partRevisionBySession = {};
+  // 差异不可用的会话（旧迁移数据导致服务端计算失败），UI 显示明确降级态而非静默空白
+  final Set<String> _diffUnavailableSessions = <String>{};
   final Map<PendingResponseItem, Timer> _pendingTimers = {};
   StreamSubscription<Map<String, dynamic>>? _subscription;
   int _requestCounter = 0;
@@ -92,6 +94,8 @@ class MobileBridgeClient extends ChangeNotifier {
       }
     }
   }
+
+  bool diffUnavailableFor(String sessionId) => _diffUnavailableSessions.contains(sessionId);
 
   List<SessionTimelineItem> timelineFor(String sessionId) {
     return List.unmodifiable(_timelineBySession[sessionId] ?? const []);
@@ -403,8 +407,14 @@ class MobileBridgeClient extends ChangeNotifier {
           if (role != 'user' && role != 'assistant') return false;
           if (raw['messageId'] != null && raw['messageId'] is! String) return false;
           for (final b in content) {
-            if (b is! Map<String, dynamic> || b['type'] != 'text' || b['text'] is! String) {
-              return false; // 非 text block 或 text 类型错 → 拒绝（不静默过滤）
+            if (b is! Map<String, dynamic>) return false;
+            if (b['type'] == 'text') {
+              if (b['text'] is! String) return false;
+            } else if (b['type'] == 'resource') {
+              // 附件资源块（J0.6b-3.1）：结构化保留 name/mime/uri，不再随文本丢失
+              if (b['uri'] is! String) return false;
+            } else {
+              return false; // 未知 block 拒绝（不静默过滤）
             }
           }
           break;
@@ -673,6 +683,13 @@ class MobileBridgeClient extends ChangeNotifier {
     });
     if (res['ok'] == true) {
       final data = res['data'] as Map<String, dynamic>;
+      if (data['unavailable'] == true) {
+        _diffUnavailableSessions.add(sessionId);
+        errorMessage = '此历史会话的文件差异暂不可用，可能与旧版本迁移数据有关';
+        notifyListeners();
+        return;
+      }
+      _diffUnavailableSessions.remove(sessionId);
       final diffs = data['diffs'] as List<dynamic>? ?? const [];
       final items = _timelineBySession.putIfAbsent(sessionId, () => []);
       for (final raw in diffs) {

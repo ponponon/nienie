@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseSseStream } from '../src/sse.js';
-import { streamV2EventFrames, V2LiveEventMapper, type V2EventFrame } from '../src/v2/sse.js';
+import { streamV2EventFrames, v2LiveEventId, V2LiveEventMapper, type V2EventFrame } from '../src/v2/sse.js';
 
 function frame(type: string, data: Record<string, unknown>): V2EventFrame {
   return { id: `evt_${type.replace(/\W/g, '_')}`, created: 1, type, data };
@@ -126,5 +126,25 @@ describe('streamV2EventFrames', () => {
     }
     expect(frames.map((f) => f.id)).toEqual(['evt_1', 'evt_2']);
     expect(seenAuth).toBe(`Basic ${Buffer.from('opencode:pw').toString('base64')}`);
+  });
+});
+
+describe('v2LiveEventId（P1-2 一帧多事件稳定子 ID）', () => {
+  it('同一源帧的多个事件派生不同且稳定的 eventId', () => {
+    const errorId = v2LiveEventId('evt_123', 'error', 0);
+    const statusId = v2LiveEventId('evt_123', 'status', 1);
+    expect(errorId).toBe('v2:evt_123:error:0');
+    expect(statusId).toBe('v2:evt_123:status:1');
+    expect(errorId).not.toBe(statusId);
+    expect(v2LiveEventId('evt_123', 'error', 0)).toBe(errorId); // 重放稳定
+  });
+
+  it('seedPartLength 播种历史水位，实时 delta 的 revision 续接而非从 0 被丢弃', () => {
+    const mapper = new V2LiveEventMapper();
+    mapper.seedPartLength('msg_a1:0', 50);
+    const specs = mapper.map(frame('session.text.delta', {
+      sessionID: 'ses_1', assistantMessageID: 'msg_a1', ordinal: 0, delta: 'ab',
+    }));
+    expect(specs[0]!.payload['partRevision']).toBe(52);
   });
 });

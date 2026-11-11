@@ -644,6 +644,10 @@ export function parseBridgeRequest(
           error: { code: 'BAD_REQUEST', message: 'Invalid sessionId or message' },
         };
       }
+      const clientMessageId =
+        typeof obj.clientMessageId === 'string' && /^msg_[A-Za-z0-9_-]+$/.test(obj.clientMessageId)
+          ? obj.clientMessageId
+          : undefined;
       return {
         ok: true,
         request: {
@@ -651,6 +655,7 @@ export function parseBridgeRequest(
           requestId,
           sessionId: obj.sessionId,
           message: obj.message,
+          ...(clientMessageId ? { clientMessageId } : {}),
           ...(isAgentId(obj.agentId) ? { agentId: obj.agentId } : {}),
           ...(typeof obj.modelId === 'string' && obj.modelId.trim()
             ? { modelId: obj.modelId.trim() }

@@ -239,3 +239,37 @@ describe('protocol', () => {
     });
   });
 });
+
+describe('parseBridgeRequest session.send clientMessageId（J0.6b-3.1 P1）', () => {
+  const base = {
+    type: 'session.send',
+    requestId: 'req_1',
+    sessionId: 'ses_1',
+    message: 'hello',
+    protocolVersion: 1,
+    version: 1,
+  };
+
+  it('clientMessageId 从 wire JSON 完整穿过解析器', () => {
+    const result = parseBridgeRequest(
+      JSON.stringify({ ...base, clientMessageId: 'msg_client_1' }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.request).toMatchObject({
+      type: 'session.send',
+      clientMessageId: 'msg_client_1',
+    });
+  });
+
+  it('缺省/空串/非法格式不带 clientMessageId 字段', () => {
+    for (const value of [undefined, '', 'not-msg', 'msg_bad!', 42]) {
+      const result = parseBridgeRequest(
+        JSON.stringify({ ...base, ...(value === undefined ? {} : { clientMessageId: value }) }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.request).not.toHaveProperty('clientMessageId');
+    }
+  });
+});

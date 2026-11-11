@@ -631,11 +631,21 @@ export class BridgeServer {
       case 'session.diff': {
         if (!bypassAuth) this.requireAuthenticated(client);
         const session = await this.resolveSession(request.sessionId, request.agentId);
-        const diffs = await this.router.getSessionDiff(session);
-        return {
-          sessionId: session.id,
-          diffs,
-        };
+        try {
+          const diffs = await this.router.getSessionDiff(session);
+          return {
+            sessionId: session.id,
+            diffs,
+          };
+        } catch {
+          // 「无文件变更」与「服务端无法计算差异」是两个不同状态（J0.6b-3.1）：
+          // 旧迁移会话的悬空 snapshot 引用会让 v2 Diff API 500，降级为 unavailable 而非伪装空结果。
+          return {
+            sessionId: session.id,
+            diffs: [],
+            unavailable: true,
+          };
+        }
       }
 
       case 'session.send': {

@@ -13,6 +13,11 @@ export type LiveEventSpec = {
   payload: Record<string, unknown>;
 };
 
+/** 一帧多事件时以 type+序号派生稳定子 ID，保证重放稳定且多事件不被手机端 eventId 去重互吞。 */
+export function v2LiveEventId(frameId: string, type: string, index: number): string {
+  return `v2:${frameId}:${type}:${index}`;
+}
+
 export type V2StreamEndpoint = {
   baseUrl: string;
   password?: string | undefined;
@@ -48,6 +53,13 @@ export async function* streamV2EventFrames(options: {
 export class V2LiveEventMapper {
   /** partId → 已累计文本长度，供 delta/ended 的 partRevision 水位与补缺。 */
   private readonly accumulated = new Map<string, number>();
+
+  /** 以历史/快照已知长度播种水位（打开生成中的会话时，实时 delta 的 revision 必须续接历史，而不是从 0 重来被门禁丢弃）。 */
+  seedPartLength(partId: string, length: number): void {
+    if (!partId || length <= 0) return;
+    const current = this.accumulated.get(partId) ?? 0;
+    if (length > current) this.accumulated.set(partId, length);
+  }
 
   map(frame: V2EventFrame): LiveEventSpec[] {
     const data = frame.data;
