@@ -1036,3 +1036,20 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - 真机 HTTP 冒烟抓到 mock 测不出的 bug：`fetch` 拒绝非 latin1 header 值（中文标题直接抛错）；且 **Bun 与 Node/undici 对 header 字符串编码行为不同**（Bun 会二次 UTF-8 编码），验证必须在生产运行时（Node/Electron）做。教训：涉编码/网络语义的验证必须真实传输层，mock 只能验证调用形状。
 - ChatGPT 终审抓出 4 个 P0 功能阻塞，全部源于「组件各自正确但链路没打通」：a) preload API 加了但 preview-server 的 IPC 映射表没加（真实 Electron 窗口调不通）；b) sender 在 startBridge 时定死，改配置不生效（测试按钮自建 sender 反而掩盖）；c) 手机端 registerPushToken 从未被调用，registrations 空导致通知全被静默吞掉；d) 通知异常无 .catch 可能崩主进程。教训：**每加一条配置链路要验证「UI→IPC→运行时对象」全路径生效**；通知这类旁路系统的失败必须隔离在主链路之外。
 - 产品判断教训：路线图 [x] 不能只凭「代码写了+单测绿」就打勾——ChatGPT 以「桌面配置→发送→手机收到→点击进会话→完成审批」的用户闭环为验收标准，点击跳转/审批入口缺失就不算完成。打勾标准=用户闭环，不是代码完成度。
+
+---
+
+## 2026-11-12 方案讨论把「自用」和「公开发布」混为一谈：APNs 私钥绝不能落到用户设备
+
+- 现象：讨论通知实现时，给出「桌面 Bridge 可以直接 POST APNs，只要电脑上有 .p8 私钥」和「用 Bark/ntfy 就不用专门服务器」两条建议。用户指出产品是面向所有人的，私钥不可能分享出去。
+- 根因：**默认把部署模型当成了单机自用**，没有先确认「谁持有信任根、软件发给谁」。混淆了两种完全不同的场景：自用/极客自带通道 vs 公开发行的多用户产品。
+- 结论（公开产品唯一正确形态）：
+  - APNs `.p8` 私钥是 **Apple Developer Team 级别、一个 App 全体用户共用一份**，只存于开发者自己控制的常在线服务端；用户电脑、手机、App 包、git 仓库里都不允许出现。
+  - 用户电脑 Bridge 只持配对身份（`deviceToken`），只上报「某会话 waiting/idle/error」这类脱敏事件；用户手机只持自己的 `device token`。
+  - 服务端负责 `deviceId → device token` 映射、验 Bridge 身份、限流、用私钥签名发 APNs/FCM。
+  - 因此常在线的推送网关是**安全边界上的必需件**，不是可选的性能优化；Bridge 直连 APNs 等于把全 App 群发能力下发到每台用户电脑，属严重安全事故。
+  - Bark/ntfy 属于「用户自带通道」：通知弹在第三方 App 里、点击打不开本 App，只适合自用/调试，不能作为公开发行产品的推送方案。
+  - 国内 Android FCM 不可用，需厂商通道；凭据归属规则相同（服务端唯一一份）。
+- 经验一：**讨论架构前先锁定部署模型**（自用 / 团队 / 公开发行），涉及密钥、账号、证书、配额的结论在这三种模型下往往相反。给方案时先问「这东西最后发给谁用」，不要默默按最省事的单机场景推演。
+- 经验二：任何「把开发者账号级凭据放进客户端」的方案一律直接否决，不需要权衡。客户端只能持有**单设备、可撤销**的凭据（如配对 deviceToken、device token），不能持有全局信任根。
+- 经验三：现有 `WebhookPushSender` 定位应写明为「自用/自带通道」，产品化要新增服务端 `ApnsPushSender`/`FcmPushSender`；`PushProvider` 已预留 `'apns'|'fcm'|'webhook'` 无需改协议。若由 Relay 承载网关，须遵守 `docs/architecture/relay.md`：只传脱敏摘要，不传 Prompt/工具输出/Diff。
