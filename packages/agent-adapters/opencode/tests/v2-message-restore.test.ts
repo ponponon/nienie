@@ -279,3 +279,27 @@ describe('附件结构化保留（J0.6b-3.1）', () => {
     expect(String(content[2]!['uri'])).toMatch(/^inline:[0-9a-f]{64}$/);
   });
 });
+
+describe('J0.6b-3.3 显式 synthetic 标记', () => {
+  it('普通用户消息即使以 file: 开头也不标记 syntheticSummary', () => {
+    const events = restoreHistoryEvents([
+      { id: 'msg_f', time: { created: 1 }, type: 'user', text: 'file:hello 不是摘要' },
+    ]);
+    expect(events[0]!.payload['syntheticSummary']).toBeUndefined();
+    expect(events[0]!.payload['delta']).toBe('file:hello 不是摘要');
+  });
+
+  it('空文本附件消息的合成摘要显式标记 syntheticSummary', () => {
+    const events = restoreHistoryEvents([
+      {
+        id: 'msg_s',
+        time: { created: 1 },
+        type: 'user',
+        text: '',
+        files: [{ data: 'AA==', mime: 'text/plain', source: { type: 'uri', uri: 'file:///w/a.txt' }, name: 'a.txt' }],
+      },
+    ]);
+    expect(events[0]!.payload['syntheticSummary']).toBe(true);
+    expect(String(events[0]!.payload['delta'])).toContain('file:a.txt|');
+  });
+});

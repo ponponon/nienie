@@ -472,3 +472,12 @@
 - **对照脚本**：API 失败计入 `diffUnverified`（不计为比较成功），汇总行 `diffVerified/diffUnverified/diffIssues` 分开。
 - **limit 校验**：number/string 双向验证正整数（`Number()`+`isSafeInteger`，封堵 `'1.5'`/`'-10'`/`'abc'`/`''` 绕过）。
 - 测试 155 vitest + 31 mobile（+2：附件端到端含 UI 断言、Diff 降级+重试去重）全绿。
+
+### 2026-11-10 J0.6b-3.3 Final Acceptance Fix
+
+- **截断白名单升级四点全等**（`v2/restore-compare.ts` 独立模块）：sessionId + toolCallId 双边相等 + v1 输出 SHA-256 + v2 输出 SHA-256 全部精确匹配才判 `v1-truncated`；错误 v2 输出/换 toolCallId/换会话一律 mismatch。
+- **synthetic 摘要显式标记**：restore 层空文本附件消息的合成摘要带 `syntheticSummary: true`，对照不再用 `file:` 前缀猜测——普通用户消息以 `file:` 开头照常严格比对。
+- **Diff 白名单退出语义**：v1 Diff API 非 2xx/网络错误计入 `diffUnverified`；**白名单（11 个已核实旧迁移会话）外的 API 失败计入 diffIssues → 脚本非零退出**。
+- **附件补齐两处**：已有 UserPromptItem 的增量更新分支同样保存附件；快照 inline 资源（`inline:<hash>`）还原 `sourceType='inline'`+`contentHash`（不再误标 uri 型）。
+- **JSON 规范化**：工具 input 比对用键序稳定序列化（`stableStringify`）。
+- **测试**（新增 restore-compare 模块 6 例 + restore synthetic 2 例 + mobile 1 例）：白名单错误 v2 输出必须 mismatch、toolCallId 不等 mismatch、`file:` 前缀无豁免、附件 URI/哈希不混比、白名单外 diff 失败语义、更新分支附件、inline 还原。基线 192 vitest + 32 mobile 全绿。

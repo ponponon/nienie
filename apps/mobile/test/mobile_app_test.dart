@@ -1268,4 +1268,57 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('J0.6b-3.3 已有消息的更新分支保存附件 + 快照 inline 附件还原 sourceType/contentHash', (
+    WidgetTester tester,
+  ) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 首个 delta 无附件 → 后续更新分支带附件也要保存
+    transport.emitServerEvent(j04Evt(eventId: 'u1', seq: 1, type: 'text_delta',
+        payload: {'delta': '看文件', 'role': 'user', 'partId': 'msg_u:0', 'partRevision': 3}));
+    transport.emitServerEvent(j04Evt(eventId: 'u2', seq: 2, type: 'text_delta',
+        payload: {
+          'delta': ' 看这个',
+          'role': 'user',
+          'partId': 'msg_u:0',
+          'partRevision': 8,
+          'attachments': [
+            {'name': 'b.ts', 'mime': 'text/plain', 'sourceType': 'uri', 'uri': 'file:///w/b.ts'},
+          ],
+        }));
+    await tester.pump();
+    var prompt = client.timelineFor('ses_alpha').whereType<UserPromptItem>().single;
+    expect(prompt.attachments.single.uri, 'file:///w/b.ts');
+
+    // 快照 inline 资源：sourceType=inline + contentHash 还原（不丢）
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_inline',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep_snap',
+      'watermark': 1,
+      'capturedAt': '2026-11-10T00:00:00Z',
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {'kind': 'message', 'partId': 'p1', 'ordinal': 0, 'revision': 2, 'createdAt': 'x', 'updatedAt': 'x',
+          'role': 'user', 'content': [
+            {'type': 'text', 'text': '附件消息'},
+            {'type': 'resource', 'uri': 'inline:abc123', 'name': 'note.bin', 'mimeType': 'application/octet-stream'},
+          ]},
+      ],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    await tester.pump();
+    prompt = client.timelineFor('ses_alpha').whereType<UserPromptItem>().single;
+    expect(prompt.attachments.single.sourceType, 'inline');
+    expect(prompt.attachments.single.contentHash, 'abc123');
+    expect(prompt.attachments.single.uri, isNull);
+    client.dispose();
+  });
+
 }

@@ -7,11 +7,14 @@ import { discoverOpenCodeService } from '../packages/agent-adapters/opencode/src
 import { OpenCodeV2Client } from '../packages/agent-adapters/opencode/src/v2/client.ts';
 import { resolveDiffTurnRange, restoreHistoryEvents } from '../packages/agent-adapters/opencode/src/v2/message-restore.ts';
 import { deriveDiffId } from '../packages/agent-adapters/opencode/src/v2/diff-id.ts';
+import {
+  compareItems,
+  isDiff500Whitelisted,
+  normalizeInput,
+  type CompareItem,
+} from '../packages/agent-adapters/opencode/src/v2/restore-compare.ts';
 
-type Item =
-  | { kind: 'user_text' | 'assistant_text'; text: string; synthetic?: boolean }
-  | { kind: 'attachment'; name: string; mime: string; uri?: string; contentHash?: string }
-  | { kind: 'tool'; name: string; input: string; output: string; status: string; isError: boolean; toolCallId: string };
+type Item = CompareItem;
 
 const dbPath = join(homedir(), '.local/share/opencode/opencode.db');
 if (!existsSync(dbPath)) {
@@ -110,7 +113,7 @@ function v2Items(specs: ReturnType<typeof restoreHistoryEvents>): Item[] {
         const item: Item = {
           kind: spec.payload['role'] === 'user' ? 'user_text' : 'assistant_text',
           text: delta,
-          synthetic: String(spec.payload['role'] ?? '') === 'user' && delta.startsWith('file:'),
+          synthetic: spec.payload['syntheticSummary'] === true,
         };
         byPart.set(key, { item, index: items.length });
         items.push(item);
@@ -170,50 +173,7 @@ function v2Items(specs: ReturnType<typeof restoreHistoryEvents>): Item[] {
   return items;
 }
 
-function normalizeInput(raw: string): string {
-  try {
-    return JSON.stringify(JSON.parse(raw));
-  } catch {
-    return raw;
-  }
-}
 
-type CompareResult = 'equal' | 'v1-truncated' | 'mismatch';
-
-/** 截断豁免白名单（J0.6b-3.2）：只允许逐项精确核实过的 v1 Tool Output（sha256 精确匹配），
- *  不再使用通用前缀规则；普通文本必须严格相等。 */
-const KNOWN_TRUNCATED_OUTPUTS = new Map<string, string>([
-  // ses_f2ea6da23ffeUSIts4GRmp419x 的两个 websearch：v1 state.output 尾部多字节截断（已逐项人工核实，v2 content[] 为完整值）
-  ['call_5e0b2bb6a43d438d88db5149', '850f6a4bf09e5210ebed264b73d293da603fb9468eebc017880e0a8a62811394'],
-  ['call_e493bf9aeca14fd6a43208b4', '69075009c724845d920f648b79fb0b41f8ba0462feba05b1d107ba8188408991'],
-]);
-
-function compareItems(a: Item, b: Item, toolCallId?: string): CompareResult {
-  if (a.kind !== b.kind) return 'mismatch';
-  if (a.kind === 'tool' && b.kind === 'tool') {
-    const headEqual =
-      a.name === b.name &&
-      normalizeInput(a.input) === normalizeInput(b.input) &&
-      a.status === b.status &&
-      a.isError === b.isError;
-    if (!headEqual) return 'mismatch';
-    if (a.output === b.output) return 'equal';
-    const allowHash = toolCallId ? KNOWN_TRUNCATED_OUTPUTS.get(toolCallId) : undefined;
-    if (allowHash && createHash('sha256').update(a.output, 'utf8').digest('hex') === allowHash) {
-      return 'v1-truncated';
-    }
-    return 'mismatch';
-  }
-  if (a.kind === 'attachment' && b.kind === 'attachment') {
-    if (a.name !== b.name || a.mime !== b.mime) return 'mismatch';
-    if (a.uri !== undefined && b.uri !== undefined) return a.uri === b.uri ? 'equal' : 'mismatch';
-    if (a.contentHash !== undefined && b.contentHash !== undefined) {
-      return a.contentHash === b.contentHash ? 'equal' : 'mismatch';
-    }
-    return 'mismatch';
-  }
-  return (a as { text: string }).text === (b as { text: string }).text ? 'equal' : 'mismatch';
-}
 
 const found = await discoverOpenCodeService();
 if (!found.ok) {
@@ -268,7 +228,7 @@ for (const sessionId of candidates) {
       allowedExtra += 1;
       cursor += 1;
     }
-    const verdict = cursor < current.length ? compareItems(item, current[cursor]!, item.kind === 'tool' ? item.toolCallId : undefined) : 'mismatch';
+    const verdict = cursor < current.length ? compareItems(sessionId, item, current[cursor]!) : 'mismatch';
     if (verdict === 'equal') {
       matched += 1;
       cursor += 1;
@@ -331,8 +291,14 @@ for (const sessionId of candidates) {
       `   diff: deterministic=${deterministic} unique=${unique} v1Files=${v1Files.length} v2Files=${v2Files.length} filesEqual=${filesEqual}`,
     );
   } catch (error) {
-    diffUnverified += 1;
-    console.log(`   diff: UNVERIFIED (API 失败不计为比较成功) ${String(error).slice(0, 100)}`);
+    if (isDiff500Whitelisted(sessionId)) {
+      diffUnverified += 1;
+      console.log(`   diff: UNVERIFIED (旧迁移白名单，已核实上游 500) ${String(error).slice(0, 80)}`);
+    } else {
+      diffUnverified += 1;
+      diffIssues.push(`${sessionId}: Diff API 失败且不在旧迁移白名单`);
+      console.log(`   diff: FATAL (白名单外 API 失败) ${String(error).slice(0, 80)}`);
+    }
   }
 }
 

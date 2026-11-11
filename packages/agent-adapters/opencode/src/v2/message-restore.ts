@@ -139,6 +139,8 @@ export function restoreHistoryEvents(messages: OpenCodeV2SessionMessageInfo[]): 
           partRevision: text.length || 1,
           messageId: message.id,
           attachments: userMessageAttachments(message),
+          // 显式标记（J0.6b-3.3）：空文本附件消息的合成摘要，不靠文本前缀猜测
+          ...(message.text.length === 0 ? { syntheticSummary: true } : {}),
         },
       });
       continue;

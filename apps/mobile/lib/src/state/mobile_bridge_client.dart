@@ -537,12 +537,17 @@ class MobileBridgeClient extends ChangeNotifier {
         // resource 块转换为附件元数据（J0.6b-3.2）：不能丢弃
         final attachments = blocks
             .where((b) => b['type'] == 'resource')
-            .map((b) => AttachmentMeta(
-                  name: b['name'] as String? ?? '',
-                  mime: b['mimeType'] as String? ?? '',
-                  sourceType: 'uri',
-                  uri: b['uri'] as String?,
-                ))
+            .map((b) {
+              final uri = b['uri'] as String? ?? '';
+              final isInline = uri.startsWith('inline:');
+              return AttachmentMeta(
+                name: b['name'] as String? ?? '',
+                mime: b['mimeType'] as String? ?? '',
+                sourceType: isInline ? 'inline' : 'uri',
+                uri: isInline ? null : uri,
+                contentHash: isInline ? uri.substring('inline:'.length) : null,
+              );
+            })
             .toList();
         if (content.isEmpty && attachments.isEmpty) continue;
         if (role == 'user') {
@@ -1221,6 +1226,7 @@ class MobileBridgeClient extends ChangeNotifier {
               if (partRevision != null && partRevision > target.revision) {
                 target.revision = partRevision;
               }
+              if (attachments.isNotEmpty) target.attachments = attachments; // 已有消息的更新分支同样保存附件
             } else {
               // 首次认领（J0.6b-3b）：同 messageId 的本地乐观消息只绑定归属、以权威文本对账，不重复追加
               UserPromptItem? claimed;
