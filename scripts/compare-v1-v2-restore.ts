@@ -8,9 +8,8 @@ import { OpenCodeV2Client } from '../packages/agent-adapters/opencode/src/v2/cli
 import { resolveDiffTurnRange, restoreHistoryEvents } from '../packages/agent-adapters/opencode/src/v2/message-restore.ts';
 import { deriveDiffId } from '../packages/agent-adapters/opencode/src/v2/diff-id.ts';
 import {
-  classifyDiffFailure,
   compareItems,
-  fetchV1DiffFiles,
+  verifySessionDiffs,
   type CompareItem,
 } from '../packages/agent-adapters/opencode/src/v2/restore-compare.ts';
 
@@ -262,42 +261,24 @@ for (const sessionId of candidates) {
     console.log('   v2:', current.map((i) => i.kind === 'tool' ? `T/${i.name}` : i.kind === 'attachment' ? 'A' : ((i as {synthetic?:boolean}).synthetic ? 's' : i.kind[0])).join(' '));
   }
 
-  // Diff：diffIdDeterministic（两次请求同 ID）+ diffIdUnique（单响应唯一）+ v1/v2 文件集合（fail-closed）
-  try {
-    const v2Range = resolveDiffTurnRange(messages);
-    const query = { from: v2Range.fromMessageId, to: v2Range.toMessageId };
-    const first = await client.getSessionDiff(sessionId, query);
-    const second = await client.getSessionDiff(sessionId, query);
-    const idsOf = (list: typeof first) =>
-      list.map((d) => deriveDiffId({ sessionId, fromMessageId: v2Range.fromMessageId, toMessageId: v2Range.toMessageId, file: d.file, patch: d.patch }));
-    const deterministic = JSON.stringify(idsOf(first)) === JSON.stringify(idsOf(second));
-    const unique = new Set(idsOf(first)).size === first.length;
-    if (!deterministic) diffIssues.push(`${sessionId}: diffId 跨请求不稳定`);
-    if (!unique) diffIssues.push(`${sessionId}: diffId 单响应重复`);
-    let v1Files: string[];
-    try {
-      v1Files = await fetchV1DiffFiles('http://127.0.0.1:4096', sessionId, fetch);
-    } catch (error) {
-      // v1 失败/网络错误/非法响应一律 fail-closed，不吃 v2 白名单豁免
-      diffIssues.push(`${sessionId}: v1 Diff API 失败（fail-closed）`);
-      console.log(`   diff: v1 FATAL ${String(error).slice(0, 80)}`);
-      continue;
-    }
-    const v2Files = first.map((d) => d.file).sort();
-    const filesEqual = JSON.stringify(v1Files) === JSON.stringify(v2Files);
-    if (!filesEqual) diffIssues.push(`${sessionId}: v1/v2 diff 文件集合不一致`);
+  // Diff：verifySessionDiffs 统一验证（白名单仅豁免真实 HTTP 500，其余 fail-closed）
+  const verdict = await verifySessionDiffs({
+    sessionId,
+    messages,
+    client,
+    v1Base: 'http://127.0.0.1:4096',
+    doFetch: fetch,
+  });
+  if (verdict.status === 'ok') {
     console.log(
-      `   diff: deterministic=${deterministic} unique=${unique} v1Files=${v1Files.length} v2Files=${v2Files.length} filesEqual=${filesEqual}`,
+      `   diff: deterministic=${verdict.deterministic} unique=${verdict.unique} v1Files=${verdict.v1Files} v2Files=${verdict.v2Files} filesEqual=${verdict.filesEqual}`,
     );
-  } catch (error) {
-    const verdict = classifyDiffFailure(sessionId, 'v2');
-    if (verdict === 'fatal') {
-      diffIssues.push(`${sessionId}: v2 Diff API 失败且不在旧迁移白名单`);
-      console.log(`   diff: v2 FATAL ${String(error).slice(0, 80)}`);
-    } else {
-      diffUnverified += 1;
-      console.log(`   diff: UNVERIFIED (旧迁移白名单，已核实上游 500) ${String(error).slice(0, 80)}`);
-    }
+  } else if (verdict.status === 'unverified') {
+    diffUnverified += 1;
+    console.log(`   diff: UNVERIFIED (${verdict.reason})`);
+  } else {
+    diffIssues.push(`${sessionId}: ${verdict.reason}`);
+    console.log(`   diff: FATAL ${verdict.reason.slice(0, 100)}`);
   }
 }
 

@@ -6,8 +6,11 @@ import {
   isDiff500Whitelisted,
   normalizeInput,
   sha256Hex,
+  verifySessionDiffs,
   type CompareItem,
 } from '../src/v2/restore-compare.js';
+import { OpenCodeV2ClientError } from '../src/v2/client.js';
+import type { OpenCodeV2SessionMessageInfo } from '../src/v2/types.js';
 
 const tool = (over: Partial<Extract<CompareItem, { kind: 'tool' }>> = {}): CompareItem => ({
   kind: 'tool',
@@ -122,10 +125,91 @@ describe('J0.6b-3.4 Final Seal 覆盖', () => {
     await expect(fetchV1DiffFiles('http://127.0.0.1:4096', 'ses_1', ok)).resolves.toEqual(['a.ts']);
   });
 
-  it('失败分类：v2 白名单豁免仅限 v2；v1 失败/网络错误一律 fatal', () => {
-    expect(classifyDiffFailure('ses_f2ea6263cffeV3IV9R1s9PF4BM', 'v2')).toBe('whitelisted-unverified');
-    expect(classifyDiffFailure('ses_unknown', 'v2')).toBe('fatal');
-    expect(classifyDiffFailure('ses_f2ea6263cffeV3IV9R1s9PF4BM', 'v1')).toBe('fatal');
-    expect(classifyDiffFailure('ses_unknown', 'v1')).toBe('fatal');
+  it('失败分类最小授权：仅 v2+真实 HTTP 500+白名单豁免，其余 fatal', () => {
+    const white = 'ses_f2ea6263cffeV3IV9R1s9PF4BM';
+    expect(classifyDiffFailure(white, 'v2', new OpenCodeV2ClientError('x', 500))).toBe('whitelisted-unverified');
+    expect(classifyDiffFailure(white, 'v2', new OpenCodeV2ClientError('net', 0))).toBe('fatal');
+    expect(classifyDiffFailure(white, 'v2', new OpenCodeV2ClientError('nf', 404))).toBe('fatal');
+    expect(classifyDiffFailure(white, 'v2', new OpenCodeV2ClientError('auth', 401))).toBe('fatal');
+    expect(classifyDiffFailure('ses_unknown', 'v2', new OpenCodeV2ClientError('x', 500))).toBe('fatal');
+    expect(classifyDiffFailure(white, 'v1', new OpenCodeV2ClientError('x', 500))).toBe('fatal');
+    // 普通异常（非 API 错误）绝不当 HTTP 500 豁免
+    expect(classifyDiffFailure(white, 'v2', new Error('local boom'))).toBe('fatal');
+    expect(classifyDiffFailure(white, 'v2', undefined)).toBe('fatal');
+  });
+});
+
+describe('verifySessionDiffs（J0.6b-3.5 验收表七行）', () => {
+  const messages: OpenCodeV2SessionMessageInfo[] = [
+    { id: 'msg_u1', time: { created: 1 }, type: 'user', text: 'hi' },
+    {
+      id: 'msg_a1',
+      time: { created: 2 },
+      type: 'assistant',
+      agent: 'build',
+      model: { id: 'm', providerID: 'p' },
+      content: [{ type: 'tool', id: 'call_1', name: 'edit', state: { status: 'completed', input: {}, content: [{ type: 'text', text: 'ok' }] }, time: { created: 2 } }],
+    },
+  ];
+  const white = 'ses_f2ea6263cffeV3IV9R1s9PF4BM';
+  const diff = { file: 'a.ts', patch: '@@', additions: 1, deletions: 0, status: 'modified' as const };
+  const okFetch = (async () => new Response('[{"file":"a.ts"}]', { status: 200 })) as typeof globalThis.fetch;
+
+  const clientThrowing = (error: unknown) => ({
+    getSessionDiff: async () => {
+      throw error;
+    },
+  });
+  const clientOk = () => ({
+    getSessionDiff: async () => [diff],
+  });
+
+  it('v2 + 白名单 + HTTP 500 → unverified', async () => {
+    const out = await verifySessionDiffs({
+      sessionId: white, messages, client: clientThrowing(new OpenCodeV2ClientError('x', 500)), v1Base: 'http://127.0.0.1:4096', doFetch: okFetch,
+    });
+    expect(out.status).toBe('unverified');
+  });
+
+  it('v2 + 白名单 + 网络错误/404/401 → fatal', async () => {
+    for (const error of [new OpenCodeV2ClientError('net', 0), new OpenCodeV2ClientError('nf', 404), new OpenCodeV2ClientError('auth', 401)]) {
+      const out = await verifySessionDiffs({
+        sessionId: white, messages, client: clientThrowing(error), v1Base: 'http://127.0.0.1:4096', doFetch: okFetch,
+      });
+      expect(out.status).toBe('fatal');
+    }
+  });
+
+  it('v2 + 非白名单 + HTTP 500 → fatal', async () => {
+    const out = await verifySessionDiffs({
+      sessionId: 'ses_unknown', messages, client: clientThrowing(new OpenCodeV2ClientError('x', 500)), v1Base: 'http://127.0.0.1:4096', doFetch: okFetch,
+    });
+    expect(out.status).toBe('fatal');
+  });
+
+  it('v1 任意错误 → fatal（不吃 v2 白名单）', async () => {
+    const failFetch = (async () => new Response('boom', { status: 500 })) as typeof globalThis.fetch;
+    const out = await verifySessionDiffs({
+      sessionId: white, messages, client: clientOk(), v1Base: 'http://127.0.0.1:4096', doFetch: failFetch,
+    });
+    expect(out.status).toBe('fatal');
+  });
+
+  it('本地 resolveDiffTurnRange 异常 → fatal', async () => {
+    const out = await verifySessionDiffs({
+      sessionId: white,
+      messages: [{ id: 'msg_a1', time: { created: 1 }, type: 'assistant', agent: 'a', model: { id: 'm', providerID: 'p' }, content: [] }],
+      client: clientOk(),
+      v1Base: 'http://127.0.0.1:4096',
+      doFetch: okFetch,
+    });
+    expect(out.status).toBe('fatal');
+  });
+
+  it('全部一致时 ok', async () => {
+    const out = await verifySessionDiffs({
+      sessionId: 'ses_any', messages, client: clientOk(), v1Base: 'http://127.0.0.1:4096', doFetch: okFetch,
+    });
+    expect(out.status).toBe('ok');
   });
 });

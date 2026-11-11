@@ -488,3 +488,10 @@
 - **v1 Diff fail-closed**：`fetchV1DiffFiles` 非 2xx/网络错误/非数组响应一律抛错（不再吞成空数组）；`classifyDiffFailure` 分侧——v2 已知旧迁移 500 仅按白名单豁免为 unverified，**v1 失败/网络错误/未核实错误一律 fatal 进 diffIssues（脚本非零退出）**，白名单不扩大为通用 API 失败豁免。
 - **测试补齐**：toolCallId 不同+output 相同→mismatch、空 toolCallId→mismatch、可注入白名单的 v1-truncated 正向命中（双哈希精确）、v2 输出变化不命中、v1 Diff 500/网络错误/非数组/正常四路 mock、失败分类四象限（v2 白名单内/外 × v1/v2）。adapter 114 测试。
 - 基线：196 vitest + 32 mobile 全绿。
+
+### 2026-11-10 J0.6b-3.5 Final Seal（白名单最小授权）
+
+- **`classifyDiffFailure` 只豁免真实 HTTP 500**：改为接收错误对象并以 `instanceof OpenCodeV2ClientError && status === 500` 判定（status 从错误提取，不接受调用方随意传入）；网络错误（status 0）、401/404/429、普通异常、undefined 一律 fatal。
+- **catch 作用域收缩**：抽 `verifySessionDiffs` 统一验证——白名单豁免仅作用于 `client.getSessionDiff` 的 HTTP 500；`resolveDiffTurnRange` 本地异常、diffId 计算异常、v1 API 失败/网络错误/非法响应一律 fatal（fail-closed）。
+- **验收表七行全覆盖测试**：v2+白名单+500→unverified；+0/404/401→fatal；v2 非白名单+500→fatal；v1 任意错误→fatal（不吃 v2 白名单）；本地 resolveDiffTurnRange 异常→fatal；全一致→ok。
+- 基线：202 vitest（adapter 120）+ 32 mobile 全绿。
