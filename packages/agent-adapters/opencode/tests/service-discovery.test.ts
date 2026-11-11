@@ -96,6 +96,12 @@ describe('normalizeLocalServiceUrl', () => {
     expect(normalizeLocalServiceUrl('https://attacker.example')).toBeUndefined();
     expect(normalizeLocalServiceUrl('http://192.168.1.10:49374')).toBeUndefined();
   });
+
+  it('rejects URLs with a path, query or fragment (registration must be a root address)', () => {
+    expect(normalizeLocalServiceUrl('http://127.0.0.1:49374/prefix')).toBeUndefined();
+    expect(normalizeLocalServiceUrl('http://127.0.0.1:49374?token=abc')).toBeUndefined();
+    expect(normalizeLocalServiceUrl('http://127.0.0.1:49374/#fragment')).toBeUndefined();
+  });
 });
 
 describe('openCodeServiceAuthHeader', () => {
@@ -112,11 +118,12 @@ describe('openCodeServiceAuthHeader', () => {
 
 describe('verifyOpenCodeService', () => {
   it('returns the endpoint when the service answers and identity matches', async () => {
-    const calls: { url: string; auth: string | undefined }[] = [];
+    const calls: { url: string; auth: string | undefined; redirect: RequestRedirect | undefined }[] = [];
     const fetchMock = (async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({
         url: String(input),
         auth: (init?.headers as Record<string, string> | undefined)?.['authorization'],
+        redirect: init?.redirect,
       });
       return jsonResponse(200, serverInfo);
     }) as typeof globalThis.fetch;
@@ -135,6 +142,7 @@ describe('verifyOpenCodeService', () => {
       {
         url: 'http://127.0.0.1:49374/api/info',
         auth: `Basic ${Buffer.from('opencode:secret-password').toString('base64')}`,
+        redirect: 'error',
       },
     ]);
   });
@@ -200,10 +208,17 @@ describe('verifyOpenCodeService', () => {
     expect(probed).toBe(0);
   });
 
-  it('classifies a 503 with an HTML body as not_ready, not incompatible', async () => {
+  it('classifies a 503 with an HTML body as incompatible (identity cannot be verified)', async () => {
     const fetchMock = (async () => new Response('<html>starting</html>', { status: 503 })) as typeof globalThis.fetch;
     const result = await verifyOpenCodeService(registration, { fetch: fetchMock });
-    expect(result).toMatchObject({ ok: false, reason: 'not_ready' });
+    expect(result).toMatchObject({ ok: false, reason: 'incompatible' });
+  });
+
+  it('classifies a 503 as not_ready only after pid and version identity match', async () => {
+    const good = (async () => jsonResponse(503, serverInfo)) as typeof globalThis.fetch;
+    const badPid = (async () => jsonResponse(503, { ...serverInfo, pid: 11111 })) as typeof globalThis.fetch;
+    expect(await verifyOpenCodeService(registration, { fetch: good })).toMatchObject({ ok: false, reason: 'not_ready' });
+    expect(await verifyOpenCodeService(registration, { fetch: badPid })).toMatchObject({ ok: false, reason: 'identity_mismatch' });
   });
 });
 

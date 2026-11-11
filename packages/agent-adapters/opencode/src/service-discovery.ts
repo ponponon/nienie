@@ -136,6 +136,7 @@ export function normalizeLocalServiceUrl(raw: string): URL | undefined {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
   if (url.username || url.password) return undefined;
   if (!LOOPBACK_HOSTS.has(url.hostname)) return undefined;
+  if (url.pathname !== '/' || url.search || url.hash) return undefined;
   if (url.hostname === '0.0.0.0') url.hostname = '127.0.0.1';
   return url;
 }
@@ -173,9 +174,6 @@ export async function verifyOpenCodeService(
   if (response.status === 401 || response.status === 403) {
     return { ok: false, reason: 'unauthorized', message: 'OpenCode service rejected authentication' };
   }
-  if (response.status === 503) {
-    return { ok: false, reason: 'not_ready', message: 'OpenCode service is starting' };
-  }
   let body: unknown;
   try {
     body = await response.json();
@@ -201,7 +199,7 @@ export async function verifyOpenCodeService(
   return {
     ok: true,
     endpoint: {
-      baseUrl: url.toString().replace(/\/+$/, ''),
+      baseUrl: url.origin,
       version: info.version,
       pid: info.pid,
       username: 'opencode',
