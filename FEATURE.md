@@ -625,3 +625,12 @@
 - **P1 竞态测试**：Completer 挂起 RPC→in-flight 中收到 resolved 定格→迟到异常/成功均不改写结论（真实 in-flight 模拟，非顺序 emit）。
 - **P2**：回执缺字段逐项 fail-closed（ok=false / replied 缺 / sessionId 缺 / permissionId 缺 / decision 缺五种模式全测）；深链双键最终态断言（含 `perm%2F1%20x` 编码解析）；普通会话通知清除遗留审批聚焦。
 - 测试：mobile 42（+4 大场景）、全仓 245 vitest + flutter analyze 全绿。
+
+### 2026-11-12 路线图#2 目标② 理解操作（审批卡重构）
+
+- **风险分级**（2.1，纯规则白名单，绝不推断影响）：`classifyPermissionRisk(action, resources)`——破坏性 action（delete/remove/write/edit/patch/move/kill/exec）或资源命中破坏性 token（rm/del/rmdir/unlink/mkfs/shutdown/reboot/kill 词边界）→高；命令类（bash/shell/run/terminal/process）→中；只读白名单（read/grep/glob/list/search/webfetch/websearch/fetch）→低；**其余一律「未分类」**（绝不默认判低）。优先级：高>中>低。
+- **审批卡结构化展示**（2.2，仅按 payload）：头部「Agent 请求执行」+ 风险徽章（低/中/高/未分类，风险色）；操作行（action 原文）、请求详情（detail 原文 mono 可长按复制 SelectableText）、资源对象（patterns 逐行 mono）。工作目录/影响字段 payload 未提供则**不展示、不编造**。
+- **深链聚焦高亮**：`focusedPermissionId` 命中的未决卡片蓝底 2px 描边（跨会话双键限定）。
+- **通知正文升级**：待审批推送带操作类型（`请求 bash — <detail>`），锁屏即可读懂数量级。
+- i18n 补 8 组文案（请求头部/操作/请求详情/资源对象/四档风险标签）4 语言。
+- 测试：风险分级 7 断言（含"未识别绝不判低"与"破坏性 resource 优先级高于命令类"）+ 卡片渲染（结构化行/徽章/聚焦）；mobile 44、全仓 245 vitest 全绿。

@@ -193,6 +193,62 @@ class NienieStrings {
         AppLanguage.ko => '승인 결과를 확인할 수 없습니다. 다시 시도하지 마세요',
       };
 
+  String get permRequestHeader => switch (lang) {
+        AppLanguage.zh => 'Agent 请求执行',
+        AppLanguage.en => 'Agent requests permission',
+        AppLanguage.ja => 'エージェントが実行をリクエスト',
+        AppLanguage.ko => '에이전트 실행 요청',
+      };
+
+  String get permActionLabel => switch (lang) {
+        AppLanguage.zh => '操作',
+        AppLanguage.en => 'Action',
+        AppLanguage.ja => '操作',
+        AppLanguage.ko => '동작',
+      };
+
+  String get permDetailLabel => switch (lang) {
+        AppLanguage.zh => '请求详情',
+        AppLanguage.en => 'Request detail',
+        AppLanguage.ja => 'リクエスト詳細',
+        AppLanguage.ko => '요청 상세',
+      };
+
+  String get permResourcesLabel => switch (lang) {
+        AppLanguage.zh => '资源对象',
+        AppLanguage.en => 'Resources',
+        AppLanguage.ja => '対象リソース',
+        AppLanguage.ko => '대상 리소스',
+      };
+
+  String get riskLow => switch (lang) {
+        AppLanguage.zh => '低风险',
+        AppLanguage.en => 'Low risk',
+        AppLanguage.ja => '低リスク',
+        AppLanguage.ko => '낮은 위험',
+      };
+
+  String get riskMedium => switch (lang) {
+        AppLanguage.zh => '中风险',
+        AppLanguage.en => 'Medium risk',
+        AppLanguage.ja => '中リスク',
+        AppLanguage.ko => '중간 위험',
+      };
+
+  String get riskHigh => switch (lang) {
+        AppLanguage.zh => '高风险',
+        AppLanguage.en => 'High risk',
+        AppLanguage.ja => '高リスク',
+        AppLanguage.ko => '높은 위험',
+      };
+
+  String get riskUnknown => switch (lang) {
+        AppLanguage.zh => '未分类',
+        AppLanguage.en => 'Unclassified',
+        AppLanguage.ja => '未分類',
+        AppLanguage.ko => '미분류',
+      };
+
   String get langShortLabel => switch (lang) {
         AppLanguage.zh => '中文',
         AppLanguage.en => 'EN',

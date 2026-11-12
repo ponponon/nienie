@@ -1551,7 +1551,7 @@ void main() {
       ['perm_nopid', 'missingPermissionId'],
       ['perm_nodecision', 'missingDecision'],
     ]) {
-      await attempt(entry[0]!, entry[1]!);
+      await attempt(entry[0], entry[1]);
     }
     for (final pid in ['perm_notok', 'perm_noreplied', 'perm_nosid', 'perm_nopid', 'perm_nodecision']) {
       final card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().singleWhere((c) => c.permissionId == pid);
@@ -1579,6 +1579,47 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(client.focusedPermissionId, isNull);
     expect(client.focusedPermissionSessionId, isNull);
+    client.dispose();
+  });
+
+  test('路线图#2 目标② 风险分级：纯规则、白名单、高优先级、未知不判低', () {
+    expect(classifyPermissionRisk('read', []), PermissionRiskLevel.low);
+    expect(classifyPermissionRisk('grep', ['src/**']), PermissionRiskLevel.low);
+    expect(classifyPermissionRisk('bash', ['*']), PermissionRiskLevel.medium);
+    expect(classifyPermissionRisk('delete', ['x']), PermissionRiskLevel.high);
+    expect(classifyPermissionRisk('bash', ['rm -rf /tmp/x']), PermissionRiskLevel.high); // 破坏性 resource 规则优先
+    expect(classifyPermissionRisk('frobnicate', []), PermissionRiskLevel.unknown); // 未识别绝不判低
+    expect(classifyPermissionRisk('', []), PermissionRiskLevel.unknown);
+  });
+
+  testWidgets('路线图#2 目标② 审批卡：风险徽章 + 结构化行 + 深链聚焦高亮', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.emitServerEvent(j04Evt(eventId: 'k1', seq: 1, type: 'status', payload: {
+      'status': 'waiting',
+      'permissionId': 'perm_hi',
+      'permission': 'bash',
+      'detail': 'rm -rf ./dist && pnpm build',
+      'patterns': ['./packages/*', './apps/mobile/*'],
+    }));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -1200));
+    await tester.pumpAndSettle();
+    // 结构化行：操作/请求详情/资源对象均按 payload 原样展示（默认语言 en）
+    expect(find.text('rm -rf ./dist && pnpm build'), findsWidgets);
+    expect(find.text('./packages/*\n./apps/mobile/*'), findsOneWidget);
+    // 风险徽章：bash=中风险（resources 无破坏性 token，不误判高风险）
+    expect(find.text('Medium risk'), findsOneWidget);
+    // 操作行展示 action 原文
+    expect(find.text('bash'), findsWidgets);
+
+    // 深链聚焦：高亮目标卡（蓝底描边容器存在）
+    client.handleDeepLink(Uri.parse('nienie://session/ses_alpha?permission=perm_hi'));
+    await tester.pumpAndSettle();
+    expect(client.focusedPermissionId, 'perm_hi');
+    expect(find.byKey(const Key('btn-perm-allow-once-perm_hi')), findsOneWidget);
     client.dispose();
   });
 

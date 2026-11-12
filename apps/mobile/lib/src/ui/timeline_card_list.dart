@@ -21,6 +21,34 @@ class SessionTimelineList extends StatefulWidget {
 }
 
 class _SessionTimelineListState extends State<SessionTimelineList> {
+  Widget _permissionRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 56,
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 10.5, color: _textSecondary),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontFamily: 'monospace',
+                color: _textPrimary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _toggleExpand(SessionTimelineItem item) {
     setState(() {
       if (item is StreamingTextItem) item.collapsed = !item.collapsed;
@@ -410,12 +438,37 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             ),
 
           // Structured Permission Approval Card
-          PermissionRequestCardItem() => Container(
+          PermissionRequestCardItem() => Builder(builder: (context) {
+              final risk = item.risk;
+              final riskColor = switch (risk) {
+                PermissionRiskLevel.low => _weTypeGreen,
+                PermissionRiskLevel.medium => const Color(0xFFD97706),
+                PermissionRiskLevel.high => const Color(0xFFDC2626),
+                PermissionRiskLevel.unknown => _textSecondary,
+              };
+              final riskLabel = switch (risk) {
+                PermissionRiskLevel.low => widget.client.strings.riskLow,
+                PermissionRiskLevel.medium => widget.client.strings.riskMedium,
+                PermissionRiskLevel.high => widget.client.strings.riskHigh,
+                PermissionRiskLevel.unknown => widget.client.strings.riskUnknown,
+              };
+              final riskIcon = switch (risk) {
+                PermissionRiskLevel.low => LucideIcons.shieldCheck,
+                PermissionRiskLevel.medium => LucideIcons.shieldAlert,
+                PermissionRiskLevel.high => LucideIcons.shieldBan,
+                PermissionRiskLevel.unknown => LucideIcons.shieldAlert,
+              };
+              final focused =
+                  widget.client.focusedPermissionSessionId == widget.session.id &&
+                  widget.client.focusedPermissionId == item.permissionId &&
+                  item.resolvedDecision == null;
+              return Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFFDF7),
+                color: focused ? const Color(0xFFEFF6FF) : const Color(0xFFFFFDF7),
                 border: Border.all(
-                  color: const Color(0xFFF59E0B).withValues(alpha: 0.32),
+                  color: focused ? riskColor : riskColor.withValues(alpha: 0.32),
+                  width: focused ? 2 : 1,
                 ),
                 borderRadius: BorderRadius.circular(14),
               ),
@@ -424,15 +477,11 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                 children: [
                   Row(
                     children: [
-                      const Icon(
-                        LucideIcons.shieldAlert,
-                        size: 15,
-                        color: Color(0xFFD97706),
-                      ),
+                      Icon(riskIcon, size: 15, color: riskColor),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          item.detail,
+                          widget.client.strings.permRequestHeader,
                           style: const TextStyle(
                             fontWeight: FontWeight.w600,
                             fontSize: 12.5,
@@ -440,16 +489,40 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                           ),
                         ),
                       ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: riskColor.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          riskLabel,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: riskColor,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  _permissionRow(widget.client.strings.permActionLabel, item.permission),
+                  if (item.detail.isNotEmpty)
+                    _permissionRow(widget.client.strings.permDetailLabel, item.detail),
                   if (item.patterns.isNotEmpty) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 6),
                     Text(
-                      item.patterns.join(', '),
+                      widget.client.strings.permResourcesLabel,
+                      style: const TextStyle(fontSize: 10.5, color: _textSecondary),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      item.patterns.join('\n'),
                       style: const TextStyle(
                         fontSize: 11,
                         fontFamily: 'monospace',
-                        color: _textSecondary,
+                        color: _textPrimary,
                       ),
                     ),
                   ],
@@ -556,7 +629,8 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     ),
                 ],
               ),
-            ),
+            );
+            }),
 
           // File Diff Card
           FileDiffCardItem() => Container(

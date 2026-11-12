@@ -110,6 +110,24 @@ class ErrorCardItem extends SessionTimelineItem {
   });
 }
 
+/// 审批风险分级（路线图 2.1）：只按 action/resources 白名单规则判断，绝不推断实际影响。
+enum PermissionRiskLevel { low, medium, high, unknown }
+
+PermissionRiskLevel classifyPermissionRisk(String action, List<String> resources) {
+  const destructiveActions = {'delete', 'remove', 'move', 'write', 'edit', 'patch', 'kill', 'exec'};
+  const commandActions = {'bash', 'shell', 'run', 'terminal', 'process'};
+  const readOnlyActions = {'read', 'grep', 'glob', 'list', 'search', 'webfetch', 'websearch', 'fetch'};
+  final destructiveResource = RegExp(r'(^|[\s/;|&])(rm|del|rmdir|unlink|mkfs|shutdown|reboot|kill)([\s/;|&]|$)');
+  final a = action.trim().toLowerCase();
+  // 高风险优先级最高：明确命中破坏性 action 或破坏性 resource 规则
+  if (destructiveActions.contains(a) || resources.any((r) => destructiveResource.hasMatch(r))) {
+    return PermissionRiskLevel.high;
+  }
+  if (commandActions.contains(a)) return PermissionRiskLevel.medium;
+  if (readOnlyActions.contains(a)) return PermissionRiskLevel.low;
+  return PermissionRiskLevel.unknown;
+}
+
 class PermissionRequestCardItem extends SessionTimelineItem {
   final String permissionId;
   String permission;
@@ -130,6 +148,9 @@ class PermissionRequestCardItem extends SessionTimelineItem {
     this.replyPending = false,
     this.resolutionUncertain = false,
   });
+
+  /// 风险分级（规则推导，展示用）
+  PermissionRiskLevel get risk => classifyPermissionRisk(permission, patterns);
 }
 
 class FileDiffCardItem extends SessionTimelineItem {

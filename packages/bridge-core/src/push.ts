@@ -481,9 +481,11 @@ export class PushNotificationRouter {
     let rawBody: string | undefined;
     if (event.type === 'status' && event.payload['status'] === 'waiting') {
       title = 'Nienie · 等待你的批准';
+      const action = event.payload['permission'];
+      const detail = event.payload['detail'];
       rawBody =
-        typeof event.payload['detail'] === 'string'
-          ? `${sessionLabel}：${event.payload['detail']}`
+        typeof detail === 'string' && detail.length > 0
+          ? `${sessionLabel}：${typeof action === 'string' && action.length > 0 ? `请求 ${action} — ` : ''}${detail}`
           : `${sessionLabel}：Agent 正在等待审批`;
     } else if (event.type === 'status' && event.payload['status'] === 'idle') {
       title = 'Nienie · 任务完成';
