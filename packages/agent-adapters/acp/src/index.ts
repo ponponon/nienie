@@ -122,13 +122,49 @@ export class AcpEventNormalizer {
             }),
           ];
         }
+
+        // F4：ACP v2 turn 生命周期——state_update 上报运行/失败/结束
+        case 'state_update': {
+          const state = asString(update.state);
+          if (state === 'running' || state === 'requires_action') {
+            return [
+              this.buildEvent(sessionId, 'status', {
+                status: 'running',
+                detail: `ACP ${state}`,
+              }),
+            ];
+          }
+          if (state === 'idle') {
+            const stopReason = asString(update.stopReason);
+            const events: CanonicalAgentEvent[] = [];
+            if (stopReason === 'error') {
+              const err = isRecord(update.error) ? update.error : {};
+              events.push(
+                this.buildEvent(sessionId, 'error', {
+                  code: 'RUN_FAILED',
+                  message: asString(err.message) ?? 'ACP turn failed',
+                  retryable: true,
+                }),
+              );
+            }
+            events.push(
+              this.buildEvent(sessionId, 'status', {
+                status: stopReason === 'error' ? 'failed' : 'idle',
+                detail: `ACP turn ended (${stopReason ?? 'unknown'})`,
+              }),
+            );
+            return events;
+          }
+          return [];
+        }
       }
     }
 
     return [];
   }
 
-  private buildEvent(
+  /** 公开供 Adapter 直接构造事件（同一会话序号空间，防重复 sequence）。 */
+  buildEvent(
     sessionId: string,
     type: CanonicalAgentEventType,
     payload: Record<string, unknown>,
@@ -172,6 +208,10 @@ export class AcpAdapter implements AgentAdapter {
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sessions = new Map<string, AgentSession>();
   private unsubscribeTransport: (() => void) | undefined;
+  /** F4：ACP 协议版本——2=session/prompt 插入即返回 messageId（接受语义）；1=响应即 turn 完成。 */
+  private protocolVersion: 1 | 2 = 1;
+  private agentVersion: string | undefined;
+  private initPromise: Promise<void> | undefined;
 
   constructor(options: AcpAdapterOptions = {}) {
     this.transport = options.transport;
@@ -187,15 +227,38 @@ export class AcpAdapter implements AgentAdapter {
     }
   }
 
+  /**
+   * F4：初始化协商协议版本（幂等，只发一次 initialize——重复 initialize 会被 Agent 以 -32600 拒绝）。
+   * 优先 protocolVersion 2（v2：prompt 插入即返回 messageId=接受确认）；
+   * Agent 回显 1 / 不支持 2 时回落 v1（v1：prompt 响应=整个 turn 完成，不谎称接受）。
+   */
+  private ensureInitialized(): Promise<void> {
+    this.initPromise ??= (async () => {
+      if (!this.transport) return;
+      try {
+        const res = (await this.transport.request('initialize', {
+          protocolVersion: 2,
+        })) as { protocolVersion?: number; agentInfo?: { version?: string } } | undefined;
+        this.agentVersion = res?.agentInfo?.version;
+        this.protocolVersion = res?.protocolVersion === 2 ? 2 : 1;
+      } catch {
+        const res = (await this.transport.request('initialize', {
+          protocolVersion: 1,
+        })) as { protocolVersion?: number; agentInfo?: { version?: string } } | undefined;
+        this.agentVersion = res?.agentInfo?.version;
+        this.protocolVersion = 1;
+      }
+    })();
+    return this.initPromise;
+  }
+
   async detect() {
     if (!this.transport) {
       return createAgentInfo(this, false);
     }
     try {
-      const res = (await this.transport.request('initialize', {
-        protocolVersion: 1,
-      })) as { agentInfo?: { version?: string } } | undefined;
-      return createAgentInfo(this, true, res?.agentInfo?.version);
+      await this.ensureInitialized();
+      return createAgentInfo(this, true, this.agentVersion);
     } catch {
       return createAgentInfo(this, false);
     }
@@ -252,14 +315,65 @@ export class AcpAdapter implements AgentAdapter {
     return session;
   }
 
-  async sendMessage(sessionId: string, message: string): Promise<void> {
+  async sendMessage(
+    sessionId: string,
+    message: string,
+  ): Promise<{ messageId?: string | undefined } | void> {
     if (!this.transport) {
       throw new Error('ACP transport is not configured');
     }
-    await this.transport.request('session/prompt', {
+    await this.ensureInitialized();
+    const params = {
       sessionId,
       prompt: [{ type: 'text', text: message }],
-    });
+    };
+
+    if (this.protocolVersion === 2) {
+      // F4 v2：prompt 插入（用户消息入列）即返回 messageId——接受语义与统一契约一致
+      const res = (await this.transport.request('session/prompt', params)) as
+        | { messageId?: string }
+        | undefined;
+      const messageId = asString(res?.messageId);
+      return messageId ? { messageId } : undefined;
+    }
+
+    // F4 v1：session/prompt 的响应=整个 turn 完成，不是接受确认。
+    // 送达语义=请求已派发至 Agent 进程（与 pty stdin 写入同语义），不谎称 Agent 已接受；
+    // turn 完成/失败经事件流上报（status/error）。
+    let dispatched: Promise<unknown>;
+    try {
+      dispatched = Promise.resolve(this.transport.request('session/prompt', params));
+    } catch (error) {
+      throw error; // 同步失败（未连接等）→ 拒绝接受
+    }
+    void dispatched.then(
+      () => {
+        this.emitDirect(sessionId, 'status', {
+          status: 'idle',
+          detail: 'ACP turn completed',
+        });
+      },
+      (error) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.emitDirect(sessionId, 'error', {
+          code: 'RUN_FAILED',
+          message: `ACP turn 失败: ${detail}`,
+          retryable: true,
+        });
+        this.emitDirect(sessionId, 'status', { status: 'failed', detail });
+      },
+    );
+    return;
+  }
+
+  /** v1 派发路径的回合结束/失败上报（与常规事件同一会话序号空间）。 */
+  private emitDirect(
+    sessionId: string,
+    type: CanonicalAgentEventType,
+    payload: Record<string, unknown>,
+  ): void {
+    const event = this.normalizer.buildEvent(sessionId, type, payload);
+    for (const listener of this.listeners) listener(event);
   }
 
   async cancel(sessionId: string): Promise<void> {

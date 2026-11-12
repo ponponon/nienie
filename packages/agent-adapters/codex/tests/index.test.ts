@@ -276,6 +276,90 @@ describe('CodexAdapter', () => {
     expect((await adapter.listSessions())[0]!.status).toBe('failed');
   });
 
+  it('F5 同一 session 活动进程串行化：并发第二条消息被拒绝', async () => {
+    const adapter = new CodexAdapter({
+      machineId: 'mac_codex',
+      detectVersion: async () => 'codex-cli 0.166.0',
+      spawnProcess: (): CodexProcessHandle => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const emitter = new EventEmitter();
+        setTimeout(() => emitter.emit('spawn'), 0);
+        // 不退出：模拟长任务
+        return {
+          stdout,
+          stderr,
+          kill() {
+            emitter.emit('exit', 130);
+          },
+          onExit(listener) {
+            emitter.on('exit', listener);
+          },
+          onError(listener) {
+            emitter.on('error', listener);
+          },
+          onSpawn(listener) {
+            emitter.on('spawn', listener);
+          },
+        };
+      },
+    });
+
+    const session = await adapter.createSession({
+      title: 'serialize',
+      projectPath: '/workspace/nienie',
+    });
+    await adapter.sendMessage(session.id, 'first');
+    await expect(adapter.sendMessage(session.id, 'second')).rejects.toThrow(/运行中的任务/);
+    await adapter.cancel(session.id);
+  });
+
+  it('F3 信号终止（exit code=null，非主动取消）按失败处理并上报', async () => {
+    const adapter = new CodexAdapter({
+      machineId: 'mac_codex',
+      detectVersion: async () => 'codex-cli 0.166.0',
+      spawnProcess: (): CodexProcessHandle => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const emitter = new EventEmitter();
+        setTimeout(() => emitter.emit('spawn'), 0);
+        setTimeout(() => emitter.emit('exit', null), 0); // 被信号终止
+        return {
+          stdout,
+          stderr,
+          kill() {
+            emitter.emit('exit', 130);
+          },
+          onExit(listener) {
+            emitter.on('exit', listener);
+          },
+          onError(listener) {
+            emitter.on('error', listener);
+          },
+          onSpawn(listener) {
+            emitter.on('spawn', listener);
+          },
+        };
+      },
+    });
+
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((e) => events.push(e));
+    const session = await adapter.createSession({
+      title: 'signal',
+      projectPath: '/workspace/nienie',
+    });
+    await adapter.sendMessage(session.id, 'hi');
+    await adapter.waitForRun(session.id);
+    const errEvent = events.find((e) => e.type === 'error');
+    expect(errEvent).toBeDefined();
+    expect(String(errEvent!.payload?.message)).toContain('信号');
+    // F3：终态 status 事件必须同步上报（手机据此终止 Thinking 计时/置失败）
+    const failedStatus = events.find((e) => e.type === 'status' && e.payload?.status === 'failed');
+    expect(failedStatus).toBeDefined();
+    expect((await adapter.listSessions())[0]!.status).toBe('failed');
+  });
+
   it('R3-3 非零退出码按失败处理并上报事件（不能无条件 resolve）', async () => {
     const adapter = new CodexAdapter({
       machineId: 'mac_codex',

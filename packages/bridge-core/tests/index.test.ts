@@ -169,6 +169,41 @@ describe('bridge core', () => {
     expect(calls).toBe(4); // 无 clientMessageId 不去重
   });
 
+  it('F2 幂等缓存：in-flight 记录绝不被 LRU 淘汰（512+ 突发流量后重试不二次执行）', async () => {
+    const registry = new AgentRegistry();
+    let slowCalls = 0;
+    let resolveSlow: (() => void) | undefined;
+    const opencode = adapter('opencode');
+    opencode.sendMessage = async (_s, message) => {
+      if (message === 'slow') {
+        slowCalls++;
+        await new Promise<void>((r) => {
+          resolveSlow = r;
+        });
+        return { messageId: 'slow_1' };
+      }
+      return { messageId: `fast_${message}` };
+    };
+    registry.register(opencode);
+    const router = new SessionRouter(registry);
+    const session: AgentSession = {
+      id: 'session-f2', agentId: 'opencode', title: 'F2', projectPath: '/tmp/p',
+      status: 'idle', createdAt: '2026-11-03T00:00:00Z', updatedAt: '2026-11-03T00:00:00Z',
+    };
+
+    const slowRun = router.sendMessage(session, 'slow', undefined, 'msg_slow');
+    // 513 个不同请求完成 → 触发 accepted LRU 淘汰（in-flight 不得被波及）
+    for (let i = 0; i < 513; i++) {
+      await router.sendMessage(session, `fast${i}`, undefined, `msg_fast_${i}`);
+    }
+    // 慢请求仍在执行中，重试必须复用 in-flight（不得二次执行）
+    const retry = router.sendMessage(session, 'slow', undefined, 'msg_slow');
+    resolveSlow!();
+    expect(await retry).toEqual({ messageId: 'slow_1' });
+    await slowRun;
+    expect(slowCalls).toBe(1);
+  });
+
   it('creates and loads sessions through SessionRouter and forwards canonical events', async () => {
     const registry = new AgentRegistry();
     const opencode = adapter('opencode');

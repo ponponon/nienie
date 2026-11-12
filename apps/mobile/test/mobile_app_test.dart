@@ -1730,7 +1730,12 @@ void main() {
 
     // 超时提醒：计时起点=request 真实产生时间（event.timestamp），历史恢复不重新起算
     final oldTs = DateTime.now().subtract(const Duration(minutes: 5)).toIso8601String();
-    emit('status', {'status': 'waiting', 'permissionId': 'perm_wait', 'permission': 'bash', 'detail': 'x'});
+    // perm_wait 用真实「现在」时间戳（固定时间戳会在时钟越过 2 分钟后误触发提醒——时间炸弹）
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'znow', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': ++seq, 'timestamp': DateTime.now().toIso8601String(), 'type': 'status',
+      'payload': {'status': 'waiting', 'permissionId': 'perm_wait', 'permission': 'bash', 'detail': 'x'},
+    });
     transport.emitServerEvent({
       'version': 1, 'eventId': 'zold', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
       'sequence': ++seq, 'timestamp': oldTs, 'type': 'status',
@@ -1973,6 +1978,69 @@ void main() {
     expect(client.connectionState, BridgeConnectionState.disconnected);
     expect(find.byKey(const Key('btn-connect-pair')), findsOneWidget);
     client.dispose();
+  });
+
+  testWidgets('F1 延迟接受不清空用户新输入（草稿快照保护）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.sendGate = Completer<void>();
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '第一条消息');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump(const Duration(milliseconds: 100));
+    // 接受响应未到，用户继续编辑输入框
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '新的草稿内容');
+
+    transport.sendGate!.complete(); // 第一条被接受
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final field = tester.widget<TextField>(find.byKey(const Key('input-session-prompt')));
+    expect(field.controller!.text, '新的草稿内容'); // 新输入不被延迟接受清掉
+    final item = client.timelineFor('ses_alpha').whereType<UserPromptItem>().single;
+    expect(item.receipt, SendReceipt.delivered); // 第一条本身正常送达
+
+    // 对照：未继续编辑时接受会正常清空（先结束首条的等待态，否则按钮是停止分支）
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'idle1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'idle'},
+    });
+    await tester.pumpAndSettle();
+    transport.sendGate = null;
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '第二条消息');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pumpAndSettle();
+    final field2 = tester.widget<TextField>(find.byKey(const Key('input-session-prompt')));
+    expect(field2.controller!.text, isEmpty);
+    client.dispose();
+  });
+
+  testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'run', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'running'},
+    });
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.textContaining('Thinking'), findsWidgets);
+
+    // 只发 error 事件（无任何 status 事件跟随）
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'err', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 2, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'error',
+      'payload': {'errorId': 'e1', 'code': 'RUN_FAILED', 'message': 'Codex 异常退出（退出码 2）', 'retryable': true},
+    });
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.textContaining('Thinking'), findsNothing); // 计时终止
+    expect(find.textContaining('Codex 异常退出'), findsWidgets); // 失败可见
   });
 
   test('路线图#3 Round2 发送异常回执落定 failed（不永久 pending）', () async {

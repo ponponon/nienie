@@ -127,8 +127,11 @@ export class SessionRouter {
    * 网络中断后手机重试同一条消息可能触发 Bridge 重复执行——首次正常分发，
    * 重复请求返回第一次的接受结果（进行中的复用同一 Promise），不再启动第二次执行。
    * clientMessageId 为空（旧客户端）不去重。
+   * F2：in-flight 与已接受记录分开管理——LRU 只淘汰已完成记录，正在执行的请求绝不淘汰
+   *（否则 512 条突发流量会把执行中的幂等记录挤掉，重试导致二次执行）。
    */
-  private readonly sendDedup = new Map<string, Promise<{ messageId?: string | undefined } | void>>();
+  private readonly sendInFlight = new Map<string, Promise<{ messageId?: string | undefined } | void>>();
+  private readonly sendAccepted = new Map<string, { messageId?: string | undefined } | void>();
 
   async sendMessage(
     session: AgentSession,
@@ -142,9 +145,16 @@ export class SessionRouter {
     }
     const key = clientMessageId ? `${session.id}::${clientMessageId}` : null;
     if (key) {
-      const existing = this.sendDedup.get(key);
-      if (existing) {
-        return await existing;
+      const inFlight = this.sendInFlight.get(key);
+      if (inFlight) {
+        return await inFlight;
+      }
+      if (this.sendAccepted.has(key)) {
+        const accepted = this.sendAccepted.get(key);
+        // LRU 触达刷新
+        this.sendAccepted.delete(key);
+        this.sendAccepted.set(key, accepted);
+        return accepted;
       }
     }
     const run = (async () =>
@@ -156,14 +166,21 @@ export class SessionRouter {
           : undefined,
       ) ?? undefined)();
     if (key) {
-      this.sendDedup.set(key, run);
-      // 失败不缓存（允许真正重试）；成功结果保留供重复请求回放
-      run.catch(() => this.sendDedup.delete(key!));
-      // LRU 上限防无界增长
-      if (this.sendDedup.size > 512) {
-        const oldest = this.sendDedup.keys().next();
-        if (!oldest.done) this.sendDedup.delete(oldest.value);
-      }
+      this.sendInFlight.set(key, run);
+      void run.then(
+        (result) => {
+          this.sendInFlight.delete(key!);
+          this.sendAccepted.set(key!, result);
+          // 只在已完成记录间做 LRU（in-flight 不参与淘汰）
+          if (this.sendAccepted.size > 512) {
+            const oldest = this.sendAccepted.keys().next();
+            if (!oldest.done) this.sendAccepted.delete(oldest.value);
+          }
+        },
+        () => {
+          this.sendInFlight.delete(key!); // 失败不缓存（允许真正重试）
+        },
+      );
     }
     return await run;
   }

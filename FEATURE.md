@@ -690,3 +690,12 @@
 - **R3-3 Codex spawn 真确认**：`CodexProcessHandle` 增加 `onSpawn`（Node 'spawn' 事件）——**确认进程真正启动成功才返回「已送达电脑」**（spawn 是异步确认，二进制不存在等在 error 事件才暴露，此前会假送达）；spawn 失败 reject + 规范化 error 事件（手机可见）；运行期异步失败同样发 error 事件（不再 `catch(()=>{})` 吞掉）；**非零退出码按失败处理并上报**（cancel 先置 cancelled 再 kill 不误报）。
 - **R3-4 Adapter 送达语义统一**：claude-code/pi 从「等进程退出」改为与 codex 相同的**接受即返回**（spawn 确认 + 后台执行 + `waitForRun`）；同样具备 spawn 失败拒绝/错误事件/非零退出上报/cancel 判定；pi normalizer 暴露 `nextSequence`（runerr 事件与常规事件同一单调序号空间，防重复 sequence 被客户端误判重）；`AgentAdapter.sendMessage` 接口注释固化送达语义契约（spawn 型/RPC 型 acp/stdin 型 pty 全覆盖说明）。
 - 测试：bridge-core 幂等 2（重复/并发/失败不缓存/无 ID 不去重）、codex spawn 失败假送达防护 + 非零退出 2、claude/pi mock 按 Node spawn 时序重构（setTimeout 分帧）+ waitForRun 断言、mobile 断线键盘发送不丢输入 + 重连中身份失败保会话视图 2（mobile 54）；全仓 251 vitest 全绿。
+
+### 2026-11-12 路线图#3 Round 4（F1~F5 收口：草稿保护/幂等生命周期/终态反馈/ACP 双语义/进程串行化）
+
+- **F1 草稿快照保护**：按钮与键盘两个发送入口在确认接受后仅当输入框文本+附件数与提交时快照一致才清空——延迟接受（spawn 确认/网络等待）期间用户继续编辑的新输入绝不被清掉（对照用例：不编辑则正常清空）。
+- **F2 幂等缓存生命周期**：拆分 `sendInFlight`（执行中，**绝不淘汰**）与 `sendAccepted`（LRU 512，触达刷新）——512+ 突发流量不再把执行中的幂等记录挤掉导致重试二次执行；失败不缓存（允许真重试）。
+- **F3 失败终态反馈闭环**：①三 adapter 的 `emitRunError` 同步发 **error + status:failed 双事件**（手机终止 Thinking 计时/置失败，不依赖后续 status）；②mobile `case 'error'` 也直接置 `_sessionStatusBySession=failed` + 清 `_runningSinceBySession`（防御性双保险）；③Codex `toAgentSession` 终态优先（record failed/cancelled 不被 normalizer 旧 running 遮蔽）；④**信号终止（exit code=null，非主动取消）按失败处理**并上报。
+- **F4 ACP v1/v2 送达语义区分**：initialize 协商协议版本（优先 2，失败/回显 1 落 v1，幂等只发一次 initialize）——**v2：session/prompt 插入即返回 messageId=接受确认**（与统一契约一致）；**v1：响应=turn 完成，不谎称接受**——送达语义=已派发至 Agent 进程（与 pty stdin 同语义），turn 完成/失败经 status/error 事件上报；v2 `state_update`（running/requires_action/idle+stopReason）归约，`stopReason:error`→error+failed 事件。
+- **F5 活动进程串行化**：codex/claude-code/pi 同一 session 同时只允许一个活动进程——并发第二条直接拒绝（防 activeProcesses/runs 覆盖导致进程失跟踪、无法取消）；mobile 键盘入口 `_isGenerating` 前置拦截。
+- 测试：bridge-core in-flight 不淘汰（513 突发后重试只执行一次）、codex 并发拒绝 + 信号终止失败上报、acp v2 messageId 语义/v1 派发语义+失败上报/v2 state_update error、mobile 延迟接受不敷新输入（含对照）/error 终止 Thinking 计时（mobile 56）；全仓 257 vitest 全绿。

@@ -547,6 +547,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   private readonly runs = new Map<string, Promise<void>>();
 
   async sendMessage(sessionId: string, message: string): Promise<void> {
+    // F5：同一 session 同一时刻只允许一个活动进程（单轮执行模型）——并发第二条拒绝
+    if (this.activeProcesses.has(sessionId)) {
+      throw new Error('会话已有运行中的任务，请等待完成或取消后再发送');
+    }
     let record = this.sessions.get(sessionId);
     if (!record) {
       await this.loadSession(sessionId);
@@ -612,9 +616,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
           this.processLine(sessionId, record!, buffer);
         }
         this.activeProcesses.delete(sessionId);
-        // R3-4：非零退出码按失败处理并上报（取消路径不覆盖）
-        if (!cancelled && typeof code === 'number' && code !== 0) {
-          this.emitRunError(sessionId, `Claude Code 异常退出（退出码 ${code}）`);
+        // R3-4/F3：非零退出码或信号终止（code=null）按失败处理并上报（取消路径不覆盖）
+        if (!cancelled && (code === null || code !== 0)) {
+          this.emitRunError(
+            sessionId,
+            code === null ? 'Claude Code 进程被信号终止' : `Claude Code 异常退出（退出码 ${code}）`,
+          );
         }
         resolve();
       });
@@ -628,19 +635,32 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     await this.runs.get(sessionId);
   }
 
-  /** R3-4：运行失败的规范化错误事件（失败必须反馈到手机）。 */
+  /** R3-4/F3：运行失败必须反馈到手机——错误事件 + 终态 status 事件（终止 Thinking 计时/置失败）。 */
   private emitRunError(sessionId: string, message: string): void {
-    const event = createCanonicalEvent({
-      eventId: `runerr:${sessionId}:${Date.now()}`,
+    const base = {
       streamEpoch: this.normalizer.streamEpoch,
-      agentId: 'claude-code',
+      agentId: 'claude-code' as const,
       sessionId,
-      sequence: this.normalizer.nextSequence(sessionId),
       timestamp: new Date().toISOString(),
-      type: 'error',
-      payload: { code: 'RUN_FAILED', message, retryable: true },
-    });
-    for (const listener of this.listeners) listener(event);
+    };
+    for (const event of [
+      createCanonicalEvent({
+        ...base,
+        eventId: `runerr:${sessionId}:${Date.now()}`,
+        sequence: this.normalizer.nextSequence(sessionId),
+        type: 'error',
+        payload: { code: 'RUN_FAILED', message, retryable: true },
+      }),
+      createCanonicalEvent({
+        ...base,
+        eventId: `runst:${sessionId}:${Date.now()}`,
+        sequence: this.normalizer.nextSequence(sessionId),
+        type: 'status',
+        payload: { status: 'failed', detail: message },
+      }),
+    ]) {
+      for (const listener of this.listeners) listener(event);
+    }
   }
 
   async cancel(sessionId: string): Promise<void> {

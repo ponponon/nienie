@@ -1654,6 +1654,9 @@ class MobileBridgeClient extends ChangeNotifier {
         break;
 
       case 'error':
+        // F3：错误事件同步落终态——置失败并终止 Thinking 计时（不依赖后续 status 事件）
+        _sessionStatusBySession[event.sessionId] = 'failed';
+        _runningSinceBySession.remove(event.sessionId);
         _resolvePending(event.sessionId);
         items.add(
           ErrorCardItem(

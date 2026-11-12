@@ -698,11 +698,17 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     textInputAction: TextInputAction.send,
                     onSubmitted: (value) {
                       // R3-2：统一发送入口——确认客户端接受后才清空输入（断线/失败时保留输入不丢失）
+                      if (_isGenerating(client)) return; // F5 前置：运行中不接受并发提交
                       final text = value.trim();
                       if (text.isEmpty && _attachments.isEmpty) return;
                       final msg = _composeMessage(text);
+                      // F1：草稿快照——仅当输入仍是提交时那份才清空，延迟接受不得覆盖用户新输入
+                      final draftSnapshot = _promptController.text;
+                      final attachCount = _attachments.length;
                       client.sendMessage(msg).then((accepted) {
-                        if (accepted) {
+                        if (accepted &&
+                            _promptController.text == draftSnapshot &&
+                            _attachments.length == attachCount) {
                           _promptController.clear();
                           setState(() => _attachments.clear());
                         }
@@ -783,12 +789,16 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                       _stopGeneration(client);
                                       return;
                                     }
-                                    // R3-2：确认接受后才清空输入（点击瞬间状态变化也不丢消息）
+                                    // R3-2/F1：确认接受后才清空输入，且仅清空未被继续编辑的草稿
                                     final text = _promptController.text;
                                     if (text.trim().isEmpty && _attachments.isEmpty) return;
                                     final msg = _composeMessage(text);
+                                    final draftSnapshot = _promptController.text;
+                                    final attachCount = _attachments.length;
                                     final accepted = await client.sendMessage(msg);
-                                    if (accepted) {
+                                    if (accepted &&
+                                        _promptController.text == draftSnapshot &&
+                                        _attachments.length == attachCount) {
                                       _promptController.clear();
                                       setState(() => _attachments.clear());
                                     }

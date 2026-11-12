@@ -408,6 +408,11 @@ export class CodexAdapter implements AgentAdapter {
   private readonly runs = new Map<string, Promise<void>>();
 
   async sendMessage(sessionId: string, message: string): Promise<void> {
+    // F5：同一 session 同一时刻只允许一个活动进程（单轮执行模型）——
+    // 并发第二条会覆盖 activeProcesses/runs 导致进程失跟踪、无法取消，直接拒绝
+    if (this.activeProcesses.has(sessionId)) {
+      throw new Error('会话已有运行中的任务，请等待完成或取消后再发送');
+    }
     let record = this.sessions.get(sessionId);
     if (!record) {
       await this.loadSession(sessionId);
@@ -487,11 +492,14 @@ export class CodexAdapter implements AgentAdapter {
           buffer = '';
         }
         this.activeProcesses.delete(sessionId);
-        // R3-3：非零退出码按失败处理并上报（取消路径已显式标记 cancelled 不覆盖）
-        if (record!.status !== 'cancelled' && typeof code === 'number' && code !== 0) {
+        // R3-3/F3：非零退出码或信号终止（code=null，非主动取消）按失败处理并上报
+        if (record!.status !== 'cancelled' && (code === null || code !== 0)) {
           record!.status = 'failed';
           record!.updatedAt = new Date().toISOString();
-          this.emitRunError(sessionId, `Codex 异常退出（退出码 ${code}）`);
+          this.emitRunError(
+            sessionId,
+            code === null ? 'Codex 进程被信号终止' : `Codex 异常退出（退出码 ${code}）`,
+          );
           resolve();
           return;
         }
@@ -509,18 +517,30 @@ export class CodexAdapter implements AgentAdapter {
     void run.catch(() => undefined); // 错误已经由 emitRunError 事件上报
   }
 
-  /** R3-3：运行失败的规范化错误事件（失败必须反馈到手机）。 */
+  /** R3-3/F3：运行失败必须反馈到手机——错误事件 + 终态 status 事件（终止 Thinking 计时/置失败）。 */
   private emitRunError(sessionId: string, message: string): void {
+    const base = {
+      streamEpoch: this.normalizer.streamEpoch,
+      agentId: 'codex' as const,
+      sessionId,
+      timestamp: new Date().toISOString(),
+    };
     this.emitEvent(
       createCanonicalEvent({
+        ...base,
         eventId: `runerr:${sessionId}:${Date.now()}`,
-        streamEpoch: this.normalizer.streamEpoch,
-        agentId: 'codex',
-        sessionId,
         sequence: this.normalizer.nextSequence(sessionId),
-        timestamp: new Date().toISOString(),
         type: 'error',
         payload: { code: 'RUN_FAILED', message, retryable: true },
+      }),
+    );
+    this.emitEvent(
+      createCanonicalEvent({
+        ...base,
+        eventId: `runst:${sessionId}:${Date.now()}`,
+        sequence: this.normalizer.nextSequence(sessionId),
+        type: 'status',
+        payload: { status: 'failed', detail: message },
       }),
     );
   }
@@ -586,7 +606,11 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   private toAgentSession(record: CodexSessionRecord): AgentSession {
-    const status = this.normalizer.getSessionStatus(record.id) ?? record.status;
+    // F3：record 的终态（failed/cancelled）优先——normalizer 的旧 running 不得遮蔽失败结果
+    const status =
+      record.status === 'failed' || record.status === 'cancelled'
+        ? record.status
+        : this.normalizer.getSessionStatus(record.id) ?? record.status;
     return {
       id: record.id,
       agentId: 'codex',

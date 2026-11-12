@@ -13,6 +13,8 @@ class FakeBridgeTransport implements BridgeTransport {
   bool failNextSend = false;
   /// 下一次 session.send 抛出传输异常（receipt 永久 pending 回归测试用）
   bool throwNextSend = false;
+  /// F1：session.send 响应闸门（测试延迟接受竞态：complete 后才回响应）
+  Completer<void>? sendGate;
   /// 接下来 N 次 hello 失败（模拟重连逐次失败）
   int failHelloCount = 0;
   /// ok | missing | notOk | missingReplied | missingSessionId | missingPermissionId |
@@ -158,6 +160,9 @@ class FakeBridgeTransport implements BridgeTransport {
           },
         };
       case 'session.send':
+        if (sendGate != null) {
+          await sendGate!.future;
+        }
         if (throwNextSend) {
           throwNextSend = false;
           throw Exception('transport broken');
