@@ -216,6 +216,8 @@ export class PiAdapter implements AgentAdapter {
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sessions = new Map<string, AgentSession>();
   private readonly activeProcesses = new Map<string, PiProcessHandle>();
+  /** F5：await 前同步启动占位——loadSession 等 await 窗口内阻止并发双 spawn。 */
+  private readonly startingSessions = new Set<string>();
 
   constructor(options: PiAdapterOptions = {}) {
     this.executablePath = options.executablePath ?? process.env.NIENIE_PI_BIN ?? 'pi';
@@ -309,18 +311,26 @@ export class PiAdapter implements AgentAdapter {
   private readonly runs = new Map<string, Promise<void>>();
 
   async sendMessage(sessionId: string, message: string): Promise<void> {
-    // F5：同一 session 同一时刻只允许一个活动进程（单轮执行模型）——并发第二条拒绝
-    if (this.activeProcesses.has(sessionId)) {
+    // F5：同一 session 同一时刻只允许一个活动进程（单轮执行模型）——
+    // 检查+占位必须在任何 await 之前同步完成（否则 loadSession 的 await 窗口双 spawn）
+    if (this.activeProcesses.has(sessionId) || this.startingSessions.has(sessionId)) {
       throw new Error('会话已有运行中的任务，请等待完成或取消后再发送');
     }
-    let session = this.sessions.get(sessionId);
-    if (!session) {
-      session = await this.loadSession(sessionId);
-    }
+    this.startingSessions.add(sessionId);
+    let session: AgentSession;
+    let proc: PiProcessHandle;
+    try {
+      session = this.sessions.get(sessionId)!;
+      if (!session) {
+        session = await this.loadSession(sessionId);
+      }
 
-    const args = ['--mode', 'json', '--session', sessionId, '-p', message];
-    const proc = this.spawnProcessImpl(args, { cwd: session.projectPath });
-    this.activeProcesses.set(sessionId, proc);
+      const args = ['--mode', 'json', '--session', sessionId, '-p', message];
+      proc = this.spawnProcessImpl(args, { cwd: session.projectPath });
+      this.activeProcesses.set(sessionId, proc); // 占位转入活动进程
+    } finally {
+      this.startingSessions.delete(sessionId); // 成功转入 active / 中途失败均释放占位
+    }
 
     // R3-4：真正确认 spawn 成功才「已送达电脑」（spawn 是异步确认，失败必须拒绝而非假送达）
     try {
@@ -341,12 +351,16 @@ export class PiAdapter implements AgentAdapter {
       });
     } catch (error) {
       this.activeProcesses.delete(sessionId);
+      session.status = 'failed'; // F3：失败终态持久化到 Session Record
+      session.updatedAt = new Date().toISOString();
       this.emitRunError(
         sessionId,
         `Pi 启动失败: ${error instanceof Error ? error.message : String(error)}`,
       );
       throw error;
     }
+    session.status = 'running'; // F3：启动成功即持久化运行态
+    session.updatedAt = new Date().toISOString();
 
     // 执行在后台继续；完成/失败经事件流上报，sendMessage 不等待整个 Agent 执行
     const run = new Promise<void>((resolve, reject) => {
@@ -374,11 +388,19 @@ export class PiAdapter implements AgentAdapter {
         }
         this.activeProcesses.delete(sessionId);
         // R3-4/F3：非零退出码或信号终止（code=null）按失败处理并上报（取消路径不覆盖）
+        const sessionRecord = this.sessions.get(sessionId);
         if (!cancelled && (code === null || code !== 0)) {
+          if (sessionRecord) {
+            sessionRecord.status = 'failed'; // F3：终态持久化（listSessions 不再回旧 idle）
+            sessionRecord.updatedAt = new Date().toISOString();
+          }
           this.emitRunError(
             sessionId,
             code === null ? 'Pi 进程被信号终止' : `Pi 异常退出（退出码 ${code}）`,
           );
+        } else if (!cancelled && sessionRecord) {
+          sessionRecord.status = 'idle'; // F3：完成态持久化
+          sessionRecord.updatedAt = new Date().toISOString();
         }
         resolve();
       });
@@ -421,9 +443,15 @@ export class PiAdapter implements AgentAdapter {
   }
 
   async cancel(sessionId: string): Promise<void> {
+    // F3：先标记 cancelled 再 kill（onExit 依据 activeProcesses 判定取消，不误报失败）
+    this.startingSessions.delete(sessionId); // F5：启动中的占位一并释放
+    const record = this.sessions.get(sessionId);
+    if (record && record.status === 'running') {
+      record.status = 'cancelled';
+      record.updatedAt = new Date().toISOString();
+    }
     const proc = this.activeProcesses.get(sessionId);
     if (proc) {
-      // R3-4：先摘除再 kill，onExit 依据 activeProcesses 判定取消，不误报非零退出失败
       this.activeProcesses.delete(sessionId);
       proc.kill();
     }

@@ -276,6 +276,92 @@ describe('CodexAdapter', () => {
     expect((await adapter.listSessions())[0]!.status).toBe('failed');
   });
 
+  it('F5 启动占位：await 窗口并发拒绝 + spawn 失败/cancel 后占位释放可重发', async () => {
+    let handles: Array<() => CodexProcessHandle> = [];
+    const adapter = new CodexAdapter({
+      machineId: 'mac_codex',
+      detectVersion: async () => 'codex-cli 0.166.0',
+      spawnProcess: (): CodexProcessHandle => {
+        const factory = handles.shift();
+        if (!factory) throw new Error('no handle queued');
+        return factory();
+      },
+    });
+    const okHandle = (): CodexProcessHandle => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const emitter = new EventEmitter();
+      setTimeout(() => emitter.emit('spawn'), 0);
+      setTimeout(() => emitter.emit('exit', 0), 0);
+      return {
+        stdout, stderr,
+        kill() { emitter.emit('exit', 130); },
+        onExit(l) { emitter.on('exit', l); },
+        onError(l) { emitter.on('error', l); },
+        onSpawn(l) { emitter.on('spawn', l); },
+      };
+    };
+    // 长驻：不自动退出（cancel 场景用；kill 才退出）
+    const longHandle = (): CodexProcessHandle => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const emitter = new EventEmitter();
+      setTimeout(() => emitter.emit('spawn'), 0);
+      return {
+        stdout, stderr,
+        kill() { emitter.emit('exit', 130); },
+        onExit(l) { emitter.on('exit', l); },
+        onError(l) { emitter.on('error', l); },
+        onSpawn(l) { emitter.on('spawn', l); },
+      };
+    };
+    const failHandle = (): CodexProcessHandle => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const emitter = new EventEmitter();
+      setTimeout(() => emitter.emit('error', new Error('spawn ENOENT')), 0);
+      return {
+        stdout, stderr,
+        kill() { emitter.emit('exit', 130); },
+        onExit(l) { emitter.on('exit', l); },
+        onError(l) { emitter.on('error', l); },
+        onSpawn() {},
+      };
+    };
+
+    const session = await adapter.createSession({ title: 'f5', projectPath: '/workspace/nienie' });
+
+    // 场景 1：已加载 session，同步并发第二条被启动占位拒绝
+    handles.push(okHandle);
+    const p1 = adapter.sendMessage(session.id, 'first');
+    await expect(adapter.sendMessage(session.id, 'second')).rejects.toThrow(/运行中的任务/);
+    await p1;
+    await adapter.waitForRun(session.id);
+
+    // 场景 2：cancel 运行中的任务后立即重发成功（kill→exit 130 归为 cancelled 不报失败）
+    handles.push(longHandle);
+    const p2 = adapter.sendMessage(session.id, 'long running');
+    await p2;
+    await adapter.cancel(session.id);
+    await adapter.waitForRun(session.id);
+    handles.push(okHandle);
+    await adapter.sendMessage(session.id, 'after cancel');
+    await adapter.waitForRun(session.id);
+
+    // 场景 3：spawn 失败释放占位，可立即重发
+    handles.push(failHandle);
+    await expect(adapter.sendMessage(session.id, 'boom')).rejects.toThrow(/ENOENT/);
+    handles.push(okHandle);
+    await adapter.sendMessage(session.id, 'retry ok');
+    await adapter.waitForRun(session.id);
+
+    // 场景 4：未加载 session 并发（loadSession await 窗口）——占位同样生效
+    handles.push(okHandle);
+    const p4 = adapter.sendMessage('thread_unknown_f5', 'a');
+    await expect(adapter.sendMessage('thread_unknown_f5', 'b')).rejects.toThrow(/运行中的任务/);
+    await p4;
+  });
+
   it('F5 同一 session 活动进程串行化：并发第二条消息被拒绝', async () => {
     const adapter = new CodexAdapter({
       machineId: 'mac_codex',

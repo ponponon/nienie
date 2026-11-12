@@ -90,8 +90,13 @@ describe('AcpAdapter', () => {
     expect(session.id).toBe('acp_ses_01');
 
     await adapter.sendMessage(session.id, 'Read README');
-    // F4：initialize 优先协商 protocolVersion 2；Agent 未回显 2 → v1 语义（派发即送达）
-    expect(calls[0]).toEqual({ method: 'initialize', params: { protocolVersion: 2 } });
+    // F4：initialize 优先协商 protocolVersion 2（携带合规 info/capabilities）；Agent 未回显 2 → v1 语义（派发即送达）
+    expect(calls[0]!.method).toBe('initialize');
+    expect(calls[0]!.params).toMatchObject({
+      protocolVersion: 2,
+      info: { name: 'nienie-bridge' },
+      capabilities: {},
+    });
     expect(events.map((e) => ({ seq: e.sequence, type: e.type, payload: e.payload }))).toEqual([
       { seq: 1, type: 'thinking_delta', payload: { delta: 'Analyzing ACP request' } },
       {
@@ -124,10 +129,18 @@ describe('AcpAdapter', () => {
       async request(method, params) {
         calls.push({ method, params });
         if (method === 'initialize') {
-          return { protocolVersion: 2, agentInfo: { version: '2.0.0' } };
+          // F4-A：v2 协议形态——info（非 agentInfo）
+          return {
+            protocolVersion: 2,
+            info: { name: 'demo-agent', title: 'Demo Agent', version: '2.0.0' },
+            capabilities: {},
+          };
         }
         if (method === 'session/new') {
           return { sessionId: 'acp_ses_v2' };
+        }
+        if (method === 'session/load' || method === 'session/resume') {
+          return {};
         }
         if (method === 'session/prompt') {
           return { messageId: 'msg_user_42' };
@@ -142,6 +155,7 @@ describe('AcpAdapter', () => {
 
     const adapter = new AcpAdapter({ transport });
     const info = await adapter.detect();
+    // F4-A：v2 从 info.version 读取（agentInfo 是 v1 字段）
     expect(info.version).toBe('2.0.0');
 
     const session = await adapter.createSession({ title: 'V2', projectPath: '/workspace/acp' });
@@ -149,6 +163,126 @@ describe('AcpAdapter', () => {
     expect(result).toEqual({ messageId: 'msg_user_42' });
     // 接受即返回：不等待 turn 完成
     expect(calls.filter((c) => c.method === 'session/prompt')).toHaveLength(1);
+
+    // F4-B：v2 恢复会话用 session/resume + replayFrom start（session/load 已废弃）
+    await adapter.loadSession('acp_ses_v2');
+    const resumeCall = calls.find((c) => c.method === 'session/resume');
+    expect(resumeCall).toBeDefined();
+    expect(resumeCall!.params).toMatchObject({
+      sessionId: 'acp_ses_v2',
+      replayFrom: { type: 'start' },
+    });
+    expect(calls.some((c) => c.method === 'session/load')).toBe(false);
+  });
+
+  it('F4-C v2：prompt 响应缺 messageId 视为协议违规，拒绝假送达', async () => {
+    const transport: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          return {
+            protocolVersion: 2,
+            info: { name: 'demo', title: 'Demo', version: '2.0.0' },
+            capabilities: {},
+          };
+        }
+        if (method === 'session/new') {
+          return { sessionId: 'acp_ses_bad' };
+        }
+        return {}; // prompt 返回空对象——缺 messageId
+      },
+      onNotification() {
+        return () => undefined;
+      },
+      async close() {},
+    };
+    const adapter = new AcpAdapter({ transport });
+    await adapter.detect();
+    const session = await adapter.createSession({ title: 'Bad', projectPath: '/workspace/acp' });
+    await expect(adapter.sendMessage(session.id, 'hi')).rejects.toThrow(/messageId/);
+  });
+
+  it('F4-A v2 initialize 被拒（JSON-RPC 错误带 code）回落 v1；传输层错误不盲目重试', async () => {
+    let initCount = 0;
+    const transport: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          initCount++;
+          if (initCount === 1) {
+            throw { code: -32602, message: 'unsupported protocolVersion' }; // 协议拒绝
+          }
+          return { protocolVersion: 1, agentInfo: { version: '1.0.0' } };
+        }
+        return {};
+      },
+      onNotification() {
+        return () => undefined;
+      },
+      async close() {},
+    };
+    const adapter = new AcpAdapter({ transport });
+    const info = await adapter.detect();
+    expect(info.available).toBe(true);
+    expect(info.version).toBe('1.0.0');
+    expect(initCount).toBe(2); // v2 被拒 → v1 重试
+
+    // 传输层错误（无 code）不重试 initialize
+    let initCount2 = 0;
+    const broken: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          initCount2++;
+          throw new Error('socket closed');
+        }
+        return {};
+      },
+      onNotification() {
+        return () => undefined;
+      },
+      async close() {},
+    };
+    const adapter2 = new AcpAdapter({ transport: broken });
+    const info2 = await adapter2.detect();
+    expect(info2.available).toBe(false);
+    expect(initCount2).toBe(1);
+  });
+
+  it('F4-D requires_action 映射 waiting（不显示 Thinking）', async () => {
+    const listeners = new Set<(notification: unknown) => void>();
+    const transport: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          return {
+            protocolVersion: 2,
+            info: { name: 'demo', title: 'Demo', version: '2.0.0' },
+            capabilities: {},
+          };
+        }
+        return {};
+      },
+      onNotification(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      async close() {
+        listeners.clear();
+      },
+    };
+    const adapter = new AcpAdapter({ transport });
+    await adapter.detect();
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((e) => events.push(e));
+    for (const listener of listeners) {
+      listener({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'acp_ses_act',
+          update: { sessionUpdate: 'state_update', state: 'requires_action' },
+        },
+      });
+    }
+    const st = events.find((e) => e.type === 'status');
+    expect(st!.payload?.status).toBe('waiting');
   });
 
   it('F4 v1：派发即送达，turn 失败经 error+status 事件上报（不谎称 RPC 返回=接受）', async () => {

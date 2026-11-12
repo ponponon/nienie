@@ -699,3 +699,11 @@
 - **F4 ACP v1/v2 送达语义区分**：initialize 协商协议版本（优先 2，失败/回显 1 落 v1，幂等只发一次 initialize）——**v2：session/prompt 插入即返回 messageId=接受确认**（与统一契约一致）；**v1：响应=turn 完成，不谎称接受**——送达语义=已派发至 Agent 进程（与 pty stdin 同语义），turn 完成/失败经 status/error 事件上报；v2 `state_update`（running/requires_action/idle+stopReason）归约，`stopReason:error`→error+failed 事件。
 - **F5 活动进程串行化**：codex/claude-code/pi 同一 session 同时只允许一个活动进程——并发第二条直接拒绝（防 activeProcesses/runs 覆盖导致进程失跟踪、无法取消）；mobile 键盘入口 `_isGenerating` 前置拦截。
 - 测试：bridge-core in-flight 不淘汰（513 突发后重试只执行一次）、codex 并发拒绝 + 信号终止失败上报、acp v2 messageId 语义/v1 派发语义+失败上报/v2 state_update error、mobile 延迟接受不敷新输入（含对照）/error 终止 Thinking 计时（mobile 56）；全仓 257 vitest 全绿。
+
+### 2026-11-12 路线图#3 Round 5（终局收口：附件身份快照/Claude-Pi 状态持久化/ACP v2 协议合规/启动占位）
+
+- **F1 附件身份快照**：草稿快照从「附件数量」改为**身份列表 `path:name`**（数量相同内容不同也算被编辑）；新建 `AttachmentPicker` 网关（包装 file_picker，`debugOverrideFiles` 测试注入）。测试：延迟接受期间删 A 加 B（数量不变）→ 新附件与文本不被清空。
+- **F3 Claude/Pi Session Record 终态持久化**：spawn 成功→`running`、正常完成→`idle`（claude 取 normalizer 状态）、异常/信号→`failed`、cancel→`cancelled`（先置再 kill）——`listSessions()` 返回真实终态，应用重启后不再回旧 idle；emitRunError 路径同步持久化。
+- **F4 ACP v2 协议合规**：①initialize 携带 `info{name,title,version}`+`capabilities{}`，v2 响应读 `info.version`（agentInfo 为 v1 字段兼容读取）；②v2 恢复用 `session/resume`+`replayFrom:{type:'start'}`（v1 保留 session/load）；③v2 prompt 响应**缺 messageId 直接抛错**（拒绝假送达）；④`requires_action` 映射 `waiting`（不再当 running 显示 Thinking）；⑤initialize 回落 v1 仅在协议拒绝（错误带 code）时进行，传输层错误不盲目重试（legacy Agent 不支持重复初始化，由上层重建连接后重新协商）。
+- **F5 await 前同步启动占位**：三 adapter `startingSessions:Set` ——检查+占位在任何 await 之前原子完成（封死 loadSession await 窗口双 spawn），spawn 后转入 `activeProcesses`、失败/取消均释放占位；cancel 一并清理占位。测试四场景（已加载并发/未加载并发/spawn 失败重发/cancel 后重发）× codex 全覆盖、claude/pi 并发拒绝+失败重发+未加载并发。
+- 测试：mobile 57（+1 替换附件竞态）、acp 7（+3：缺 messageId/v2 resume/回落地形/requires_action）、codex 8、claude-code 3、pi 3；全仓 262 vitest + 11 typecheck 全绿。

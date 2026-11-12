@@ -126,11 +126,21 @@ export class AcpEventNormalizer {
         // F4：ACP v2 turn 生命周期——state_update 上报运行/失败/结束
         case 'state_update': {
           const state = asString(update.state);
-          if (state === 'running' || state === 'requires_action') {
+          if (state === 'running') {
             return [
               this.buildEvent(sessionId, 'status', {
                 status: 'running',
                 detail: `ACP ${state}`,
+              }),
+            ];
+          }
+          // F4-D：requires_action=前台任务等待用户操作（权限/输入），不是普通 running——
+          // 映射 waiting，UI 不得继续显示 Thinking
+          if (state === 'requires_action') {
+            return [
+              this.buildEvent(sessionId, 'status', {
+                status: 'waiting',
+                detail: 'ACP requires_action（等待用户操作）',
               }),
             ];
           }
@@ -236,14 +246,34 @@ export class AcpAdapter implements AgentAdapter {
     this.initPromise ??= (async () => {
       if (!this.transport) return;
       try {
+        // F4-A：v2 initialize 必须携带 info + capabilities（否则真 v2 Agent 可拒参数）
         const res = (await this.transport.request('initialize', {
           protocolVersion: 2,
-        })) as { protocolVersion?: number; agentInfo?: { version?: string } } | undefined;
-        this.agentVersion = res?.agentInfo?.version;
+          info: { name: 'nienie-bridge', title: 'Nienie Bridge', version: '0.1.0' },
+          capabilities: {},
+        })) as
+          | {
+              protocolVersion?: number;
+              info?: { version?: string };
+              agentInfo?: { version?: string };
+            }
+          | undefined;
+        // F4-A：v2 响应用 info；agentInfo 是 v1 字段（兼容读取）
+        this.agentVersion = res?.info?.version ?? res?.agentInfo?.version;
         this.protocolVersion = res?.protocolVersion === 2 ? 2 : 1;
-      } catch {
+      } catch (error) {
+        // F4：仅在 Agent 明确拒绝请求（JSON-RPC 错误带 code）时回落 v1——
+        // 传输层错误不重试 initialize（legacy Agent 不一定支持重复初始化，
+        // 需要 Bridge 重建连接后重新协商）
+        const isProtocolRejection =
+          typeof error === 'object' && error !== null && 'code' in error;
+        if (!isProtocolRejection) {
+          throw error;
+        }
         const res = (await this.transport.request('initialize', {
           protocolVersion: 1,
+          info: { name: 'nienie-bridge', title: 'Nienie Bridge', version: '0.1.0' },
+          capabilities: {},
         })) as { protocolVersion?: number; agentInfo?: { version?: string } } | undefined;
         this.agentVersion = res?.agentInfo?.version;
         this.protocolVersion = 1;
@@ -294,10 +324,20 @@ export class AcpAdapter implements AgentAdapter {
     if (!this.transport) {
       throw new Error('ACP transport is not configured');
     }
-    await this.transport.request('session/load', {
-      sessionId,
-      cwd: this.defaultProjectPath,
-    });
+    await this.ensureInitialized();
+    if (this.protocolVersion === 2) {
+      // F4-B：v2 已移除 session/load，恢复用 session/resume（replayFrom start 重放完整历史）
+      await this.transport.request('session/resume', {
+        sessionId,
+        cwd: this.defaultProjectPath,
+        replayFrom: { type: 'start' },
+      });
+    } else {
+      await this.transport.request('session/load', {
+        sessionId,
+        cwd: this.defaultProjectPath,
+      });
+    }
     const existing = this.sessions.get(sessionId);
     if (existing) return existing;
 
@@ -334,7 +374,11 @@ export class AcpAdapter implements AgentAdapter {
         | { messageId?: string }
         | undefined;
       const messageId = asString(res?.messageId);
-      return messageId ? { messageId } : undefined;
+      // F4-C：v2 成功响应必须携带非空 messageId——缺失=协议违规，抛错拒绝「假送达」
+      if (!messageId) {
+        throw new Error('ACP v2 prompt response missing messageId（拒绝假送达）');
+      }
+      return { messageId };
     }
 
     // F4 v1：session/prompt 的响应=整个 turn 完成，不是接受确认。

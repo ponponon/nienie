@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { CanonicalAgentEvent } from '@nienie/protocol';
-import { PiAdapter, PiEventNormalizer } from '../src/index.js';
+import { PiAdapter, PiEventNormalizer, type PiProcessHandle } from '../src/index.js';
 
 const PI_JSON_FIXTURE = [
   { type: 'agent_start', sessionId: 'pi_ses_1' },
@@ -110,5 +110,52 @@ describe('PiAdapter & PiEventNormalizer', () => {
 
     expect(spawnedArgs[0]).toEqual(['--mode', 'json', '--session', session.id, '-p', 'check files']);
     expect(received).toHaveLength(7);
+  });
+
+  it('F5 启动占位：并发拒绝 + spawn 失败释放可重发 + 未加载并发拒绝', async () => {
+    let mode: 'ok' | 'fail' = 'ok';
+    const adapter = new PiAdapter({
+      detectVersion: async () => 'pi 0.8.1',
+      spawnProcess: (): PiProcessHandle => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const emitter = new EventEmitter();
+        if (mode === 'fail') {
+          setTimeout(() => emitter.emit('error', new Error('spawn ENOENT')), 0);
+        } else {
+          setTimeout(() => emitter.emit('spawn'), 0);
+          setTimeout(() => emitter.emit('exit', 0), 0);
+        }
+        return {
+          stdout, stderr,
+          kill() { emitter.emit('exit', 130); },
+          onExit: (cb) => emitter.on('exit', cb),
+          onError: (cb) => emitter.on('error', cb),
+          onSpawn: (cb) => emitter.on('spawn', cb),
+        };
+      },
+    });
+    await adapter.detect();
+    const s1 = await adapter.createSession({ title: 'F5', projectPath: '/tmp/p' });
+
+    // 已加载并发：同步占位拒绝第二条
+    mode = 'ok';
+    const p1 = adapter.sendMessage(s1.id, 'first');
+    await expect(adapter.sendMessage(s1.id, 'second')).rejects.toThrow(/运行中的任务/);
+    await p1;
+    await adapter.waitForRun(s1.id);
+
+    // spawn 失败 → 占位释放 → 可立即重发
+    mode = 'fail';
+    await expect(adapter.sendMessage(s1.id, 'boom')).rejects.toThrow(/ENOENT/);
+    mode = 'ok';
+    await adapter.sendMessage(s1.id, 'retry ok');
+    await adapter.waitForRun(s1.id);
+
+    // 未加载 session 并发拒绝（loadSession await 窗口）
+    const p2 = adapter.sendMessage('pi_unknown_f5', 'a');
+    await expect(adapter.sendMessage('pi_unknown_f5', 'b')).rejects.toThrow(/运行中的任务/);
+    await p2;
+    await adapter.waitForRun('pi_unknown_f5');
   });
 });

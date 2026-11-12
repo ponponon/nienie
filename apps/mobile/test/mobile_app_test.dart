@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:nienie_mobile/main.dart';
+import 'package:nienie_mobile/src/services/attachment_picker.dart';
 
 void main() {
   test('decodes nienie://pair QR URI and pairs tool_use with tool_result by sequence', () async {
@@ -2013,6 +2014,47 @@ void main() {
     await tester.pumpAndSettle();
     final field2 = tester.widget<TextField>(find.byKey(const Key('input-session-prompt')));
     expect(field2.controller!.text, isEmpty);
+    client.dispose();
+  });
+
+  testWidgets('F1 延迟接受期间替换附件不清空新附件（附件身份快照）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 添加附件 A（btn-attach 打开底部菜单 → btn-attach-image）
+    AttachmentPicker.debugOverrideFiles = [(name: 'file-A.png', path: '/tmp/a.png')];
+    await tester.tap(find.byKey(const Key('btn-attach')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-attach-image')));
+    await tester.pumpAndSettle();
+    expect(find.text('file-A.png'), findsOneWidget);
+
+    transport.sendGate = Completer<void>();
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '带附件的消息');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // 延迟接受期间：删掉 A、添加 B（数量不变，身份变了）
+    await tester.tap(find.byIcon(LucideIcons.x));
+    await tester.pumpAndSettle();
+    AttachmentPicker.debugOverrideFiles = [(name: 'file-B.png', path: '/tmp/b.png')];
+    await tester.tap(find.byKey(const Key('btn-attach')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-attach-image')));
+    await tester.pumpAndSettle();
+    expect(find.text('file-B.png'), findsOneWidget);
+    expect(find.text('file-A.png'), findsNothing);
+
+    transport.sendGate!.complete(); // 第一条（含 file-A）被接受
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // 新草稿（文本+file-B）不得被第一条的接受清掉
+    final field = tester.widget<TextField>(find.byKey(const Key('input-session-prompt')));
+    expect(field.controller!.text, '带附件的消息');
+    expect(find.text('file-B.png'), findsOneWidget);
+    expect(find.text('file-A.png'), findsNothing);
+    await tester.pump(const Duration(seconds: 10));
     client.dispose();
   });
 

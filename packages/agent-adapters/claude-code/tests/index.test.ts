@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { CanonicalAgentEvent } from '@nienie/protocol';
-import { ClaudeCodeAdapter, ClaudeCodeEventNormalizer } from '../src/index.js';
+import { ClaudeCodeAdapter, ClaudeCodeEventNormalizer, type ClaudeProcessHandle } from '../src/index.js';
 
 const CLAUDE_STREAM_FIXTURE = [
   {
@@ -130,6 +130,12 @@ describe('ClaudeCodeAdapter & ClaudeCodeEventNormalizer', () => {
     await adapter.sendMessage(session.id, 'second prompt');
     await adapter.waitForRun(session.id);
 
+    // F5：已加载 session 并发第二条被启动占位拒绝（await 窗口不双 spawn）
+    const pConcurrent = adapter.sendMessage(session.id, 'third prompt');
+    await expect(adapter.sendMessage(session.id, 'fourth prompt')).rejects.toThrow(/运行中的任务/);
+    await pConcurrent;
+    await adapter.waitForRun(session.id);
+
     expect(spawnedArgs[0]).toEqual(['-p', '--output-format', 'stream-json', '--verbose', 'first prompt']);
     expect(spawnedArgs[1]).toEqual([
       '-p',
@@ -140,5 +146,44 @@ describe('ClaudeCodeAdapter & ClaudeCodeEventNormalizer', () => {
       'claude_remote_99',
       'second prompt',
     ]);
+  });
+
+  it('F5 spawn 失败释放启动占位可重发 + 未加载 session 并发拒绝', async () => {
+    let mode: 'fail' | 'ok' = 'fail';
+    const adapter = new ClaudeCodeAdapter({
+      detectVersion: async () => '1.0.24 (Claude Code)',
+      spawnProcess: (): ClaudeProcessHandle => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const emitter = new EventEmitter();
+        if (mode === 'fail') {
+          setTimeout(() => emitter.emit('error', new Error('spawn ENOENT')), 0);
+        } else {
+          setTimeout(() => emitter.emit('spawn'), 0);
+          setTimeout(() => emitter.emit('exit', 0), 0);
+        }
+        return {
+          stdout, stderr,
+          kill() { emitter.emit('exit', 130); },
+          onExit: (cb) => emitter.on('exit', cb),
+          onError: (cb) => emitter.on('error', cb),
+          onSpawn: (cb) => emitter.on('spawn', cb),
+        };
+      },
+    });
+    await adapter.detect();
+
+    // spawn 失败 → 占位释放 → 可立即重发
+    const s1 = await adapter.createSession({ title: 'F5B' });
+    await expect(adapter.sendMessage(s1.id, 'boom')).rejects.toThrow(/ENOENT/);
+    mode = 'ok';
+    await adapter.sendMessage(s1.id, 'retry ok');
+    await adapter.waitForRun(s1.id);
+
+    // 未加载 session：loadSession await 窗口内并发第二条被拒绝
+    const p1 = adapter.sendMessage('claude_unknown_f5', 'a');
+    await expect(adapter.sendMessage('claude_unknown_f5', 'b')).rejects.toThrow(/运行中的任务/);
+    await p1;
+    await adapter.waitForRun('claude_unknown_f5');
   });
 });

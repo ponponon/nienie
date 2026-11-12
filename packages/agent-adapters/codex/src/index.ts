@@ -75,6 +75,8 @@ export class CodexAdapter implements AgentAdapter {
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sessions = new Map<string, CodexSessionRecord>();
   private readonly activeProcesses = new Map<string, CodexProcessHandle>();
+  /** F5：await 前同步启动占位——loadSession 等 await 窗口内阻止并发双 spawn。 */
+  private readonly startingSessions = new Set<string>();
   private readonly discoverLocalHistory: boolean;
   private readonly loadedHistoryThreads = new Set<string>();
   private historyLoaded = false;
@@ -409,23 +411,31 @@ export class CodexAdapter implements AgentAdapter {
 
   async sendMessage(sessionId: string, message: string): Promise<void> {
     // F5：同一 session 同一时刻只允许一个活动进程（单轮执行模型）——
-    // 并发第二条会覆盖 activeProcesses/runs 导致进程失跟踪、无法取消，直接拒绝
-    if (this.activeProcesses.has(sessionId)) {
+    // 并发第二条会覆盖 activeProcesses/runs 导致进程失跟踪、无法取消，直接拒绝。
+    // 检查+占位必须在任何 await 之前同步完成（否则 loadSession 的 await 窗口双 spawn）
+    if (this.activeProcesses.has(sessionId) || this.startingSessions.has(sessionId)) {
       throw new Error('会话已有运行中的任务，请等待完成或取消后再发送');
     }
-    let record = this.sessions.get(sessionId);
-    if (!record) {
-      await this.loadSession(sessionId);
+    this.startingSessions.add(sessionId);
+    let record: CodexSessionRecord;
+    let proc: CodexProcessHandle;
+    try {
       record = this.sessions.get(sessionId)!;
+      if (!record) {
+        await this.loadSession(sessionId);
+        record = this.sessions.get(sessionId)!;
+      }
+
+      const boundThreadId = record.threadId ?? this.normalizer.getThreadId(sessionId);
+      const args: string[] = boundThreadId
+        ? ['exec', 'resume', '--json', '--skip-git-repo-check', boundThreadId, message]
+        : ['exec', '--json', '--skip-git-repo-check', '-C', record.projectPath, message];
+
+      proc = this.spawnProcessImpl(args, { cwd: record.projectPath });
+      this.activeProcesses.set(sessionId, proc); // 占位转入活动进程
+    } finally {
+      this.startingSessions.delete(sessionId); // 成功转入 active / 中途失败均释放占位
     }
-
-    const boundThreadId = record.threadId ?? this.normalizer.getThreadId(sessionId);
-    const args: string[] = boundThreadId
-      ? ['exec', 'resume', '--json', '--skip-git-repo-check', boundThreadId, message]
-      : ['exec', '--json', '--skip-git-repo-check', '-C', record.projectPath, message];
-
-    const proc = this.spawnProcessImpl(args, { cwd: record.projectPath });
-    this.activeProcesses.set(sessionId, proc);
 
     // R3-3：真正确认 spawn 成功才「已送达电脑」——spawn() 是异步确认，
     // 二进制不存在等失败在 error 事件才暴露，必须拒绝（假送达）而非静默成功
@@ -447,7 +457,7 @@ export class CodexAdapter implements AgentAdapter {
       });
     } catch (error) {
       this.activeProcesses.delete(sessionId);
-      record.status = 'failed';
+      record.status = 'failed'; // F3：失败终态持久化到 Session Record
       record.updatedAt = new Date().toISOString();
       this.emitRunError(
         sessionId,
@@ -552,6 +562,7 @@ export class CodexAdapter implements AgentAdapter {
 
   async cancel(sessionId: string): Promise<void> {
     // R3-3：先标记 cancelled 再 kill——否则 kill 同步触发的 onExit 会把取消误判为非零退出失败
+    this.startingSessions.delete(sessionId); // F5：启动中的占位一并释放
     const record = this.sessions.get(sessionId);
     if (record) {
       record.status = 'cancelled';

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show listEquals;
+import 'package:nienie_mobile/src/services/attachment_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../i18n/app_strings.dart';
 import '../models/protocol_models.dart';
@@ -386,13 +388,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   }
 
   Future<void> _pickAttachment(FileType type) async {
-    final result = await FilePicker.pickFiles(type: type, allowMultiple: true);
-    if (result == null) return;
+    final picked = await AttachmentPicker.pick(type: type);
+    if (picked.isEmpty) return;
     setState(() {
-      for (final f in result.files) {
-        if (f.path != null) {
-          _attachments.add(_Attachment(name: f.name, path: f.path!));
-        }
+      for (final f in picked) {
+        _attachments.add(_Attachment(name: f.name, path: f.path));
       }
     });
   }
@@ -702,13 +702,18 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                       final text = value.trim();
                       if (text.isEmpty && _attachments.isEmpty) return;
                       final msg = _composeMessage(text);
-                      // F1：草稿快照——仅当输入仍是提交时那份才清空，延迟接受不得覆盖用户新输入
+                      // F1：草稿快照（文本+附件身份）——仅当输入仍是提交时那份才清空，
+                      // 延迟接受不得覆盖用户新输入/替换后的附件（数量相同内容不同也算被编辑）
                       final draftSnapshot = _promptController.text;
-                      final attachCount = _attachments.length;
+                      final attachmentSnapshot = [
+                        for (final a in _attachments) '${a.path}:${a.name}',
+                      ];
                       client.sendMessage(msg).then((accepted) {
                         if (accepted &&
                             _promptController.text == draftSnapshot &&
-                            _attachments.length == attachCount) {
+                            listEquals([
+                              for (final a in _attachments) '${a.path}:${a.name}',
+                            ], attachmentSnapshot)) {
                           _promptController.clear();
                           setState(() => _attachments.clear());
                         }
@@ -794,11 +799,16 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                     if (text.trim().isEmpty && _attachments.isEmpty) return;
                                     final msg = _composeMessage(text);
                                     final draftSnapshot = _promptController.text;
-                                    final attachCount = _attachments.length;
+                                    // F1：附件身份快照（path:name），数量相同内容不同也算被编辑
+                                    final attachmentSnapshot = [
+                                      for (final a in _attachments) '${a.path}:${a.name}',
+                                    ];
                                     final accepted = await client.sendMessage(msg);
                                     if (accepted &&
                                         _promptController.text == draftSnapshot &&
-                                        _attachments.length == attachCount) {
+                                        listEquals([
+                                          for (final a in _attachments) '${a.path}:${a.name}',
+                                        ], attachmentSnapshot)) {
                                       _promptController.clear();
                                       setState(() => _attachments.clear());
                                     }
