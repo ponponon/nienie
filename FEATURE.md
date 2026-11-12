@@ -768,3 +768,11 @@
 - **durationLabel 舍入**：先整数秒舍入再拆分（119.6s→2m00s，不再出 1m60s）。
 - **菜单分派修复**：长按「从这里重试」pending 态不出站（此前会走 sendMessage 新发——双触发可双出站）。
 - 测试：Snapshot 恢复耗时/退出码、durationLabel 边界（59.6s/60s/119.6s）、长输出 280px 约束+内滚动、Codex exitCode 端到端（2/缺失）、opencode tool 自身时间（completed 缺失回落 ran/created）、failed 重试（同条 messageId 不变/双触发一次有效）、引用保留草稿+光标；mobile 73（+5）、全仓 273 vitest 全绿。
+
+### 2026-11-12 路线图#4.4~4.5 Round 3（耗时语义从严 + StateStore 归并 + pending 菜单）
+
+- **耗时语义从严（原则：宁可不显示耗时，不显示语义错误的耗时）**：Snapshot tool part 新增独立 `toolStartedAt/toolFinishedAt` 字段（与通用 createdAt/updatedAt 分离）——startedAt 只认 `time.ran`（真实执行开始）、finishedAt 只认 `time.completed`；缺失=不知道（不回退 created/ran，不伪造耗时）；mobile 恢复只读这两字段。
+- **StateStore 稳定归并**：tool_use/tool_result 按 `tool:${toolCallId}` 落同一 Part（Codex 真实事件不带 partId，此前会生成两个碎片 Part）；投影写入 toolStartedAt(tool_use 时刻)/toolFinishedAt(tool_result 时刻)。
+- **pending 隐藏重试菜单**：发送中长按不再显示「从这里重试」（点击无效误导用户），菜单分派 pending 分支双保险。
+- 修复 message-restore `base()` 双调用 ordinal 跳号（快照校验拒绝的隐性炸弹）。
+- 测试：opencode 125（ran/completed 语义三分支）、agent-events 24（无 partId Codex 事件→单 Part+exitCode 2+时间戳）、mobile 74（snapshot 独立字段恢复/无 completed 无耗时/pending 菜单隐藏）；全仓 274 vitest 全绿。

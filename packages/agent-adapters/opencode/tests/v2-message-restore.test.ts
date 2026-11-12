@@ -305,7 +305,7 @@ describe('J0.6b-3.3 显式 synthetic 标记', () => {
 });
 
 describe('buildSnapshotParts tool time', () => {
-  it('Round 2：tool part 用自身 time.created/ran/completed（不沿用 Message 时间）', () => {
+  it('Round 3：startedAt 只认 ran、finishedAt 只认 completed（不沿用 Message/created 时间）', () => {
     const created = 1760000001100;
     const ran = 1760000002100;
     const completed = 1760000006100;
@@ -328,40 +328,59 @@ describe('buildSnapshotParts tool time', () => {
     const parts = buildSnapshotParts([msg]);
     const tool = parts.find((p) => p.kind === 'tool_call');
     expect(tool).toBeDefined();
-    expect(tool!.createdAt).toBe(new Date(created).toISOString());
-    expect(tool!.updatedAt).toBe(new Date(completed).toISOString());
+    expect(tool!.toolStartedAt).toBe(new Date(ran).toISOString()); // 不是 created
+    expect(tool!.toolFinishedAt).toBe(new Date(completed).toISOString());
   });
 
-  it('Round 2：completed 缺失时回落 ran；都缺失回落 created', () => {
-    const created = 1760000001100;
-    const ran = 1760000002100;
-    const base = {
-      id: 'call_t2',
-      name: 'shell',
-      state: { status: 'running', input: { command: 'ls' } } as unknown as OpenCodeV2ToolState,
-    };
-    const withRan = buildSnapshotParts([
+  it('Round 3：terminal + ran 存在 + completed 缺失 → 不伪造耗时（toolFinishedAt 缺失）', () => {
+    const parts = buildSnapshotParts([
       {
-        id: 'msg_t3',
+        id: 'msg_t5',
         time: { created: 1 },
         type: 'assistant',
         agent: 'a',
         model: { id: 'm', providerID: 'p' },
-        content: [{ type: 'tool', ...base, time: { created, ran } }],
+        content: [
+          {
+            type: 'tool',
+            id: 'call_t5',
+            name: 'shell',
+            state: {
+              status: 'completed',
+              input: { command: 'ls' },
+              content: [{ type: 'text', text: 'ok' }],
+            } as unknown as OpenCodeV2ToolState,
+            time: { created: 1760000001000, ran: 1760000002000 }, // completed 缺失
+          },
+        ],
       },
     ]);
-    expect(withRan[0]!.updatedAt).toBe(new Date(ran).toISOString());
+    const tool = parts.find((p) => p.kind === 'tool_call');
+    expect(tool!.toolStartedAt).toBe(new Date(1760000002000).toISOString());
+    expect(tool!.toolFinishedAt).toBeUndefined(); // 宁可无耗时，不显示语义错误的耗时
+  });
 
-    const onlyCreated = buildSnapshotParts([
+  it('Round 3：ran 缺失 → toolStartedAt 缺失（不假装知道开始时间）', () => {
+    const parts = buildSnapshotParts([
       {
-        id: 'msg_t4',
+        id: 'msg_t6',
         time: { created: 1 },
         type: 'assistant',
         agent: 'a',
         model: { id: 'm', providerID: 'p' },
-        content: [{ type: 'tool', ...base, time: { created } }],
+        content: [
+          {
+            type: 'tool',
+            id: 'call_t6',
+            name: 'shell',
+            state: { status: 'running', input: { command: 'ls' } } as unknown as OpenCodeV2ToolState,
+            time: { created: 1760000001000 },
+          },
+        ],
       },
     ]);
-    expect(onlyCreated[0]!.updatedAt).toBe(new Date(created).toISOString());
+    const tool = parts.find((p) => p.kind === 'tool_call')!;
+    expect(tool.toolStartedAt).toBeUndefined();
+    expect(tool.toolFinishedAt).toBeUndefined();
   });
 });

@@ -1072,3 +1072,9 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - **根因**：visitText 优先命中 `builders[_blocks.last.tag]`（即我们的 pre builder），返回 null → inline 缓冲的 `_InlineElement` 没有任何 child；`_addAnonymousBlockIfNeeded` 只在 `inline.children.isNotEmpty` 时才 `_inlines.clear()` → 缓冲泄漏 → 尾部断言失败。
 - **修复**：自定义 block builder 必须同时实现 `visitText` 返回占位 widget（`SizedBox.shrink()`），保证 inline 缓冲可被清空；同时把 `codeblockDecoration` 置空避免默认 pre 底色包裹自定义块。
 - **预防**：接管 flutter_markdown 的 block 级 tag（pre/table 等）时，先读 builder.dart 的 `_addAnonymousBlockIfNeeded`/`visitText` 分支契约，别假设「children 就不会被访问」。
+
+### 2026-11-12 简版 `str.replace` 全局误替换 + git stash 二分后文件残缺
+
+- **事故一**：脚本里偷懒用只含 `assert old in s` 的简版 rep（无 count==1 断言），`s.replace` 全局替换把 5 处快照 map 的 `'totalParts': 1,` 一并删除 → 4 个无关快照测试静默变红，排查方向被带偏。
+- **事故二**：用 `git stash` + `git checkout stash@{0} -- <file>` 二分定位回归后忘记恢复其余文件，stash drop 前工作区只剩部分改动（message-restore/state-store/protocol/测试回到 HEAD），测试计数异常才发现。
+- **教训/预防**：①批量替换一律用带 `count==1` 断言的 rep 或 edit 工具；②git stash 二分流程固定为「checkout 参与文件→跑测→立即 checkout 全部改动文件回来→验证 diff 文件数→再 drop stash」，drop 前先 `git diff HEAD --stat` 核对文件清单；③测试计数（125→124）这类「数不对」的异常就是文件残缺的信号。

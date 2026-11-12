@@ -89,7 +89,13 @@ export class InMemorySessionStateStore implements SessionStateStore {
     this.parts.set(sid, map);
     // 简化的 Part 状态推导：text_delta 更新/创建 message part，tool_* 更新 tool_call part。
     const p = event.payload as Record<string, unknown>;
-    const partId = (p.partId as string) ?? `${event.type}:${event.sequence}`;
+    // Round 3：工具事件按稳定 toolCallId 归并（Codex 实时事件不带 partId，
+    // tool_use/tool_result 必须落同一 Part，否则生成两个碎片 Part）
+    const isToolEvent = event.type === 'tool_use' || event.type === 'tool_result';
+    const partId =
+      isToolEvent && typeof p.toolCallId === 'string'
+        ? `tool:${p.toolCallId}`
+        : ((p.partId as string) ?? `${event.type}:${event.sequence}`);
     const existing = map.get(partId);
     const revision = (p.revision as number) ?? ((existing?.revision ?? 0) + 1);
     const ts = event.timestamp;
@@ -119,6 +125,10 @@ export class InMemorySessionStateStore implements SessionStateStore {
         name: (p.name as string) ?? 'tool',
         input: (p.input as Record<string, unknown>) ?? {},
         status: 'running',
+        // Round 3：tool_use=进入执行 → 真实开始时间
+        ...(existing?.kind === 'tool_call' && existing.toolStartedAt
+          ? {}
+          : { toolStartedAt: ts }),
         _seq: event.sequence,
       });
     } else if (event.type === 'tool_result') {
@@ -138,6 +148,11 @@ export class InMemorySessionStateStore implements SessionStateStore {
         isError: (p.isError as boolean) ?? false,
         // Round 2：exitCode 事件→Snapshot 投影不丢失（缺失不伪造）
         ...(typeof p.exitCode === 'number' ? { exitCode: p.exitCode } : {}),
+        // Round 3：tool_result=完成 → 真实完成时间；开始时间沿用 tool_use 侧
+        ...(prev?.kind === 'tool_call' && prev.toolStartedAt
+          ? { toolStartedAt: prev.toolStartedAt }
+          : {}),
+        toolFinishedAt: ts,
         _seq: event.sequence,
       });
     }

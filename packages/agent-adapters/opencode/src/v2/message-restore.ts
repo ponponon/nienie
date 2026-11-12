@@ -266,19 +266,22 @@ export function buildSnapshotParts(messages: OpenCodeV2SessionMessageInfo[]): Se
       } else if (part.type === 'tool') {
         const { input, output, isError } = extractToolOutput(part.state);
         const terminal = part.state.status === 'completed' || part.state.status === 'error';
-        // Round 2：Tool Part 用自身 time.created/ran/completed（不沿用 Message 时间）
-        const toolCreated = new Date(part.time.created).toISOString();
-        const toolEnded =
+        // Round 3：耗时语义从严——startedAt 只认 ran、finishedAt 只认 completed；
+        // 缺失=不知道（宁可不显示耗时，不显示语义错误的耗时）
+        const toolStartedAt =
+          part.time.ran != null ? new Date(part.time.ran).toISOString() : undefined;
+        const toolFinishedAt =
           part.time.completed != null
             ? new Date(part.time.completed).toISOString()
-            : part.time.ran != null
-              ? new Date(part.time.ran).toISOString()
-              : toolCreated;
+            : undefined;
+        const toolBase = base(); // 只调用一次（stamp 每次递增 ordinal，重复调用会跳号）
         parts.push({
-          ...base(),
-          createdAt: toolCreated,
-          updatedAt: toolEnded,
+          ...toolBase,
+          createdAt: toolStartedAt ?? toolBase.createdAt,
+          updatedAt: toolFinishedAt ?? toolBase.updatedAt,
           kind: 'tool_call',
+          ...(toolStartedAt ? { toolStartedAt } : {}),
+          ...(toolFinishedAt ? { toolFinishedAt } : {}),
           toolCallId: part.id,
           name: part.name,
           input,

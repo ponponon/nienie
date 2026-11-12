@@ -2375,7 +2375,7 @@ void main() {
       'capturedAt': DateTime.now().toIso8601String(),
       'complete': true,
       'hasMore': false,
-      'totalParts': 1,
+      'totalParts': 2,
       'parts': [
         {
           'kind': 'tool_call',
@@ -2391,15 +2391,58 @@ void main() {
           'isError': false,
           'status': 'completed',
           'exitCode': 0,
+          'toolStartedAt': t0.toIso8601String(),
+          'toolFinishedAt': t1.toIso8601String(),
+        },
+        {
+          'kind': 'tool_call',
+          'ordinal': 1,
+          'partId': 't_snap2',
+          'revision': 2,
+          'createdAt': t0.toIso8601String(),
+          'updatedAt': t1.toIso8601String(),
+          'toolCallId': 'tc_noend',
+          'name': 'bash',
+          'input': {'cmd': 'x'},
+          'output': 'ok',
+          'isError': false,
+          'status': 'completed',
+          // Round 3：completed 缺失（无 toolFinishedAt）→ 不伪造耗时
+          'toolStartedAt': t0.toIso8601String(),
         },
       ],
     };
     await client.loadSessionSnapshot('ses_alpha');
-    final tool = client.timelineFor('ses_alpha').whereType<ToolCallCardItem>().single;
-    expect(tool.startedAt, t0);
-    expect(tool.finishedAt, t1);
-    expect(tool.exitCode, 0);
-    expect(tool.durationLabel, '4.0s');
+    final tools = client.timelineFor('ses_alpha').whereType<ToolCallCardItem>().toList();
+    expect(tools[0].startedAt, t0);
+    expect(tools[0].finishedAt, t1);
+    expect(tools[0].exitCode, 0);
+    expect(tools[0].durationLabel, '4.0s');
+    // Round 3：finishedAt 缺失 → 无耗时（宁可不显示，不显示语义错误的耗时）
+    expect(tools[1].startedAt, t0);
+    expect(tools[1].finishedAt, isNull);
+    expect(tools[1].durationLabel, isNull);
+    client.dispose();
+  });
+
+  testWidgets('4.5 pending 时「从这里重试」菜单项隐藏', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.sendGate = Completer<void>(); // 发送挂起 → receipt pending
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '挂起消息');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+
+    await tester.longPress(find.text('挂起消息').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('menu-copy-text')), findsOneWidget);
+    expect(find.byKey(const Key('menu-resend-from-here')), findsNothing); // pending 隐藏
+    await tester.tap(find.byKey(const Key('menu-copy-text'))); // 关闭菜单
+    await tester.pumpAndSettle();
+    transport.sendGate!.complete();
+    await tester.pumpAndSettle();
     client.dispose();
   });
 
@@ -2491,11 +2534,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(item.receipt, SendReceipt.pending);
 
+    // Round 3：pending 时「从这里重试」直接隐藏（双保险：菜单分派 pending 分支也不出站）
     await tester.longPress(find.text('失败消息').first);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('menu-resend-from-here')));
+    expect(find.byKey(const Key('menu-resend-from-here')), findsNothing);
+    await tester.tap(find.byKey(const Key('menu-copy-text'))); // 关闭菜单
     await tester.pumpAndSettle();
-    expect(item.receipt, SendReceipt.pending); // 仍是 pending（第二击被拒）
 
     transport.sendGate!.complete();
     await tester.pumpAndSettle();

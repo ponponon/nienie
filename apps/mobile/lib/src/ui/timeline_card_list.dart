@@ -196,7 +196,8 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                 widget.onQuoteReply?.call(quote);
               },
             ),
-            if (userItem != null)
+            // Round 3：pending 时隐藏重试项（点击无效会误导用户）
+            if (userItem != null && userItem.receipt != SendReceipt.pending)
               ListTile(
                 key: const Key('menu-resend-from-here'),
                 leading: const Icon(LucideIcons.rotateCcw, size: 19),

@@ -319,6 +319,12 @@ export type SnapshotToolCallPart = SnapshotPartBase & {
   truncated?: boolean | undefined;
   omittedChars?: number | undefined;
   exitCode?: number | undefined;
+  /**
+   * Round 3：工具真实执行开始/完成时间（ISO）——与通用 Part 的 createdAt/updatedAt 分离。
+   * 语义从严：startedAt 只认 ran、finishedAt 只认 completed；缺失=不知道，不伪造耗时。
+   */
+  toolStartedAt?: string | undefined;
+  toolFinishedAt?: string | undefined;
 };
 
 export type SnapshotPermissionPart = SnapshotPartBase & {

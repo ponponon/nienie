@@ -51,3 +51,29 @@ describe('InMemorySessionStateStore（Snapshot 是状态）', () => {
     expect(order).toEqual([1, 2, 3]);
   });
 });
+
+describe('Codex 真实事件归并（无 partId）', () => {
+  it('Round 3：tool_use/tool_result 按 toolCallId 落同一 Part，exitCode 不丢', () => {
+    const store = new InMemorySessionStateStore({
+      agentId: 'codex',
+      streamEpoch: 'ep1',
+    });
+    // 真实 Codex 事件形态：不带 partId
+    store.applyEvent(
+      evt(1, 'tool_use', { toolCallId: 'cmd_2', name: 'bash', input: { command: 'exit 2' } }),
+    );
+    store.applyEvent(
+      evt(2, 'tool_result', { toolCallId: 'cmd_2', content: 'boom', isError: true, exitCode: 2 }),
+    );
+
+    const snap = store.createSnapshot('ses_1');
+    const tools = snap.parts.filter((p) => p.kind === 'tool_call');
+    expect(tools).toHaveLength(1); // 不生成两个碎片 Part
+    const tool = tools[0]!;
+    if (tool.kind !== 'tool_call') throw new Error('unreachable');
+    expect(tool.status).toBe('failed');
+    expect(tool.exitCode).toBe(2); // exitCode 保留
+    expect(tool.toolStartedAt).toBeDefined(); // tool_use 时刻=真实开始
+    expect(tool.toolFinishedAt).toBeDefined(); // tool_result 时刻=真实完成
+  });
+});
