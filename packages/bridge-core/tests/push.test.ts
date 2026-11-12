@@ -516,3 +516,18 @@ describe('R5.4b 锚定守卫：扩展名必须属于最终文件名', () => {
     expect(sanitizePushBody('log /Users/a/.config/foo.txt:3 x', false)).toBe('log ~/foo.txt:3 x');
   });
 });
+
+describe('R5.4c Unicode 路径边界完整性', () => {
+  it('全角逗号不能导致路径提前锚定', () => {
+    expect(sanitizePushBody('cat /Users/alice/project.private，secret/src/main.py', false))
+      .toBe('cat ~/main.py');
+  });
+  it('全角空格不能导致路径提前锚定', () => {
+    expect(sanitizePushBody('cat /Users/alice/project.private　secret/src/main.py', false))
+      .toBe('cat ~/main.py');
+  });
+  it('中文顿号不能截断兜底脱敏', () => {
+    expect(sanitizePushBody('cat /Users/alice/project.private、secret/src/main.py', false))
+      .toBe('cat ~/main.py');
+  });
+});

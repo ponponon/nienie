@@ -54,14 +54,14 @@ export function validateWebhookUrl(raw: string): string | undefined {
 
 /** 路径脱敏（R3-4）：识别 POSIX/Windows 盘符/UNC 绝对路径（允许空格与 Unicode），整条折叠为 ~/或…/ + 文件名。
  *  无法可靠识别时宁可整体折叠，不泄露目录结构/项目名。 */
-const HARD_STOP = '[\\r\\n"<>|\\u3000\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A\\u3001\\u201C\\u201D\\u3010\\u3011]';
+const HARD_STOP = '[\r\n"<>|]';
 const PATH_ROOT = '(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\\\r\\n]+\\\\|\\/)';
 /** 文件扩展名必须是纯字母（R5.4）：v1/v2/2024 等「目录名带点」不是扩展名，不做文件锚定。 */
 const FILE_SUFFIX = '\\.[A-Za-z]{1,8}';
 const LINE_SUFFIX = '(?::\\d+(?::\\d+)?)?';
 const END_BOUNDARY = '(?=[\\s,;!?:\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\"<>|]|$)';
 /** 锚定守卫（R5.4b）：扩展名必须属于最终文件名——同一子句内若还有路径分隔符，说明点号属于中间目录，不得提前锚定。 */
-const SLASH_GUARD = '(?!(?:(?![\\r\\n"<>|\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u201C\u201D\u3010\u3011]).)*[\\\\/])';
+const SLASH_GUARD = `(?!(?:(?!${HARD_STOP}).)*[\\/])`;
 
 /** 文件锚定主规则：根起点 → 任意中段 → 文件名.纯字母扩展名[:行[:列]] → 边界。 */
 const FILE_ANCHORED_RE = new RegExp(

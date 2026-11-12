@@ -579,3 +579,9 @@
 - **SLASH_GUARD**：文件锚定后同一子句（到硬边界）内不得再出现路径分隔符——`.private!dir/src` 这类「点号目录+边界字符+后续路径」不再提前锚定（前缀泄漏与 R5.3 同根因的复发消除）：`cat /Users/alice/.private!dir/src`→`cat ~/src`、`.private!x/y.log, ok`→`~/y.log, ok`。
 - 修一处转义回归：END_BOUNDARY 的 `\\s` 曾被写成单反斜杠（JS 字符串 `\s` 退化为字符 `s`），导致根文件 `/secret.txt`、Stack Trace 锚定失效——修正并留测试锁定。
 - bridge-core 70 测试、全仓 234 vitest 全绿。
+
+### 2026-11-11 路线图#1 Round 5.4c Unicode 路径边界完整性（隐私封板）
+
+- **保守边界语义统一**：HARD_STOP 收窄为「真正不可能出现在路径中的字符」（`\r\n"<>|`）——全角逗号 U+FF0C、全角空格 U+3000、顿号 U+3001 等**合法路径字符**不再作为提前终止点；SLASH_GUARD 扫描、文件锚定中段、DIR_FALLBACK 三处共用同一停止集（一致语义）。`cat /Users/alice/project.private，secret/src/main.py`→`cat ~/main.py`（三个 Unicode 反例全过）。
+- 文档计数修正：测试数量以 CI 日志为准（本轮全仓 240 vitest：protocol 9 / agent-events 23 / 适配器 9 / opencode 120 / bridge-core 73 / desktop 6）。
+- 路径脱敏反例全集（R5.2→5.4c）均已入回归：带空格三平台、Unicode 目录、标点目录、单引号、Stack Trace 行号、`.v1` 目录、`.private` 前缀、Unicode 标点、var/folders、根文件。
