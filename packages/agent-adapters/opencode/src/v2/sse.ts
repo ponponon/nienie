@@ -156,6 +156,26 @@ export class V2LiveEventMapper {
           },
         ];
       }
+      case 'permission.replied': {
+        // 目标①：他人/其他端审批后归位卡片（不串单、不悬挂）
+        const reply = asRecord(data['reply']);
+        const decisionRaw = String(reply?.['decision'] ?? '');
+        const decision = decisionRaw === 'once'
+            ? 'allow_once'
+            : decisionRaw === 'always'
+                ? 'allow_always'
+                : 'reject';
+        return [
+          {
+            type: 'status',
+            payload: {
+              status: 'resolved',
+              permissionId: String(data['requestID'] ?? ''),
+              decision,
+            },
+          },
+        ];
+      }
       case 'session.usage.updated': {
         const tokens = asRecord(data['tokens']);
         return [

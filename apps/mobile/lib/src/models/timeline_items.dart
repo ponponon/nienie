@@ -112,10 +112,12 @@ class ErrorCardItem extends SessionTimelineItem {
 
 class PermissionRequestCardItem extends SessionTimelineItem {
   final String permissionId;
-  final String permission;
-  final String detail;
-  final List<String> patterns;
+  String permission;
+  String detail;
+  List<String> patterns;
   String? resolvedDecision;
+  /// 审批提交中（目标③：防误触/重复审批的进行中状态）
+  bool replyPending;
 
   PermissionRequestCardItem({
     required this.permissionId,
@@ -123,6 +125,7 @@ class PermissionRequestCardItem extends SessionTimelineItem {
     required this.detail,
     this.patterns = const [],
     this.resolvedDecision,
+    this.replyPending = false,
   });
 }
 

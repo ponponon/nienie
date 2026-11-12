@@ -599,3 +599,12 @@
 - ChatGPT 终审签署：**路线图 #1 正式 ACCEPTED**（commit 87cdeb9，CI 243/243 全绿，六项封板标准全达成，未发现新增隐私泄漏）。验收维度：CI 确定性、多目标 delivered 语义、in-flight 并发去重、Host/Origin 安全、路径脱敏（R5.2～5.4d 六轮隐私边界）、深链断线恢复。
 - 非阻断记录：PATH_ROOT 平台规则重叠（POSIX 规则先于 Windows 规则执行，Windows 路径被保守过度折叠——不泄漏、仅过度），登记在案不再扩展。
 - **路线图 #2 三大目标**（ChatGPT 定调）：①精准定位（通知/审批卡/WebSocket 全部正确关联 permissionId 不串单）；②理解操作（按实际 permission payload 展示操作/命令/工作目录/影响，不凭空推断）；③防误操作（批准/拒绝明确区分，防误触/重复审批/过期审批）。流程要求：先审查现有 Permission 协议、后端审批流、手机端 UI，再定改造方案。
+
+### 2026-11-12 路线图#2 目标① 精准定位（审批不串单）
+
+- **现状审查结论**（动手前完成）：协议 `status:waiting{permissionId,permission,detail,patterns}` + `permission.reply` 回执 {replied,permissionId,decision}；v2 `permission.asked{id,action,resources,save,metadata,source,message}` 已映射；缺口——同 permissionId 重复询问堆叠多卡、`permission.replied` 被忽略（他人审批后卡片永久悬挂）、replyPermission 无幂等/无错误处理/不校验回执、深链只到会话不到具体审批项。
+- **upsert 按 permissionId**：重复询问更新同一卡片（已决卡不改写），绝不堆叠/串单。
+- **`permission.replied` 归位**：v2 映射为 `status:resolved{permissionId,decision}`（once→allow_once 等），手机端收到后立即定格对应卡片（他人/其他端审批不悬挂）。
+- **审批幂等三防线**：已决卡拒绝重复提交、审批中防双击（in-flight 集合）、回执 `permissionId` 不一致视为串单风险不落定并提示重试。
+- **深链直达审批项**：待审批通知 `clickUrl` 带 `?permission=<pid>`；`handleDeepLink` 解析并置 `focusedPermissionId`（UI 高亮目标卡，目标②③的展示基础）。
+- 测试 +3（mobile 36：单卡 upsert/已决不改写/resolved 归位/回执失配不落定；opencode：permission.replied 映射）；全仓 243 vitest 全绿。

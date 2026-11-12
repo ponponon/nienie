@@ -1268,6 +1268,66 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('路线图#2 目标① 精准定位：同 permissionId 不堆卡、resolved 归位、审批幂等、深链聚焦', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 同一 permissionId 两次询问 → 单卡（upsert），第二次更新 detail
+    transport.emitServerEvent(j04Evt(eventId: 'p1', seq: 1, type: 'status',
+        payload: {'status': 'waiting', 'permissionId': 'perm_1', 'permission': 'bash', 'detail': '执行 rm -rf', 'patterns': ['*']}));
+    transport.emitServerEvent(j04Evt(eventId: 'p2', seq: 2, type: 'status',
+        payload: {'status': 'waiting', 'permissionId': 'perm_1', 'permission': 'bash', 'detail': '执行 rm -rf（重试询问）', 'patterns': ['*']}));
+    await tester.pump();
+    var cards = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().toList();
+    expect(cards.length, 1);
+    expect(cards.single.detail, '执行 rm -rf（重试询问）');
+
+    // 深链 ?permission= 聚焦
+    expect(client.handleDeepLink(Uri.parse('nienie://session/ses_alpha?permission=perm_1')), isTrue);
+    expect(client.pendingDeepLinkPermissionId, 'perm_1');
+
+    // 幂等：已决卡片拒绝重复审批
+    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_1', decision: 'allow_once');
+    cards = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().toList();
+    expect(cards.single.resolvedDecision, 'allow_once');
+    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_1', decision: 'reject');
+    expect(cards.single.resolvedDecision, 'allow_once'); // 不被改写
+
+    // permission.replied 归位：另一张卡由他人审批后定格
+    transport.emitServerEvent(j04Evt(eventId: 'p3', seq: 3, type: 'status',
+        payload: {'status': 'waiting', 'permissionId': 'perm_2', 'permission': 'bash', 'detail': '写文件'}));
+    transport.emitServerEvent(j04Evt(eventId: 'p4', seq: 4, type: 'status',
+        payload: {'status': 'resolved', 'permissionId': 'perm_2', 'decision': 'allow_always'}));
+    await tester.pump();
+    cards = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().toList();
+    expect(cards.length, 2);
+    expect(cards.last.resolvedDecision, 'allow_always'); // 不悬挂
+    client.dispose();
+  });
+
+  test('路线图#2 目标① 回执校验：echo permissionId 不一致不落定并提示', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
+    transport.permissionReplyEchoMismatch = true;
+    transport.emitServerEvent({
+      'version': 1,
+      'eventId': 'pe1',
+      'streamEpoch': 'ep1',
+      'sessionId': 'ses_alpha',
+      'sequence': 1,
+      'timestamp': '2026-11-12T10:00:00Z',
+      'type': 'status',
+      'payload': {'status': 'waiting', 'permissionId': 'perm_9', 'permission': 'bash', 'detail': '写文件'},
+    });
+    await Future<void>.delayed(Duration.zero);
+    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_9', decision: 'allow_once');
+    final card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().single;
+    expect(card.resolvedDecision, isNull); // 串单风险：不落定
+    expect(client.errorMessage, contains('审批'));
+    client.dispose();
+  });
+
   test('路线图#1 R9 断线时深链保留，重连后自动进入正确会话', () async {
     final transport = FakeBridgeTransport();
     final client = MobileBridgeClient(

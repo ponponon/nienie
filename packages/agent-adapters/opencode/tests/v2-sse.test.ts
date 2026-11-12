@@ -90,6 +90,17 @@ describe('V2LiveEventMapper（最小 v2 SSE 映射）', () => {
     });
   });
 
+  it('permission.replied 映射为 status resolved（归位审批卡，不悬挂）', () => {
+    const mapper = new V2LiveEventMapper();
+    const specs = mapper.map(frame('permission.replied', {
+      sessionID: 'ses_1', requestID: 'perm_9', reply: { decision: 'always' },
+    }));
+    expect(specs[0]).toMatchObject({
+      type: 'status',
+      payload: { status: 'resolved', permissionId: 'perm_9', decision: 'allow_always' },
+    });
+  });
+
   it('未知事件与无 sessionID 帧被忽略', () => {
     const mapper = new V2LiveEventMapper();
     expect(mapper.map(frame('session.created', { sessionID: 'ses_1' }))).toEqual([]);

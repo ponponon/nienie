@@ -500,11 +500,20 @@ export class PushNotificationRouter {
           : `${sessionLabel}：Agent 执行失败`;
     }
     if (!title || !rawBody) return undefined;
+    // 目标①：待审批通知直达具体 permissionId，不串单
+    const permissionId = event.payload['permissionId'];
+    const clickUrl =
+      event.type === 'status' &&
+      event.payload['status'] === 'waiting' &&
+      typeof permissionId === 'string' &&
+      permissionId.length > 0
+        ? `nienie://session/${event.sessionId}?permission=${encodeURIComponent(permissionId)}`
+        : `nienie://session/${event.sessionId}`;
     return {
       sessionId: event.sessionId,
       title,
       body: sanitizePushBody(rawBody, detailed),
-      clickUrl: `nienie://session/${event.sessionId}`,
+      clickUrl,
     };
   }
 

@@ -689,25 +689,55 @@ class MobileBridgeClient extends ChangeNotifier {
     }
   }
 
+  /// 目标③：审批幂等——已决/审批中的卡片不再重复提交，防误触与重复审批
+  final Set<String> _permissionReplyInFlight = <String>{};
+
   Future<void> replyPermission({
     required String sessionId,
     required String permissionId,
     required String decision,
   }) async {
-    await transport.sendRequest({
-      'type': 'permission.reply',
-      'requestId': _nextRequestId(),
-      'sessionId': sessionId,
-      'permissionId': permissionId,
-      'decision': decision,
-    });
     final items = _timelineBySession[sessionId];
+    PermissionRequestCardItem? target;
     if (items != null) {
       for (final item in items) {
         if (item is PermissionRequestCardItem && item.permissionId == permissionId) {
-          item.resolvedDecision = decision;
+          target = item;
+          break;
         }
       }
+    }
+    if (target != null && target.resolvedDecision != null) return; // 已决：拒绝重复审批
+    if (!_permissionReplyInFlight.add(permissionId)) return; // 审批中：防双击
+    if (target != null) target.replyPending = true;
+    notifyListeners();
+    try {
+      final res = await transport.sendRequest({
+        'type': 'permission.reply',
+        'requestId': _nextRequestId(),
+        'sessionId': sessionId,
+        'permissionId': permissionId,
+        'decision': decision,
+      });
+      if (res['ok'] != true) {
+        throw StateError('permission reply failed');
+      }
+      // 目标①：回执校验——响应必须回显同一 permissionId，否则视为串单风险，不落定
+      final data = res['data'] as Map<String, dynamic>?;
+      final echoedId = data?['permissionId'] as String?;
+      if (echoedId != null && echoedId != permissionId) {
+        throw StateError('permission reply echo mismatch');
+      }
+      if (target != null) {
+        target.resolvedDecision = decision;
+        target.replyPending = false;
+      }
+      focusedPermissionId = null;
+    } catch (_) {
+      if (target != null) target.replyPending = false;
+      errorMessage = '审批提交失败，请重试';
+    } finally {
+      _permissionReplyInFlight.remove(permissionId);
       notifyListeners();
     }
   }
@@ -898,12 +928,18 @@ class MobileBridgeClient extends ChangeNotifier {
 
   /// 深链目标会话（R9）：nienie://session/<id> 通知点击直达会话。
   String? pendingDeepLinkSessionId;
+  /// 深链目标审批（目标①）：nienie://session/<id>?permission=<pid> 直达具体待审批项。
+  String? pendingDeepLinkPermissionId;
+  /// 当前聚焦的待审批 permissionId（UI 高亮该卡片，绝不串单）。
+  String? focusedPermissionId;
 
   /// 处理通知深链。返回是否识别。未配对/未加载时先挂起，sessions 刷新后自动进入。
   bool handleDeepLink(Uri uri) {
     if (uri.scheme != 'nienie') return false;
     if (uri.host == 'session' && uri.pathSegments.isNotEmpty) {
       pendingDeepLinkSessionId = uri.pathSegments.first;
+      final permission = uri.queryParameters['permission'];
+      pendingDeepLinkPermissionId = (permission != null && permission.isNotEmpty) ? permission : null;
       unawaited(_consumePendingDeepLink());
       notifyListeners();
       return true;
@@ -922,6 +958,11 @@ class MobileBridgeClient extends ChangeNotifier {
       await openSession(match);
       // 只有真正进入会话才清除，失败/异常保留等待重连后再消费
       pendingDeepLinkSessionId = null;
+      final permission = pendingDeepLinkPermissionId;
+      if (permission != null) {
+        pendingDeepLinkPermissionId = null;
+        focusedPermissionId = permission;
+      }
     } catch (_) {
       // 保留 pendingDeepLinkSessionId
     }
@@ -1226,14 +1267,40 @@ class MobileBridgeClient extends ChangeNotifier {
           final permission = event.payload['permission'] as String? ?? 'permission';
           final detail = event.payload['detail'] as String? ?? 'Permission requested';
           final rawPatterns = event.payload['patterns'] as List<dynamic>? ?? const [];
-          items.add(
-            PermissionRequestCardItem(
-              permissionId: permissionId,
-              permission: permission,
-              detail: detail,
-              patterns: rawPatterns.map((e) => e.toString()).toList(),
-            ),
-          );
+          // 目标①：按 permissionId upsert，重复询问不堆叠卡片（不串单）
+          PermissionRequestCardItem? existing;
+          for (final item in items) {
+            if (item is PermissionRequestCardItem && item.permissionId == permissionId) {
+              existing = item;
+              break;
+            }
+          }
+          if (existing != null) {
+            if (existing.resolvedDecision == null) {
+              existing.permission = permission;
+              existing.detail = detail;
+              existing.patterns = rawPatterns.map((e) => e.toString()).toList();
+            }
+          } else {
+            items.add(
+              PermissionRequestCardItem(
+                permissionId: permissionId,
+                permission: permission,
+                detail: detail,
+                patterns: rawPatterns.map((e) => e.toString()).toList(),
+              ),
+            );
+          }
+        } else if (status == 'resolved' && permissionId != null) {
+          // 目标①：permission.replied 归位——他人/其他端审批后卡片立即定格，不悬挂
+          final decision = event.payload['decision'] as String?;
+          for (final item in items) {
+            if (item is PermissionRequestCardItem &&
+                item.permissionId == permissionId &&
+                item.resolvedDecision == null) {
+              item.resolvedDecision = decision ?? 'allow_once';
+            }
+          }
         }
         break;
 

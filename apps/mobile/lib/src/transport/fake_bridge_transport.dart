@@ -9,6 +9,7 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<String?> sentModelIds = [];
   final List<String?> sentClientMessageIds = [];
   bool diffUnavailable = false;
+  bool permissionReplyEchoMismatch = false;
   List<Map<String, dynamic>> diffResponse = [
     {
       'diffId': 'd1',
@@ -207,7 +208,9 @@ class FakeBridgeTransport implements BridgeTransport {
           'data': {
             'replied': true,
             'sessionId': request['sessionId'],
-            'permissionId': request['permissionId'],
+            'permissionId': permissionReplyEchoMismatch
+                ? '${request['permissionId']}_mismatch'
+                : request['permissionId'],
             'decision': request['decision'],
           },
         };
