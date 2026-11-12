@@ -535,3 +535,12 @@
 - **P2 一并**：sessionIndex 预热可等待（消冷启动竞态）、sendTestNotification 直发不经 Router（绝不静默成功）、createDesktopPreloadApi 由 DESKTOP_PRELOAD_METHODS 统一构建、auto 识别域名收紧（day.app/官方 ntfy 域，自建用显式类型）+ 边界测试。
 - **多设备语义明确**：当前推送门禁为全局单设备语义（任一授权端在线即不推送）；多设备级门禁与应用层 ACK 留待后续（FEATURE 与路线图不宣称多设备闭环）。
 - 测试：bridge-core 50（+4）+ desktop 6（含 CSRF 拒绝）+ mobile 34（+1 断线深链）；全仓 214 vitest 全绿。
+
+### 2026-11-11 路线图#1 Round 4（封板条件四项）
+
+- **延迟重试队列**（R3-4）：后台退避重试 1s/5s/15s/60s（可注入调度器/序列），per-target 重试、全部目标成功才记 delivered、期间 inFlight 去重防并发重复、超限终态失败经 onDeliveryError 记录并释放 inFlight 允许后续重触发——「两次立即失败永久丢通知」的缺陷消除。
+- **路径脱敏重做**（R8）：独立 PATH_SEGMENT 字符类（含空格/Unicode，排除标点边界），POSIX/Windows 盘符/UNC 三类正则，整条折叠为 `~/`/`…/`+文件名（basename 不合法则整体 `…`）；带空格路径（`My Documents/private project`）与 UNC 回归测试通过；修掉字符类被 `]` 提前闭合的静默失效 bug。
+- **Preview Server Host 校验**（安全）：全路由入口校验 Host ∈ {127.0.0.1:port, localhost:port, [::1]:port}（防 DNS Rebinding）；`/api/state`（含 webhook 凭据字段）带 Origin 时仅允许本机来源；node:http 原始请求测试伪造 Host → 403、恶意 Origin → 403、正常 → 200。
+- **空配置语义**：webhookSender 闭包空 URL 抛错按投递失败处理（绝不静默记 delivered），重复事件可重触发。
+- 并发相同事件 in-flight 去重测试（gate 拦截验证只派发一次）；凭据存储定位修正为「文件权限保护（0600）」，不宣称加密（safeStorage/Keychain 留后续）。
+- 测试：bridge-core 53（+3：重试恢复/终态/并发/空配置）+ desktop 6（+Host/Origin 拒绝）；全仓 217 vitest + 11 typecheck 零 error 全绿。

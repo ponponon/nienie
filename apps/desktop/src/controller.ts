@@ -239,7 +239,8 @@ export class DesktopBridgeController {
       // R3：发送器每次发送时读取最新配置，改 URL 保存后立即生效
       webhookSender: async (message) => {
         const url = this.notificationWebhookUrl.trim();
-        if (!url) return;
+        // 空配置按投递失败处理（R3-4）：绝不静默记 delivered
+        if (!url) throw new Error('notification webhook not configured');
         const sender = createPushSender({ type: this.notificationSenderType, url });
         await sender.send(message);
       },

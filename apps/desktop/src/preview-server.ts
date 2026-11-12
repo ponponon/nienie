@@ -23,6 +23,17 @@ export type DesktopPreviewServerOptions = {
 
 export class DesktopPreviewServer {
   private readonly csrfToken = randomBytes(24).toString('hex');
+  private boundPort: number | undefined;
+
+  private isLocalOrigin(origin: string): boolean {
+    let originHost = '';
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      return false;
+    }
+    return /^localhost(:\d+)?$|^127\.0\.0\.1(:\d+)?$|^\[::1\](:\d+)?$/.test(originHost);
+  }
   private readonly controller: DesktopBridgeController;
   private readonly host: string;
   private readonly requestedPort: number;
@@ -80,6 +91,7 @@ export class DesktopPreviewServer {
     if (!addr || typeof addr === 'string') {
       throw new Error('DesktopPreviewServer is not listening on a TCP port');
     }
+    this.boundPort = addr.port;
     return {
       host: this.host,
       port: addr.port,
@@ -124,6 +136,18 @@ export class DesktopPreviewServer {
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // Host 校验（R3-4）：防 DNS Rebinding——只接受本机监听地址的 Host，其余一律 403
+    const hostHeader = req.headers['host'] ?? '';
+    const allowedHosts = new Set([
+      `127.0.0.1:${this.boundPort ?? 0}`,
+      `localhost:${this.boundPort ?? 0}`,
+      `[::1]:${this.boundPort ?? 0}`,
+    ]);
+    if (!allowedHosts.has(hostHeader)) {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Host not allowed' }));
+      return;
+    }
     const url = new URL(req.url ?? '/', `http://${this.host}`);
 
     if (req.method === 'GET' && url.pathname === '/api/hot-reload') {
@@ -180,6 +204,13 @@ export class DesktopPreviewServer {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/state') {
+      // /api/state 含 webhook 配置等敏感字段：带 Origin 时仅允许本机来源
+      const stateOrigin = req.headers['origin'];
+      if (stateOrigin !== undefined && !this.isLocalOrigin(String(stateOrigin))) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Origin not allowed' }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(this.controller.getState()));
       return;
@@ -239,19 +270,10 @@ export class DesktopPreviewServer {
         res.end(JSON.stringify({ ok: false, error: 'Invalid CSRF token' }));
         return;
       }
-      if (origin !== undefined) {
-        let originHost = '';
-        try {
-          originHost = new URL(String(origin)).host;
-        } catch {
-          originHost = '';
-        }
-        const isLocalOrigin = /^localhost(:\d+)?$|^127\.0\.0\.1(:\d+)?$|^\[::1\](:\d+)?$/.test(originHost);
-        if (!isLocalOrigin) {
-          res.writeHead(403, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'Origin not allowed' }));
-          return;
-        }
+      if (origin !== undefined && !this.isLocalOrigin(String(origin))) {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Origin not allowed' }));
+        return;
       }
       const body = (await readJsonBody(req)) as { channel?: string; args?: unknown[] };
       if (!body.channel || !allowedChannels.has(body.channel)) {

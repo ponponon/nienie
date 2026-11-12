@@ -77,7 +77,7 @@ P0 功能阻塞：
 P1：
 - [x] R6 多设备目标与去重语义（Webhook 单目标只发一次；APNS/FCM 按设备）
 - [x] R7 注册持久化 + 撤销清理（registrations 内存 Map 重启丢失；revokeDevice 不清理注册）
-- [x] R8 外发隐私（路径脱敏、隐私提示文案、URL 校验 http/https+禁 userinfo、凭据安全存储）
+- [x] R8 外发隐私（路径脱敏、隐私提示文案、URL 校验 http/https+禁 userinfo、凭据文件权限保护（0600；系统级加密存储 safeStorage/Keychain 留待后续，不宣称已加密））
 - [x] R9 通知点击跳转与审批入口（ntfy X-Click/X-Actions、Bark url 字段；审批不走未认证 HTTP Action，只深链到 App 内审批页）——含 E2E：配置→发送→手机收到→点击进会话→完成审批
 - [x] R10 测试按钮吃草稿 URL（应测输入框当前值，非旧配置；文案改「Webhook 连接成功」）
 

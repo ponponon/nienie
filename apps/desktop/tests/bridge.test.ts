@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -347,6 +347,33 @@ describe('desktop bridge composition', () => {
     expect(csrfMatch).not.toBeNull();
     const csrfToken = csrfMatch![1]!;
     const ipcHeaders = { 'content-type': 'application/json', 'x-nienie-csrf': csrfToken };
+
+    // 1a. Host 校验（防 DNS Rebinding）：伪造 Host 一律 403（fetch 禁改 Host，用 node:http 原始请求）
+    const rawHostStatus = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port: new URL(url).port,
+          path: '/api/state',
+          headers: { host: 'attacker.example' },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    expect(rawHostStatus).toBe(403);
+    const evilOrigin = await fetch(`${url}/api/state`, {
+      headers: { origin: 'https://attacker.example' },
+    });
+    expect(evilOrigin.status).toBe(403);
+    const okState = await fetch(`${url}/api/state`, {
+      headers: { origin: url },
+    });
+    expect(okState.status).toBe(200);
 
     // 1b. CSRF 防护：无 token / 错误 Origin 拒绝
     const noToken = await fetch(`${url}/api/ipc`, {

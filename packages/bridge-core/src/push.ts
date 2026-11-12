@@ -52,24 +52,34 @@ export function validateWebhookUrl(raw: string): string | undefined {
   return url.toString().replace(/\/+$/, '');
 }
 
-/** 外发隐私脱敏（R8）：密钥类走 redactLogText；详细模式关闭时整路径折叠为 ~/或…/ + 文件名，
- *  不泄漏项目名/目录结构；覆盖 macOS/Linux/Windows/UNC 路径。 */
+/** 路径脱敏（R3-4）：识别 POSIX/Windows 盘符/UNC 绝对路径（允许空格与 Unicode），整条折叠为 ~/或…/ + 文件名。
+ *  无法可靠识别时宁可整体折叠，不泄露目录结构/项目名。 */
+const PATH_SEGMENT = '[^\\\\/:*?"<>|,;!?()\\[\\]{}\\n\\r\\t\'`\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u3001\u201C\u201D\u3010\u3011]';
+const WIN_PATH_RE = new RegExp(`[A-Za-z]:[\\\\/](?:${PATH_SEGMENT}+[\\\\/])*${PATH_SEGMENT}+`, 'g');
+const UNC_PATH_RE = new RegExp(`\\\\\\\\${PATH_SEGMENT}+\\\\(?:${PATH_SEGMENT}+\\\\)*${PATH_SEGMENT}+`, 'g');
+const POSIX_PATH_RE = new RegExp(`/(?:${PATH_SEGMENT}+/)+${PATH_SEGMENT}+`, 'g');
+
+function redactPathMatch(match: string, style: 'home' | 'ellipsis' | 'unc'): string {
+  const parts = match.split(/[\\\\/]/).filter((part) => part.length > 0);
+  const base = parts[parts.length - 1] ?? '';
+  const label = /^[\w\-. ]{1,64}$/.test(base) ? base : '\u2026';
+  if (style === 'home') return `~/${label}`;
+  if (style === 'unc') return `\\\\\u2026\\${label}`;
+  return `\u2026/${label}`;
+}
+
 export function sanitizePushBody(text: string, detailed: boolean): string {
   const secrets = redactLogText(text);
   if (detailed) return secrets;
   return secrets
-    .replace(/[A-Za-z]:[\\/](?:Users|home)[\\/][^\\/:*?"<>|\s]+(?:[\\/][^\\/:*?"<>|\s]+)*/gi, (match) => {
-      const parts = match.split(/[\\/]/);
-      return `~/${parts[parts.length - 1]}`;
-    })
-    .replace(/\/(?:Users|home)\/[^/\s]+(?:\/[^/\s]+)*/g, (match) => {
-      const parts = match.split('/');
-      return `~/${parts[parts.length - 1]}`;
-    })
-    .replace(/\\\\[^\\\s]+\\(?:[^\\\s]+\\)*([^\\\s]+)/g, '\\\\…\\$1')
-    .replace(/\/(?:private\/)?var\/folders\/\S+/g, '…')
-    .replace(/\/(?:[\w.-]+\/)+([\w.-]+)/g, '…/$1')
-    .replace(/[A-Za-z]:\\(?:[\w.-]+\\)+([\w.-]+)/g, '…\\$1');
+    .replace(/\/?(?:private\/)?var\/folders\/\S+/g, '\u2026')
+    .replace(UNC_PATH_RE, (match) => redactPathMatch(match, 'unc'))
+    .replace(WIN_PATH_RE, (match) =>
+      redactPathMatch(match, /^[A-Za-z]:[\\\\/]Users[\\\\/]/.test(match) ? 'home' : 'ellipsis'),
+    )
+    .replace(POSIX_PATH_RE, (match) =>
+      redactPathMatch(match, /^\/(?:Users|home)\//.test(match) ? 'home' : 'ellipsis'),
+    );
 }
 
 function encodeHeaderUtf8(value: string): string {
@@ -225,6 +235,19 @@ export type PushNotificationRouterOptions = {
   preferences?: Partial<PushNotificationPreferences> | undefined;
   /** 通知投递失败回调（通知失败绝不影响主链路，R4）。 */
   onDeliveryError?: ((error: unknown) => void) | undefined;
+  /** 重试退避序列（ms）；默认 1s/5s/15s/60s（R3-4）。 */
+  retryDelaysMs?: number[] | undefined;
+  /** 可注入调度器（测试用）；默认 setTimeout（unref）。 */
+  scheduleRetry?: ((fn: () => void, ms: number) => void) | undefined;
+};
+
+const DEFAULT_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
+
+type RetryJob = {
+  key: string;
+  sender: PushSender;
+  message: Parameters<PushSender>[0];
+  attempts: number;
 };
 
 function parseHm(value: string): number | undefined {
@@ -254,7 +277,11 @@ export class PushNotificationRouter {
   private readonly deviceSender: PushSender | undefined;
   private readonly resolveSessionTitle: ((sessionId: string) => string | undefined) | undefined;
   private readonly onDeliveryError: ((error: unknown) => void) | undefined;
-  private readonly seenEventIds = new Set<string>();
+  private readonly retryDelaysMs: number[];
+  private readonly scheduleRetry: (fn: () => void, ms: number) => void;
+  private readonly deliveredEventIds = new Set<string>();
+  private readonly inFlightEventIds = new Set<string>();
+  private readonly pendingByKey = new Map<string, number>();
   private preferences: PushNotificationPreferences = { ...DEFAULT_PUSH_PREFERENCES };
 
   constructor(options: PushNotificationRouterOptions = {}) {
@@ -262,6 +289,13 @@ export class PushNotificationRouter {
     this.deviceSender = options.deviceSender;
     this.resolveSessionTitle = options.resolveSessionTitle;
     this.onDeliveryError = options.onDeliveryError;
+    this.retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+    this.scheduleRetry =
+      options.scheduleRetry ??
+      ((fn, ms) => {
+        const timer = setTimeout(fn, ms);
+        timer.unref?.();
+      });
     if (options.preferences) {
       this.preferences = { ...this.preferences, ...options.preferences };
     }
@@ -307,14 +341,15 @@ export class PushNotificationRouter {
     });
   }
 
-  /** 事件通知：绝不抛出（R4）。投递策略：webhook 全局单目标一次；设备级（apns/fcm）按注册逐设备。
-   *  失败重试一次；只有投递成功才记入 eventId 去重（失败允许后续重复事件触发重试，R3-1）。 */
+  /** 事件通知：绝不抛出（R4）。webhook 全局单目标；设备级（apns/fcm）按注册逐设备。
+   *  后台延迟重试队列（1s/5s/15s/60s）：短暂故障不丢通知；inFlight 防并发重复；全部目标成功才记 delivered；
+   *  超过最大次数记明确终态失败且释放 inFlight（允许后续重复事件重新触发）。 */
   async notifyEvent(
     event: CanonicalAgentEvent,
     context: { sessionTitle?: string | undefined; summary?: string | undefined; now?: Date } = {},
   ): Promise<void> {
     const dedupeKey = `${event.sessionId}#${event.streamEpoch}#${event.eventId}`;
-    if (this.seenEventIds.has(dedupeKey)) return;
+    if (this.deliveredEventIds.has(dedupeKey) || this.inFlightEventIds.has(dedupeKey)) return;
     try {
       if (!this.shouldDeliver(event, context.now ?? new Date())) return;
       const sessionLabel =
@@ -322,40 +357,76 @@ export class PushNotificationRouter {
       const message = this.composeMessage(event, sessionLabel, context.summary);
       if (!message) return;
       const timestamp = Date.now();
-      const tasks: Array<Promise<void>> = [];
+      const jobs: RetryJob[] = [];
       if (this.webhookSender) {
-        tasks.push(this.deliverWithRetry(this.webhookSender, { ...message, platform: 'unknown', provider: 'webhook', pushToken: 'webhook', deviceId: 'webhook', timestamp }));
+        jobs.push({
+          key: dedupeKey,
+          attempts: 0,
+          sender: this.webhookSender,
+          message: { ...message, platform: 'unknown', provider: 'webhook', pushToken: 'webhook', deviceId: 'webhook', timestamp },
+        });
       }
       if (this.deviceSender) {
         const seen = new Set<string>();
         for (const reg of this.registrations.values()) {
-          const key = `${reg.provider}:${reg.pushToken}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          tasks.push(this.deliverWithRetry(this.deviceSender, { ...message, deviceId: reg.deviceId, platform: reg.platform, provider: reg.provider, pushToken: reg.pushToken, timestamp }));
+          const target = `${reg.provider}:${reg.pushToken}`;
+          if (seen.has(target)) continue;
+          seen.add(target);
+          jobs.push({
+            key: dedupeKey,
+            attempts: 0,
+            sender: this.deviceSender,
+            message: { ...message, deviceId: reg.deviceId, platform: reg.platform, provider: reg.provider, pushToken: reg.pushToken, timestamp },
+          });
         }
       }
-      await Promise.all(tasks);
-      this.markDelivered(dedupeKey);
+      if (jobs.length === 0) return;
+      this.inFlightEventIds.add(dedupeKey);
+      this.pendingByKey.set(dedupeKey, jobs.length);
+      for (const job of jobs) {
+        void this.runJob(job);
+      }
     } catch (error) {
-      // 失败不记 dedupeKey：同一事件再次到达可重试投递
       this.onDeliveryError?.(error);
     }
   }
 
-  private async deliverWithRetry(sender: PushSender, message: Parameters<PushSender>[0]): Promise<void> {
+  private async runJob(job: RetryJob): Promise<void> {
     try {
-      await sender(message);
-    } catch {
-      await sender(message);
+      await job.sender(job.message);
+      this.settleJob(job.key, true);
+    } catch (error) {
+      const delay = this.retryDelaysMs[job.attempts];
+      if (delay === undefined) {
+        // 终态失败：明确记录并释放 inFlight，允许同一事件的后续副本重新触发
+        this.onDeliveryError?.(error);
+        this.settleJob(job.key, false);
+        return;
+      }
+      this.scheduleRetry(() => {
+        void this.runJob({ ...job, attempts: job.attempts + 1 });
+      }, delay);
     }
   }
 
+  private settleJob(key: string, succeeded: boolean): void {
+    const remaining = (this.pendingByKey.get(key) ?? 1) - 1;
+    if (remaining > 0) {
+      this.pendingByKey.set(key, remaining);
+      if (succeeded) this.markDelivered(key);
+      return;
+    }
+    this.pendingByKey.delete(key);
+    this.inFlightEventIds.delete(key);
+    if (succeeded) this.markDelivered(key);
+  }
+
   private markDelivered(key: string): void {
-    this.seenEventIds.add(key);
-    if (this.seenEventIds.size > MAX_DEDUPE_EVENTS) {
-      const first = this.seenEventIds.values().next().value;
-      if (first !== undefined) this.seenEventIds.delete(first);
+    if (this.deliveredEventIds.has(key)) return;
+    this.deliveredEventIds.add(key);
+    if (this.deliveredEventIds.size > MAX_DEDUPE_EVENTS) {
+      const first = this.deliveredEventIds.values().next().value;
+      if (first !== undefined) this.deliveredEventIds.delete(first);
     }
   }
 

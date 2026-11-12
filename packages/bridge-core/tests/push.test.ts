@@ -147,12 +147,13 @@ describe('PushNotificationRouter（路线图 1.2-1.5）', () => {
     expect(deviceSent).toHaveLength(2);
   });
 
-  it('R4：投递异常被吞掉不外抛，经 onDeliveryError 上报', async () => {
+  it('R4：投递异常被吞掉不外抛，经 onDeliveryError 上报（终态失败）', async () => {
     const errors: unknown[] = [];
     const router = new PushNotificationRouter({
       webhookSender: async () => {
         throw new Error('hook 500');
       },
+      retryDelaysMs: [],
       onDeliveryError: (error) => errors.push(error),
     });
     await expect(
@@ -286,25 +287,94 @@ describe('R3 第三轮：可靠性与脱敏', () => {
     expect(sanitizePushBody('cat /Users/alice/Company/x.ts', true)).toContain('/Users/alice/Company/x.ts');
   });
 
-  it('投递失败不记 dedupeKey：同一事件再次到达可重试；成功后才去重', async () => {
+  it('后台延迟重试队列：短暂故障后自动恢复；成功才 delivered；期间同事件不重复', async () => {
     const sent: PushNotificationMessage[] = [];
-    let failFirst = 2; // 前两次（含重试）失败，之后成功
+    let failures = 2;
+    const scheduled: Array<() => void> = [];
     const router = new PushNotificationRouter({
       webhookSender: async (message) => {
-        if (failFirst > 0) {
-          failFirst -= 1;
-          throw new Error('hook down');
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('hook 503');
         }
+        sent.push(message);
+      },
+      retryDelaysMs: [1, 2],
+      scheduleRetry: (fn) => {
+        scheduled.push(fn);
+      },
+    });
+    const same = event({ type: 'status', payload: { status: 'idle' } });
+    await router.notifyEvent(same, { now }); // 首次失败 → 排入重试
+    expect(sent).toHaveLength(0);
+    await router.notifyEvent(same, { now }); // inFlight：不重复派发
+    expect(scheduled).toHaveLength(1);
+    scheduled.shift()!(); // 第 1 次重试仍失败 → 再排队
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toHaveLength(0);
+    scheduled.shift()!(); // 第 2 次重试成功
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toHaveLength(1);
+    await router.notifyEvent(same, { now }); // delivered → 去重
+    expect(sent).toHaveLength(1);
+  });
+
+  it('重试超限终态失败：onDeliveryError 记录并释放 inFlight 允许后续重触发', async () => {
+    const errors: unknown[] = [];
+    let sends = 0;
+    const router = new PushNotificationRouter({
+      webhookSender: async () => {
+        sends += 1;
+        throw new Error('hook down');
+      },
+      retryDelaysMs: [1],
+      onDeliveryError: (error) => errors.push(error),
+    });
+    const same = event({ type: 'status', payload: { status: 'idle' } });
+    await router.notifyEvent(same, { now });
+    await new Promise((r) => setTimeout(r, 5)); // 等重试执行完（重试 1 次后终态）
+    expect(sends).toBe(2); // 首次 + 1 次重试
+    expect(errors).toHaveLength(1);
+    // inFlight 释放后，同一事件再次到达允许重新触发
+    await router.notifyEvent(same, { now });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(sends).toBe(4);
+  });
+
+  it('并发相同事件只派发一次（in-flight 去重）', async () => {
+    const sent: PushNotificationMessage[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const router = new PushNotificationRouter({
+      webhookSender: async (message) => {
+        await gate;
         sent.push(message);
       },
     });
     const same = event({ type: 'status', payload: { status: 'idle' } });
-    await router.notifyEvent(same, { now }); // 两次都失败
-    expect(sent).toHaveLength(0);
-    await router.notifyEvent(same, { now }); // 再次到达：重试成功
+    const a = router.notifyEvent(same, { now });
+    const b = router.notifyEvent(same, { now });
+    release();
+    await Promise.all([a, b]);
     expect(sent).toHaveLength(1);
-    await router.notifyEvent(same, { now }); // 已送达 → 去重
-    expect(sent).toHaveLength(1);
+  });
+
+  it('空配置 webhookSender 抛错时按失败处理，绝不静默记 delivered', async () => {
+    const errors: unknown[] = [];
+    const router = new PushNotificationRouter({
+      webhookSender: async () => {
+        throw new Error('notification webhook not configured');
+      },
+      retryDelaysMs: [],
+      onDeliveryError: (error) => errors.push(error),
+    });
+    const same = event({ type: 'status', payload: { status: 'idle' } });
+    await router.notifyEvent(same, { now });
+    expect(errors).toHaveLength(1);
+    await router.notifyEvent(same, { now }); // 未 delivered → 允许重触发
+    expect(errors).toHaveLength(2);
   });
 
   it('完成通知带真实摘要；无摘要时降级为普通完成通知', async () => {
