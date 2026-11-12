@@ -591,5 +591,11 @@
 - **平台化边界语义**（不再对所有 OS 用同一 HARD_STOP 假设）：POSIX 文件名仅排除 `/` 与 NUL——`"` `<` `>` `|` 均为合法路径字符，POSIX 路径的中段/守卫只以换行为界；Windows/UNC 路径仍以 Windows 禁用字符（`" < > | ? *`）为终止。引号包裹的路径随匹配吞掉并剥离。
 - 你点名的反例通过：`cat '/Users/alice/.private"secret/src/main.py'` → `cat ~/main.py`（目录名 `secret` 不泄漏）；`x<y|z>/src/main.ts` → `~/main.ts`；`a<b>c/d<e` → `~/…`。
 - 顺带修两处静默未生效的旧补丁（扩展名词边界 `(?![\w-])` 防 `.v1` 的 `.v` 被当扩展名、WIN 规则补全句守卫）——这正是 `.private` 反例的另一半根因。
-- 计数口径修正：以 CI 日志为准，本轮全仓 242 vitest（protocol 9 / agent-events 23 / 适配器 9 / opencode 120 / bridge-core 75 / desktop 6）。
+- 计数口径修正：以 CI 日志为准，本轮全仓 242 vitest（protocol 9 / agent-events 23 / 适配器 10 / opencode 120 / bridge-core 75 / desktop 6 = 243，以 CI 为准）。
 - 路径脱敏反例全集 R5.2→5.4d 共 30+ 例全部入回归。
+
+### 2026-11-12 路线图#1 通知系统 正式 ACCEPTED（结项）
+
+- ChatGPT 终审签署：**路线图 #1 正式 ACCEPTED**（commit 87cdeb9，CI 243/243 全绿，六项封板标准全达成，未发现新增隐私泄漏）。验收维度：CI 确定性、多目标 delivered 语义、in-flight 并发去重、Host/Origin 安全、路径脱敏（R5.2～5.4d 六轮隐私边界）、深链断线恢复。
+- 非阻断记录：PATH_ROOT 平台规则重叠（POSIX 规则先于 Windows 规则执行，Windows 路径被保守过度折叠——不泄漏、仅过度），登记在案不再扩展。
+- **路线图 #2 三大目标**（ChatGPT 定调）：①精准定位（通知/审批卡/WebSocket 全部正确关联 permissionId 不串单）；②理解操作（按实际 permission payload 展示操作/命令/工作目录/影响，不凭空推断）；③防误操作（批准/拒绝明确区分，防误触/重复审批/过期审批）。流程要求：先审查现有 Permission 协议、后端审批流、手机端 UI，再定改造方案。
