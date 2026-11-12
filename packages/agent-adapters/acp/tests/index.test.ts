@@ -117,7 +117,7 @@ describe('AcpAdapter', () => {
           isError: false,
         },
       },
-      { seq: 4, type: 'text_delta', payload: { delta: 'Done reading README.' } },
+      { seq: 4, type: 'text_delta', payload: { delta: 'Done reading README.', role: 'assistant' } },
       // v1：prompt 响应=turn 完成 → 派发语义下以 status 事件补报结束
       { seq: 5, type: 'status', payload: { status: 'idle', detail: 'ACP turn completed' } },
     ]);
@@ -201,14 +201,16 @@ describe('AcpAdapter', () => {
     await expect(adapter.sendMessage(session.id, 'hi')).rejects.toThrow(/messageId/);
   });
 
-  it('F4-A v2 initialize 被拒（JSON-RPC 错误带 code）回落 v1；传输层错误不盲目重试', async () => {
+  it('F4-A v2 initialize 被拒（JSON-RPC 数字错误码）回落 v1；网络错误不盲目重试', async () => {
     let initCount = 0;
+    const initCalls: Array<{ method: string; params?: Record<string, unknown> | undefined }> = [];
     const transport: AcpTransport = {
-      async request(method) {
+      async request(method, params) {
         if (method === 'initialize') {
           initCount++;
+          initCalls.push({ method, params });
           if (initCount === 1) {
-            throw { code: -32602, message: 'unsupported protocolVersion' }; // 协议拒绝
+            throw { code: -32022, message: 'unsupported protocol version' }; // 版本类协议拒绝
           }
           return { protocolVersion: 1, agentInfo: { version: '1.0.0' } };
         }
@@ -224,14 +226,21 @@ describe('AcpAdapter', () => {
     expect(info.available).toBe(true);
     expect(info.version).toBe('1.0.0');
     expect(initCount).toBe(2); // v2 被拒 → v1 重试
+    // F4-1：v1 回落必须使用 v1 参数形态（clientInfo/clientCapabilities，非 v2 的 info/capabilities）
+    expect(initCalls[1]!.params).toMatchObject({
+      protocolVersion: 1,
+      clientInfo: { name: 'nienie-bridge' },
+      clientCapabilities: {},
+    });
+    expect(initCalls[1]!.params).not.toHaveProperty('info');
 
-    // 传输层错误（无 code）不重试 initialize
+    // F4-1：网络错误（字符串 code，如 ECONNRESET）不重试 initialize
     let initCount2 = 0;
     const broken: AcpTransport = {
       async request(method) {
         if (method === 'initialize') {
           initCount2++;
-          throw new Error('socket closed');
+          throw { code: 'ECONNRESET', message: 'socket hang up' };
         }
         return {};
       },
@@ -244,6 +253,110 @@ describe('AcpAdapter', () => {
     const info2 = await adapter2.detect();
     expect(info2.available).toBe(false);
     expect(initCount2).toBe(1);
+  });
+
+  it('F4-2 v2 历史回放归约：user_message/agent_message/tool_call_update 创建/content chunk', async () => {
+    const listeners = new Set<(notification: unknown) => void>();
+    const transport: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          return {
+            protocolVersion: 2,
+            info: { name: 'demo', title: 'Demo', version: '2.0.0' },
+            capabilities: {},
+          };
+        }
+        return {};
+      },
+      onNotification(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      async close() {
+        listeners.clear();
+      },
+    };
+    const adapter = new AcpAdapter({ transport });
+    await adapter.detect();
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((e) => events.push(e));
+    const emit = (update: Record<string, unknown>) => {
+      for (const listener of listeners) {
+        listener({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: { sessionId: 'acp_ses_replay', update },
+        });
+      }
+    };
+
+    emit({ sessionUpdate: 'user_message', content: { type: 'text', text: '帮我修 bug' } });
+    emit({ sessionUpdate: 'agent_message', content: { type: 'text', text: '好的' } });
+    emit({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call_1',
+      title: 'fs.read',
+      status: 'running',
+      rawInput: { path: 'a.ts' },
+    });
+    emit({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call_1',
+      status: 'running',
+      rawContent: undefined,
+      content: 'chunk-1',
+    } as Record<string, unknown>);
+    emit({
+      sessionUpdate: 'tool_call_content_chunk',
+      toolCallId: 'call_1',
+      content: '+chunk-2',
+    });
+    emit({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call_1',
+      status: 'completed',
+      rawOutput: 'final output',
+    });
+
+    const userMsg = events.find((e) => e.payload?.role === 'user');
+    expect(userMsg).toBeDefined();
+    expect(String(userMsg!.payload?.delta)).toContain('帮我修 bug'); // 历史用户消息不丢
+    const asstMsg = events.find((e) => e.payload?.role === 'assistant');
+    expect(String(asstMsg!.payload?.delta)).toBe('好的');
+    // tool_call_update 创建工具调用（v2 无 tool_call）且只建一次
+    expect(events.filter((e) => e.type === 'tool_use')).toHaveLength(1);
+    const results = events.filter((e) => e.type === 'tool_result');
+    expect(String(results[results.length - 1]!.payload?.content)).toBe('final output'); // 终态覆盖累积
+  });
+
+  it('F4-3 session/resume 使用会话已有 projectPath（不传错工作目录）', async () => {
+    const calls: Array<{ method: string; params?: Record<string, unknown> | undefined }> = [];
+    const transport: AcpTransport = {
+      async request(method, params) {
+        calls.push({ method, params });
+        if (method === 'initialize') {
+          return {
+            protocolVersion: 2,
+            info: { name: 'demo', title: 'Demo', version: '2.0.0' },
+            capabilities: {},
+          };
+        }
+        if (method === 'session/new') {
+          return { sessionId: 'acp_ses_cwd' };
+        }
+        return {};
+      },
+      onNotification() {
+        return () => undefined;
+      },
+      async close() {},
+    };
+    const adapter = new AcpAdapter({ transport, defaultProjectPath: '/default/cwd' });
+    await adapter.detect();
+    await adapter.createSession({ title: 'Cwd', projectPath: '/workspace/custom' });
+    await adapter.loadSession('acp_ses_cwd');
+    const resume = calls.find((c) => c.method === 'session/resume');
+    expect(resume!.params!.cwd).toBe('/workspace/custom');
   });
 
   it('F4-D requires_action 映射 waiting（不显示 Thinking）', async () => {

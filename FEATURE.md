@@ -707,3 +707,13 @@
 - **F4 ACP v2 协议合规**：①initialize 携带 `info{name,title,version}`+`capabilities{}`，v2 响应读 `info.version`（agentInfo 为 v1 字段兼容读取）；②v2 恢复用 `session/resume`+`replayFrom:{type:'start'}`（v1 保留 session/load）；③v2 prompt 响应**缺 messageId 直接抛错**（拒绝假送达）；④`requires_action` 映射 `waiting`（不再当 running 显示 Thinking）；⑤initialize 回落 v1 仅在协议拒绝（错误带 code）时进行，传输层错误不盲目重试（legacy Agent 不支持重复初始化，由上层重建连接后重新协商）。
 - **F5 await 前同步启动占位**：三 adapter `startingSessions:Set` ——检查+占位在任何 await 之前原子完成（封死 loadSession await 窗口双 spawn），spawn 后转入 `activeProcesses`、失败/取消均释放占位；cancel 一并清理占位。测试四场景（已加载并发/未加载并发/spawn 失败重发/cancel 后重发）× codex 全覆盖、claude/pi 并发拒绝+失败重发+未加载并发。
 - 测试：mobile 57（+1 替换附件竞态）、acp 7（+3：缺 messageId/v2 resume/回落地形/requires_action）、codex 8、claude-code 3、pi 3；全仓 262 vitest + 11 typecheck 全绿。
+
+### 2026-11-12 路线图#3 Round 6（F3-1/2、F4-1/2/3、F5-1/2 七项边界收口）
+
+- **F3-1 运行期 error 持久化**：claude/pi（含 codex）运行期 `onError` 同步持久化 `record.status='failed'`，且**不再删除 activeProcesses**（删除会伪装成取消路径）——释放统一走 onExit；onExit 守卫「已 failed 不覆盖」。
+- **F3-2 启动中取消持久化**：cancel 只要持锁（含 spawn 确认前窗口）即持久化 `cancelled`（不再限 status==='running'）；spawn 确认后发现取消意图→立即 kill+cancelled；spawn 前发现取消意图→不再 spawn+cancelled。
+- **F4-1 错误码分类**：回落 v1 仅认 **JSON-RPC 数字错误码**中的版本/参数类（-32022/-32602/-32600）；网络错误（ECONNRESET 等字符串 code）与其余错误上抛（不盲目重复初始化）；v1 回落参数改 `clientInfo/clientCapabilities`（v1 形态）；测试断言回落参数 + ECONNRESET 不回落。
+- **F4-2 v2 历史/工具归约**：`user_message(_chunk)`→text_delta role:user（历史用户消息不丢）、`agent_message(_chunk)`→role:assistant、`agent_thought` 并入、**tool_call_update 任意状态创建 tool_use**（每 toolCallId 一次，v2 无 tool_call）、`tool_call_content_chunk` 内容累积→tool_result 增量、终态覆盖累积。
+- **F4-3 resume cwd**：`session/resume|load` 优先用会话已有 `projectPath`，不再一律传 defaultProjectPath；测试断言自定义工作目录。
+- **F5-1/2 串行锁生命周期**：`sessionLocks` 从 sendMessage 入口同步加锁直到**真实 onExit** 才释放（kill≠已退出）；cancel 只设 `cancelRequested` 意图+kill，**不释放锁**——封死「kill 后 exit 前双进程」与「cancel 释放占位后并发 spawn」两个窗口；mock 按真实进程语义（exit 只发一次/异步 kill）。
+- 测试：三 adapter「异步 kill 锁保持/启动中取消持久化+锁不释放/运行期 error 持久化」组合用例（codex 9、claude-code 4、pi 4）、acp 9（+4：错误码分类/历史归约/resume cwd/回落参数）；全仓 268 vitest + 57 mobile + 11 typecheck 全绿。

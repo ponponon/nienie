@@ -186,4 +186,89 @@ describe('ClaudeCodeAdapter & ClaudeCodeEventNormalizer', () => {
     await p1;
     await adapter.waitForRun('claude_unknown_f5');
   });
+
+  it('F3/F5 运行期 error 持久化 + 异步 kill 锁保持 + 启动中取消持久化', async () => {
+    type Behavior = {
+      spawn: 'ok' | 'pending' | 'fail';
+      killExit: 'sync' | 'delayed';
+      autoExit?: boolean;
+      runError?: boolean;
+    };
+    const behaviors: Behavior[] = [];
+    const adapter = new ClaudeCodeAdapter({
+      detectVersion: async () => '1.0.24 (Claude Code)',
+      spawnProcess: (): ClaudeProcessHandle => {
+        const behavior = behaviors.shift() ?? { spawn: 'ok', killExit: 'sync', autoExit: true };
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const emitter = new EventEmitter();
+        let exited = false;
+        const emitExit = (code: number) => {
+          if (exited) return; // 真实进程只退出一次
+          exited = true;
+          emitter.emit('exit', code);
+        };
+        if (behavior.spawn === 'ok') {
+          setTimeout(() => {
+            emitter.emit('spawn');
+            if (behavior.runError) {
+              setTimeout(() => emitter.emit('error', new Error('runtime boom')), 10);
+            }
+            if (behavior.autoExit) {
+              setTimeout(() => emitExit(0), 5);
+            }
+          }, 0);
+        } else if (behavior.spawn === 'pending') {
+          setTimeout(() => emitter.emit('spawn'), 80); // spawn 确认延迟
+        } else {
+          setTimeout(() => emitter.emit('error', new Error('spawn ENOENT')), 0);
+        }
+        return {
+          stdout, stderr,
+          kill() {
+            if (behavior.killExit === 'sync') {
+              emitExit(130);
+            } else {
+              setTimeout(() => emitExit(130), 100); // 异步退出：kill≠已退出
+            }
+          },
+          onExit: (cb) => emitter.on('exit', cb),
+          onError: (cb) => emitter.on('error', cb),
+          onSpawn: (cb) => emitter.on('spawn', cb),
+        };
+      },
+    });
+    await adapter.detect();
+    const s1 = await adapter.createSession({ title: 'LF', projectPath: '/tmp/p' });
+
+    // F5-2：kill 后延迟退出——锁保持到真实 exit，期间第二条必须被拒
+    behaviors.push({ spawn: 'ok', killExit: 'delayed' });
+    await adapter.sendMessage(s1.id, 'long');
+    await adapter.cancel(s1.id);
+    await expect(adapter.sendMessage(s1.id, 'during-kill')).rejects.toThrow(/运行中的任务/);
+    await new Promise((r) => setTimeout(r, 150)); // 等真实退出
+    behaviors.push({ spawn: 'ok', killExit: 'sync', autoExit: true });
+    await adapter.sendMessage(s1.id, 'after-exit'); // 锁已释放可重发
+    await adapter.waitForRun(s1.id);
+
+    // F3-2/F5-1：spawn 确认前取消——record=cancelled 且锁不提前释放
+    behaviors.push({ spawn: 'pending', killExit: 'delayed' });
+    const p3 = adapter.sendMessage(s1.id, 'will-cancel');
+    await adapter.cancel(s1.id);
+    const cancelled = (await adapter.listSessions()).find((x) => x.id === s1.id);
+    expect(cancelled!.status).toBe('cancelled'); // 启动中取消也持久化 cancelled
+    await expect(adapter.sendMessage(s1.id, 'blocked')).rejects.toThrow(/运行中的任务/);
+    await p3; // 确认后发现取消意图→立即 kill（sendMessage 以接受语义返回）
+    await new Promise((r) => setTimeout(r, 250)); // 等真实退出释放锁
+    behaviors.push({ spawn: 'ok', killExit: 'sync', autoExit: true });
+    await adapter.sendMessage(s1.id, 'recovered');
+    await adapter.waitForRun(s1.id);
+
+    // F3-1：运行期 error 必须持久化 failed（listSessions 不回 running/idle）
+    behaviors.push({ spawn: 'ok', killExit: 'sync', runError: true });
+    void adapter.sendMessage(s1.id, 'will-error').catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 60));
+    const failed = (await adapter.listSessions()).find((x) => x.id === s1.id);
+    expect(failed!.status).toBe('failed');
+  });
 });

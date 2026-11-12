@@ -42,6 +42,9 @@ export class AcpEventNormalizer {
   private readonly now: () => Date;
   private readonly idGenerator: () => string;
   private readonly sequences = new Map<string, number>();
+  /** F4-2：已归约 tool_use 的 toolCallId（每个只创建一次）与工具内容累积。 */
+  private readonly emittedToolUse = new Set<string>();
+  private readonly toolContent = new Map<string, string>();
   readonly streamEpoch: string;
 
   constructor(options: AcpNormalizerOptions = {}) {
@@ -66,18 +69,37 @@ export class AcpEventNormalizer {
       const sessionUpdate = asString(update.sessionUpdate) ?? asString(update.type);
 
       switch (sessionUpdate) {
-        case 'agent_thought_chunk': {
+        case 'agent_thought_chunk':
+        case 'agent_thought': {
+          // F4-2：v2 完整消息 upsert（agent_thought）与增量（chunk）都归约 thinking
           const content = isRecord(update.content) ? update.content : update;
           const delta = asString(content.text) ?? asString(update.delta) ?? '';
           if (!delta) return [];
           return [this.buildEvent(sessionId, 'thinking_delta', { delta })];
         }
 
-        case 'agent_message_chunk': {
+        case 'agent_message_chunk':
+        case 'agent_message': {
           const content = isRecord(update.content) ? update.content : update;
           const delta = asString(content.text) ?? asString(update.delta) ?? '';
           if (!delta) return [];
-          return [this.buildEvent(sessionId, 'text_delta', { delta })];
+          return [this.buildEvent(sessionId, 'text_delta', { delta, role: 'assistant' })];
+        }
+
+        // F4-2：v2 用户消息历史（resume replay）——按 role:user 归约，不能丢
+        case 'user_message_chunk':
+        case 'user_message': {
+          const content = isRecord(update.content) ? update.content : update;
+          const text =
+            asString(content.text) ??
+            asString(update.delta) ??
+            (Array.isArray(content.parts)
+              ? content.parts
+                  .map((part) => (isRecord(part) ? asString(part.text) ?? '' : ''))
+                  .join('')
+              : '');
+          if (!text) return [];
+          return [this.buildEvent(sessionId, 'text_delta', { delta: text, role: 'user' })];
         }
 
         case 'tool_call': {
@@ -88,6 +110,7 @@ export class AcpEventNormalizer {
             : isRecord(update.input)
               ? redactSensitiveData(update.input)
               : {};
+          this.emittedToolUse.add(toolCallId);
           return [
             this.buildEvent(sessionId, 'tool_use', {
               toolCallId,
@@ -99,15 +122,65 @@ export class AcpEventNormalizer {
 
         case 'tool_call_update': {
           const toolCallId = asString(update.toolCallId) ?? '';
+          if (!toolCallId) return [];
           const status = asString(update.status);
-          if (!toolCallId || (status !== 'completed' && status !== 'failed')) return [];
-          const rawContent = asString(update.rawOutput) ?? asString(update.content) ?? '';
-          const { content, truncated } = truncateOutput(rawContent, this.maxToolOutputLength);
+          const events: CanonicalAgentEvent[] = [];
+          // F4-2：v2 第一个 tool_call_update 即创建工具调用（tool_call 已从 v2 移除）——
+          // pending/running/未知状态也归约 tool_use（每个 toolCallId 只建一次，防重复卡片）
+          if (!this.emittedToolUse.has(toolCallId)) {
+            this.emittedToolUse.add(toolCallId);
+            const name = asString(update.title) ?? asString(update.name) ?? 'tool';
+            const input = isRecord(update.rawInput)
+              ? redactSensitiveData(update.rawInput)
+              : isRecord(update.input)
+                ? redactSensitiveData(update.input)
+                : {};
+            events.push(
+              this.buildEvent(sessionId, 'tool_use', {
+                toolCallId,
+                name,
+                input,
+              }),
+            );
+          }
+          // F4-2：tool_call_content_chunk 流式内容累积进结果
+          const rawContent =
+            asString(update.rawOutput) ?? asString(update.content) ?? '';
+          const accumulated = (this.toolContent.get(toolCallId) ?? '') + rawContent;
+          if (rawContent) {
+            this.toolContent.set(toolCallId, accumulated);
+          }
+          const isTerminal = status === 'completed' || status === 'failed';
+          const finalContent = isTerminal
+            ? (asString(update.rawOutput) ?? asString(update.content) ?? accumulated)
+            : accumulated;
+          if (isTerminal || rawContent) {
+            const { content, truncated } = truncateOutput(finalContent, this.maxToolOutputLength);
+            events.push(
+              this.buildEvent(sessionId, 'tool_result', {
+                toolCallId,
+                content,
+                isError: status === 'failed',
+                ...(truncated ? { truncated: true } : {}),
+              }),
+            );
+          }
+          return events;
+        }
+
+        // F4-2：工具流式内容片段——累积后以 tool_result 增量上报
+        case 'tool_call_content_chunk': {
+          const toolCallId = asString(update.toolCallId) ?? '';
+          const chunk = asString(update.content) ?? '';
+          if (!toolCallId || !chunk) return [];
+          const accumulated = (this.toolContent.get(toolCallId) ?? '') + chunk;
+          this.toolContent.set(toolCallId, accumulated);
+          const { content, truncated } = truncateOutput(accumulated, this.maxToolOutputLength);
           return [
             this.buildEvent(sessionId, 'tool_result', {
               toolCallId,
               content,
-              isError: status === 'failed',
+              isError: false,
               ...(truncated ? { truncated: true } : {}),
             }),
           ];
@@ -262,18 +335,20 @@ export class AcpAdapter implements AgentAdapter {
         this.agentVersion = res?.info?.version ?? res?.agentInfo?.version;
         this.protocolVersion = res?.protocolVersion === 2 ? 2 : 1;
       } catch (error) {
-        // F4：仅在 Agent 明确拒绝请求（JSON-RPC 错误带 code）时回落 v1——
-        // 传输层错误不重试 initialize（legacy Agent 不一定支持重复初始化，
-        // 需要 Bridge 重建连接后重新协商）
-        const isProtocolRejection =
-          typeof error === 'object' && error !== null && 'code' in error;
-        if (!isProtocolRejection) {
+        // F4-1：仅 JSON-RPC **数字**错误码且属于版本/参数类才回落 v1：
+        // -32022 Unsupported protocol version / -32602 Invalid params / -32600 Invalid request。
+        // 网络错误（ECONNRESET/ETIMEDOUT 等字符串 code）与其余错误直接上抛——
+        // legacy Agent 不支持重复初始化，需 Bridge 重建连接后重新协商
+        const rawCode = (error as { code?: unknown } | null)?.code;
+        const FALLBACK_CODES = new Set([-32022, -32602, -32600]);
+        if (typeof rawCode !== 'number' || !FALLBACK_CODES.has(rawCode)) {
           throw error;
         }
+        // F4-1：v1 initialize 使用 clientInfo/clientCapabilities（不是 v2 的 info/capabilities）
         const res = (await this.transport.request('initialize', {
           protocolVersion: 1,
-          info: { name: 'nienie-bridge', title: 'Nienie Bridge', version: '0.1.0' },
-          capabilities: {},
+          clientInfo: { name: 'nienie-bridge', title: 'Nienie Bridge', version: '0.1.0' },
+          clientCapabilities: {},
         })) as { protocolVersion?: number; agentInfo?: { version?: string } } | undefined;
         this.agentVersion = res?.agentInfo?.version;
         this.protocolVersion = 1;
@@ -325,17 +400,20 @@ export class AcpAdapter implements AgentAdapter {
       throw new Error('ACP transport is not configured');
     }
     await this.ensureInitialized();
+    // F4-3：恢复优先用会话已有 projectPath，避免向 Agent 传错工作目录
+    const known = this.sessions.get(sessionId);
+    const cwd = known?.projectPath ?? this.defaultProjectPath;
     if (this.protocolVersion === 2) {
       // F4-B：v2 已移除 session/load，恢复用 session/resume（replayFrom start 重放完整历史）
       await this.transport.request('session/resume', {
         sessionId,
-        cwd: this.defaultProjectPath,
+        cwd,
         replayFrom: { type: 'start' },
       });
     } else {
       await this.transport.request('session/load', {
         sessionId,
-        cwd: this.defaultProjectPath,
+        cwd,
       });
     }
     const existing = this.sessions.get(sessionId);

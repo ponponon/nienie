@@ -270,8 +270,13 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   private readonly normalizer: ClaudeCodeEventNormalizer;
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
   private readonly sessions = new Map<string, ClaudeSessionRecord>();
-  /** F5：await 前同步启动占位——loadSession 等 await 窗口内阻止并发双 spawn。 */
-  private readonly startingSessions = new Set<string>();
+  /**
+   * F5：Session 串行锁——sendMessage 入口同步加锁，直到**真实进程退出**（onExit）才释放。
+   * cancel 不释放锁（kill≠已退出），封死「kill 后 exit 前双进程」窗口。
+   */
+  private readonly sessionLocks = new Set<string>();
+  /** F5-1：取消意图——启动中被取消时阻止后续 spawn / 确认后立即 kill，但锁仍等真实退出。 */
+  private readonly cancelRequested = new Set<string>();
   private readonly activeProcesses = new Map<string, ClaudeProcessHandle>();
   private readonly discoverLocalHistory: boolean;
   private historyLoaded = false;
@@ -549,12 +554,13 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   private readonly runs = new Map<string, Promise<void>>();
 
   async sendMessage(sessionId: string, message: string): Promise<void> {
-    // F5：同一 session 同一时刻只允许一个活动进程（单轮执行模型）——
-    // 检查+占位必须在任何 await 之前同步完成（否则 loadSession 的 await 窗口双 spawn）
-    if (this.activeProcesses.has(sessionId) || this.startingSessions.has(sessionId)) {
+    // F5：同一 session 同一时刻只允许一个活动进程（单轮执行模型）。
+    // 检查+加锁必须在任何 await 之前同步完成（否则 loadSession 的 await 窗口双 spawn）；
+    // 锁直到真实进程退出（onExit）才释放（F5-2：kill≠已退出）
+    if (this.sessionLocks.has(sessionId)) {
       throw new Error('会话已有运行中的任务，请等待完成或取消后再发送');
     }
-    this.startingSessions.add(sessionId);
+    this.sessionLocks.add(sessionId);
     let record: ClaudeSessionRecord;
     let proc: ClaudeProcessHandle;
     try {
@@ -564,15 +570,24 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         record = this.sessions.get(sessionId)!;
       }
 
+      // F5-1：启动中已被取消——不再 spawn
+      if (this.cancelRequested.delete(sessionId)) {
+        record.status = 'cancelled'; // F3-2：启动中取消也持久化 cancelled
+        record.updatedAt = new Date().toISOString();
+        this.sessionLocks.delete(sessionId);
+        throw new Error('会话任务已取消');
+      }
+
       const remoteId = record.claudeSessionId ?? this.normalizer.getClaudeSessionId(sessionId);
       const args = remoteId
         ? ['-p', '--output-format', 'stream-json', '--verbose', '--resume', remoteId, message]
         : ['-p', '--output-format', 'stream-json', '--verbose', message];
 
       proc = this.spawnProcessImpl(args, { cwd: record.projectPath });
-      this.activeProcesses.set(sessionId, proc); // 占位转入活动进程
-    } finally {
-      this.startingSessions.delete(sessionId); // 成功转入 active / 中途失败均释放占位
+      this.activeProcesses.set(sessionId, proc);
+    } catch (error) {
+      this.sessionLocks.delete(sessionId); // spawn 前失败释放锁（无进程存活）
+      throw error;
     }
 
     // R3-4：真正确认 spawn 成功才「已送达电脑」（spawn 是异步确认，失败必须拒绝而非假送达）
@@ -594,16 +609,29 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       });
     } catch (error) {
       this.activeProcesses.delete(sessionId);
-      record.status = 'failed'; // F3：失败终态持久化到 Session Record
+      this.sessionLocks.delete(sessionId);
+      // F3-2：spawn 确认前被取消 → cancelled；否则 failed
+      const wasCancelled = this.cancelRequested.delete(sessionId);
+      record.status = wasCancelled ? 'cancelled' : 'failed';
       record.updatedAt = new Date().toISOString();
-      this.emitRunError(
-        sessionId,
-        `Claude Code 启动失败: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      if (!wasCancelled) {
+        this.emitRunError(
+          sessionId,
+          `Claude Code 启动失败: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       throw error;
     }
-    record.status = 'running'; // F3：启动成功即持久化运行态
-    record.updatedAt = new Date().toISOString();
+
+    if (this.cancelRequested.has(sessionId)) {
+      // F3-2：spawn 确认前已被取消——立即终止刚确认的进程，终态 cancelled，锁等真实退出释放
+      record.status = 'cancelled';
+      record.updatedAt = new Date().toISOString();
+      proc.kill();
+    } else {
+      record.status = 'running'; // F3：启动成功即持久化运行态
+      record.updatedAt = new Date().toISOString();
+    }
 
     // 执行在后台继续；完成/失败经事件流上报，sendMessage 不等待整个 Agent 执行
     const run = new Promise<void>((resolve, reject) => {
@@ -617,7 +645,9 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         }
       });
       proc.onError((err) => {
-        this.activeProcesses.delete(sessionId);
+        // F3-1：运行期失败必须持久化 failed，且不删除 activeProcesses 伪装取消路径（释放等 onExit）
+        record!.status = 'failed';
+        record!.updatedAt = new Date().toISOString();
         this.emitRunError(
           sessionId,
           `Claude Code 运行失败: ${err instanceof Error ? err.message : String(err)}`,
@@ -625,20 +655,23 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         reject(err);
       });
       proc.onExit((code) => {
-        const cancelled = !this.activeProcesses.has(sessionId);
         if (buffer.trim()) {
           this.processLine(sessionId, record!, buffer);
         }
         this.activeProcesses.delete(sessionId);
-        // R3-4/F3：非零退出码或信号终止（code=null）按失败处理并上报（取消路径不覆盖）
-        if (!cancelled && (code === null || code !== 0)) {
-          record!.status = 'failed'; // F3：终态持久化（listSessions 不再回旧 idle）
+        // F5-2：真实进程退出才释放串行锁
+        this.sessionLocks.delete(sessionId);
+        const wasCancelled =
+          this.cancelRequested.delete(sessionId) || record!.status === 'cancelled';
+        // R3-4/F3：非零退出码或信号终止（code=null）按失败处理并上报（取消/已失败不覆盖）
+        if (!wasCancelled && record!.status !== 'failed' && (code === null || code !== 0)) {
+          record!.status = 'failed';
           record!.updatedAt = new Date().toISOString();
           this.emitRunError(
             sessionId,
             code === null ? 'Claude Code 进程被信号终止' : `Claude Code 异常退出（退出码 ${code}）`,
           );
-        } else if (!cancelled) {
+        } else if (!wasCancelled && record!.status !== 'failed') {
           record!.status = this.normalizer.getSessionStatus(sessionId) ?? 'idle'; // F3：完成态持久化
           record!.updatedAt = new Date().toISOString();
         }
@@ -683,17 +716,18 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   }
 
   async cancel(sessionId: string): Promise<void> {
-    // F3：先标记 cancelled 再 kill（onExit 依据 activeProcesses 判定取消，不误报失败）
-    this.startingSessions.delete(sessionId); // F5：启动中的占位一并释放
+    // F5-1：cancel 不释放锁/占位——kill≠已退出，锁由 onExit 真实退出释放，封死双进程窗口
+    if (!this.sessionLocks.has(sessionId)) return;
+    this.cancelRequested.add(sessionId);
+    // F3-2：启动中（spawn 确认前）或运行中被取消——都持久化 cancelled
     const record = this.sessions.get(sessionId);
-    if (record && record.status === 'running') {
+    if (record && record.status !== 'failed') {
       record.status = 'cancelled';
       record.updatedAt = new Date().toISOString();
     }
     const proc = this.activeProcesses.get(sessionId);
     if (proc) {
-      this.activeProcesses.delete(sessionId);
-      proc.kill();
+      proc.kill(); // 不删除 activeProcesses——onExit 统一释放
     }
   }
 
