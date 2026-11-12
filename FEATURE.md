@@ -737,3 +737,12 @@
 - **4.2 代码块复制按钮**：代码块头部 LucideIcons.copy 图标按钮（Tooltip「复制代码」4 语言），点击 `Clipboard.setData` 并短暂切换对勾反馈（1.5s 回退）——远程复制=核心动作。
 - **4.3 相对时间戳**：UserPromptItem/StreamingTextItem 新增 `createdAt`（事件真实 timestamp/快照 createdAt/乐观=now），显示「刚刚/N 分钟前/N 小时前/N 天前/11月5日」（`NienieStrings.relativeTime` 4 语言 + 边界单测）；历史恢复不显示「刚刚」。
 - 测试：4.1 Markdown 全结构渲染（标题/加粗/行内/代码块+HighlightView+语言标签）、4.2 复制写剪贴板+图标反馈回退、4.3 时间戳（乐观 just now/历史 3 min ago/边界矩阵含中文）；mobile 62（+4）、全仓 270 vitest 全绿。
+
+### 2026-11-12 路线图#4.1~4.3 Round 2（时间边界/链接跳转/覆盖补齐）
+
+- **4.3 时间三修**：45~59 秒归「刚刚」（不再出现 0 min ago）；未来时间戳（时钟偏差/事件乱序）归「刚刚」；**日期展示 `time.toLocal()`**（事件时间为 UTC ISO，UTC 午夜前后不错天，跨 UTC 午夜有测试）。
+- **4.1 链接点击跳转**：`MarkdownMessage.onTapLink`——**仅放行 http/https**（javascript/file/ftp 拦截），默认 `url_launcher` 外部浏览器打开，`onOpenLink` 可注入（测试 spy）；依赖 `url_launcher`。
+- **4.1 测试补齐**：斜体/链接/引用/列表/分隔线全覆盖 + 未知语言高亮降级（no-such-lang 仍渲染）+ 长行横向滚动容器；链接协议过滤专项测试（独立段落精确 tap）。
+- **4.2 增强**：复制反馈改 Timer（连续点击不被旧计时器提前清掉）+ dispose 取消；多行代码剪贴板**完全相等**断言；围栏解析的尾换行去除（复制内容干净）。
+- **依赖声明**：`markdown`（直接 import 的传递依赖收编为直接依赖）。
+- 测试：mobile 64（+2）；全仓 270 vitest 全绿。

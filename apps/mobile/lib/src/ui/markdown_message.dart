@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
@@ -5,6 +7,7 @@ import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../i18n/app_strings.dart';
 
@@ -21,11 +24,19 @@ class MarkdownMessage extends StatelessWidget {
   final String data;
   final NienieStrings strings;
 
+  /// 4.1 链接点击回调（测试注入）；默认走 url_launcher 外部浏览器。
+  final void Function(Uri url)? onOpenLink;
+
   const MarkdownMessage({
     super.key,
     required this.data,
     required this.strings,
+    this.onOpenLink,
   });
+
+  static Future<void> _defaultOpenLink(Uri url) async {
+    await launchUrl(url, mode: LaunchMode.externalApplication);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -33,6 +44,17 @@ class MarkdownMessage extends StatelessWidget {
       data: data,
       selectable: false,
       extensionSet: md.ExtensionSet.gitHubWeb,
+      // 4.1：链接可点击跳转——仅放行 http/https（拦截 javascript:/file: 等协议）
+      onTapLink: (text, href, title) {
+        final uri = Uri.tryParse(href ?? '');
+        if (uri == null) return;
+        if (uri.scheme != 'http' && uri.scheme != 'https') return;
+        if (onOpenLink != null) {
+          onOpenLink!(uri);
+        } else {
+          _defaultOpenLink(uri);
+        }
+      },
       builders: {
         'pre': _CodeBlockBuilder(strings),
       },
@@ -142,7 +164,9 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
         break;
       }
     }
-    final raw = codeEl?.textContent ?? element.textContent;
+    // markdown 围栏解析会给内容补一个尾换行——复制/展示都去掉它
+    final raw = (codeEl?.textContent ?? element.textContent)
+        .replaceFirst(RegExp(r'\n$'), '');
     String? language;
     final cls = codeEl?.attributes['class'];
     if (cls != null && cls.startsWith('language-')) {
@@ -173,15 +197,24 @@ class _CodeBlock extends StatefulWidget {
 
 class _CodeBlockState extends State<_CodeBlock> {
   bool _copied = false;
+  Timer? _copyFeedbackTimer;
+
+  @override
+  void dispose() {
+    _copyFeedbackTimer?.cancel();
+    super.dispose();
+  }
 
   Future<void> _copy() async {
     await Clipboard.setData(ClipboardData(text: widget.code));
     if (!mounted) return;
+    _copyFeedbackTimer?.cancel(); // 连续点击：旧计时器不得提前清掉新反馈
     setState(() => _copied = true);
-    await Future<void>.delayed(const Duration(milliseconds: 1500));
-    if (mounted) {
-      setState(() => _copied = false);
-    }
+    _copyFeedbackTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) {
+        setState(() => _copied = false);
+      }
+    });
   }
 
   @override

@@ -437,19 +437,22 @@ class NienieStrings {
   String relativeTime(DateTime time, {DateTime? now}) {
     final ref = now ?? DateTime.now();
     final diff = ref.difference(time);
-    if (diff.inSeconds < 45) return relJustNow;
+    // 未来时间戳（时钟偏差/事件乱序）与 45~59 秒区间都归「刚刚」，不出现 0 min ago
+    if (diff.isNegative || diff.inSeconds < 60) return relJustNow;
     if (diff.inMinutes < 60) return relMinutesAgo(diff.inMinutes);
     if (diff.inHours < 24) return relHoursAgo(diff.inHours);
     if (diff.inDays < 7) return relDaysAgo(diff.inDays);
+    // 事件时间为 UTC ISO——日期展示必须转本地时区（否则 UTC 午夜前后显示错天）
+    final localTime = time.toLocal();
     const monthsEn = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
     return switch (lang) {
-      AppLanguage.zh => '${time.month}月${time.day}日',
-      AppLanguage.en => '${monthsEn[time.month - 1]} ${time.day}',
-      AppLanguage.ja => '${time.month}/${time.day}',
-      AppLanguage.ko => '${time.month}.${time.day}',
+      AppLanguage.zh => '${localTime.month}月${localTime.day}日',
+      AppLanguage.en => '${monthsEn[localTime.month - 1]} ${localTime.day}',
+      AppLanguage.ja => '${localTime.month}/${localTime.day}',
+      AppLanguage.ko => '${localTime.month}.${localTime.day}',
     };
   }
 

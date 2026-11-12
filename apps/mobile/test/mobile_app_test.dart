@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:nienie_mobile/main.dart';
 import 'package:nienie_mobile/src/services/attachment_picker.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
+import 'package:nienie_mobile/src/ui/markdown_message.dart';
 
 void main() {
   test('decodes nienie://pair QR URI and pairs tool_use with tool_result by sequence', () async {
@@ -2105,19 +2106,89 @@ void main() {
       'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
       'type': 'text_delta',
       'payload': {
-        'delta': '# Fix applied\n\n**bold text** and `inline code`\n\n```dart\nvoid main() {}\n```\n',
+        'delta': '# Fix applied\n\n**bold text** and *italic text* and `inline code`\n\n'
+            'A [doc link](https://example.com/doc)\n\n'
+            '> quoted line\n\n- item one\n- item two\n\n---\n\n'
+            '```dart\nvoid main() {}\n```\n',
         'partId': 'p_md', 'partRevision': 1,
       },
     });
     await tester.pump(const Duration(milliseconds: 50));
 
-    // 标题/加粗/行内代码文本可达
+    // 标题/加粗/斜体/行内代码文本可达
     expect(find.textContaining('Fix applied'), findsWidgets);
     expect(find.textContaining('bold text'), findsWidgets);
+    expect(find.textContaining('italic text'), findsWidgets);
+    // 链接/引用/列表（4.1 补齐覆盖）
+    expect(find.textContaining('doc link'), findsWidgets);
+    expect(find.textContaining('quoted line'), findsWidgets);
+    expect(find.textContaining('item one'), findsWidgets);
+    expect(find.textContaining('item two'), findsWidgets);
     // 围栏代码块：暗色容器 + 高亮视图 + 语言标签
     expect(find.byKey(const Key('code-block')), findsOneWidget);
     expect(find.byType(HighlightView), findsOneWidget);
     expect(find.text('dart'), findsOneWidget);
+  });
+
+  testWidgets('4.1 链接点击跳转：仅放行 http/https（javascript/file 拦截）', (WidgetTester tester) async {
+    final opened = <Uri>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: MarkdownMessage(
+              data: '[safe](https://example.com/a)\n\n[evil](javascript:alert(1))\n\n'
+                  '[file](file:///etc/passwd)\n\n[ftp](ftp://x/y)',
+              strings: NienieStrings(AppLanguage.en),
+              onOpenLink: opened.add,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.textContaining('safe', findRichText: true));
+    await tester.pump();
+    expect(opened.map((u) => u.toString()), ['https://example.com/a']); // http/https 放行
+
+    await tester.tap(find.textContaining('evil', findRichText: true));
+    await tester.tap(find.textContaining('file', findRichText: true));
+    await tester.tap(find.textContaining('ftp', findRichText: true));
+    await tester.pump();
+    expect(opened.length, 1); // javascript/file/ftp 协议全部拦截
+  });
+
+  testWidgets('4.1 未知语言高亮降级 + 长行横向滚动容器', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'md3', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {
+        'delta': '```no-such-lang\nconst x = \'${'A' * 300}\';\n```\n',
+        'partId': 'p_link', 'partRevision': 1,
+      },
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // 未知语言降级：代码块仍渲染 + 语言标签显示原文
+    expect(find.byKey(const Key('code-block')), findsOneWidget);
+    expect(find.text('no-such-lang'), findsOneWidget);
+    expect(find.byType(HighlightView), findsOneWidget);
+    // 长行：横向滚动容器存在（不溢出）
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('code-block')),
+        matching: find.byType(SingleChildScrollView),
+      ),
+      findsOneWidget,
+    );
+
   });
 
   testWidgets('4.2 代码块复制按钮：点击写入剪贴板 + 图标反馈', (WidgetTester tester) async {
@@ -2136,12 +2207,13 @@ void main() {
       },
     );
 
+    const codeText = 'npm test\nnpm run build\n# done';
     transport.emitServerEvent({
       'version': 1, 'eventId': 'md2', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
       'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
       'type': 'text_delta',
       'payload': {
-        'delta': '```sh\nnpm test\n```\n',
+        'delta': '```sh\n$codeText\n```\n',
         'partId': 'p_cp', 'partRevision': 1,
       },
     });
@@ -2152,7 +2224,7 @@ void main() {
     final setData = clipboardCalls.where((c) => c.method == 'Clipboard.setData');
     expect(setData, isNotEmpty);
     final text = (setData.first.arguments as Map)['text'] as String;
-    expect(text, contains('npm test'));
+    expect(text, codeText); // 多行代码完全相等（原始代码，不是高亮文本）
     // 复制后图标切换为对勾（短暂反馈）
     expect(find.byIcon(LucideIcons.check), findsOneWidget);
     await tester.pump(const Duration(seconds: 2)); // 排空复位计时器
@@ -2187,12 +2259,27 @@ void main() {
     final now = DateTime(2026, 11, 12, 12);
 
     expect(en.relativeTime(now.subtract(const Duration(seconds: 10)), now: now), 'just now');
+    // Round 2：45~59 秒不得显示 0 min ago（归 just now）
+    expect(en.relativeTime(now.subtract(const Duration(seconds: 45)), now: now), 'just now');
+    expect(en.relativeTime(now.subtract(const Duration(seconds: 59)), now: now), 'just now');
+    expect(en.relativeTime(now.subtract(const Duration(minutes: 1)), now: now), '1 min ago');
+    // Round 2：未来时间戳（时钟偏差）归 just now
+    expect(en.relativeTime(now.add(const Duration(hours: 26)), now: now), 'just now');
     expect(en.relativeTime(now.subtract(const Duration(minutes: 3)), now: now), '3 min ago');
     expect(en.relativeTime(now.subtract(const Duration(hours: 2)), now: now), '2 h ago');
     expect(en.relativeTime(now.subtract(const Duration(days: 3)), now: now), '3 d ago');
     expect(en.relativeTime(now.subtract(const Duration(days: 9)), now: now), 'Nov 3');
     expect(zh.relativeTime(now.subtract(const Duration(minutes: 5)), now: now), '5 分钟前');
     expect(zh.relativeTime(now.subtract(const Duration(days: 9)), now: now), '11月3日');
+
+    // Round 2：UTC 事件时间的日期展示按本地时区换算（UTC 午夜前后不错天）
+    final utc = DateTime.utc(2026, 11, 3, 16, 30); // 16:30 UTC
+    final local = utc.toLocal();
+    final enDay = en.relativeTime(utc, now: DateTime.now()); // 超 7 天 → 日期分支
+    expect(enDay, contains('${local.day}')); // 用本地日期，而非 UTC 的 3
+    if (local.day != 3) {
+      expect(enDay, isNot(contains(' 3'))); // 跨 UTC 午夜场景验证不是错天
+    }
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
