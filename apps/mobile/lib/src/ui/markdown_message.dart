@@ -35,7 +35,13 @@ class MarkdownMessage extends StatelessWidget {
   });
 
   static Future<void> _defaultOpenLink(Uri url) async {
-    await launchUrl(url, mode: LaunchMode.externalApplication);
+    // 外部浏览器启动失败不得成为未处理异步异常（无浏览器/被策略拦截等）
+    try {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (error, stackTrace) {
+      debugPrint('Failed to open Markdown link: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
   }
 
   @override

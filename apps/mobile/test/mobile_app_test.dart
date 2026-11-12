@@ -2124,6 +2124,16 @@ void main() {
     expect(find.textContaining('quoted line'), findsWidgets);
     expect(find.textContaining('item one'), findsWidgets);
     expect(find.textContaining('item two'), findsWidgets);
+    // 分隔线渲染断言（Round 3：水平横线容器真实存在）
+    expect(
+      find.byWidgetPredicate(
+        (w) =>
+            w is Container &&
+            w.decoration is BoxDecoration &&
+            (w.decoration as BoxDecoration).border?.top != null,
+      ),
+      findsWidgets,
+    );
     // 围栏代码块：暗色容器 + 高亮视图 + 语言标签
     expect(find.byKey(const Key('code-block')), findsOneWidget);
     expect(find.byType(HighlightView), findsOneWidget);
@@ -2137,7 +2147,8 @@ void main() {
         home: Scaffold(
           body: SingleChildScrollView(
             child: MarkdownMessage(
-              data: '[safe](https://example.com/a)\n\n[evil](javascript:alert(1))\n\n'
+              data: '[safe](https://example.com/a)\n\n[plain](http://example.com/x)\n\n'
+                  '[evil](javascript:alert(1))\n\n'
                   '[file](file:///etc/passwd)\n\n[ftp](ftp://x/y)',
               strings: NienieStrings(AppLanguage.en),
               onOpenLink: opened.add,
@@ -2148,14 +2159,19 @@ void main() {
     );
 
     await tester.tap(find.textContaining('safe', findRichText: true));
+    await tester.tap(find.textContaining('plain', findRichText: true));
     await tester.pump();
-    expect(opened.map((u) => u.toString()), ['https://example.com/a']); // http/https 放行
+    // http/https 都放行（Round 3 补 HTTP 用例）
+    expect(opened.map((u) => u.toString()), [
+      'https://example.com/a',
+      'http://example.com/x',
+    ]);
 
     await tester.tap(find.textContaining('evil', findRichText: true));
     await tester.tap(find.textContaining('file', findRichText: true));
     await tester.tap(find.textContaining('ftp', findRichText: true));
     await tester.pump();
-    expect(opened.length, 1); // javascript/file/ftp 协议全部拦截
+    expect(opened.length, 2); // javascript/file/ftp 协议全部拦截（http/https 之外零新增）
   });
 
   testWidgets('4.1 未知语言高亮降级 + 长行横向滚动容器', (WidgetTester tester) async {
@@ -2227,6 +2243,11 @@ void main() {
     expect(text, codeText); // 多行代码完全相等（原始代码，不是高亮文本）
     // 复制后图标切换为对勾（短暂反馈）
     expect(find.byIcon(LucideIcons.check), findsOneWidget);
+    // Round 3：连续点击复制——旧计时器不得提前清掉新反馈
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.tap(find.byKey(const Key('btn-copy-code')));
+    await tester.pump(const Duration(milliseconds: 500)); // 距上次点击 1.7s > 1.5s
+    expect(find.byIcon(LucideIcons.check), findsOneWidget); // 第二次反馈仍在（旧计时器已取消）
     await tester.pump(const Duration(seconds: 2)); // 排空复位计时器
     expect(find.byIcon(LucideIcons.copy), findsOneWidget); // 图标回退
   });
@@ -2272,10 +2293,11 @@ void main() {
     expect(zh.relativeTime(now.subtract(const Duration(minutes: 5)), now: now), '5 分钟前');
     expect(zh.relativeTime(now.subtract(const Duration(days: 9)), now: now), '11月3日');
 
-    // Round 2：UTC 事件时间的日期展示按本地时区换算（UTC 午夜前后不错天）
+    // Round 3：UTC 日期测试用固定相对时间（不依赖 DateTime.now，避免时序漂移）
     final utc = DateTime.utc(2026, 11, 3, 16, 30); // 16:30 UTC
+    final fixedNow = DateTime(2026, 11, 12, 12);
     final local = utc.toLocal();
-    final enDay = en.relativeTime(utc, now: DateTime.now()); // 超 7 天 → 日期分支
+    final enDay = en.relativeTime(utc, now: fixedNow); // 超 7 天 → 日期分支
     expect(enDay, contains('${local.day}')); // 用本地日期，而非 UTC 的 3
     if (local.day != 3) {
       expect(enDay, isNot(contains(' 3'))); // 跨 UTC 午夜场景验证不是错天
