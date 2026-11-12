@@ -471,4 +471,78 @@ class NienieStrings {
         AppLanguage.ja => 'コピーしました',
         AppLanguage.ko => '복사됨',
       };
+
+  // ===== 4.4 工具卡 =====
+
+  String get toolStatusPending => switch (lang) {
+        AppLanguage.zh => '等待中',
+        AppLanguage.en => 'Pending',
+        AppLanguage.ja => '待機中',
+        AppLanguage.ko => '대기 중',
+      };
+
+  String get toolStatusRunning => switch (lang) {
+        AppLanguage.zh => '运行中',
+        AppLanguage.en => 'Running',
+        AppLanguage.ja => '実行中',
+        AppLanguage.ko => '실행 중',
+      };
+
+  String get toolStatusDone => switch (lang) {
+        AppLanguage.zh => '已完成',
+        AppLanguage.en => 'Done',
+        AppLanguage.ja => '完了',
+        AppLanguage.ko => '완료',
+      };
+
+  String get toolStatusFailed => switch (lang) {
+        AppLanguage.zh => '失败',
+        AppLanguage.en => 'Failed',
+        AppLanguage.ja => '失敗',
+        AppLanguage.ko => '실패',
+      };
+
+  String get toolOutputExpand => switch (lang) {
+        AppLanguage.zh => '展开全部',
+        AppLanguage.en => 'Show more',
+        AppLanguage.ja => 'すべて表示',
+        AppLanguage.ko => '더 보기',
+      };
+
+  String get toolOutputCollapse => switch (lang) {
+        AppLanguage.zh => '收起',
+        AppLanguage.en => 'Show less',
+        AppLanguage.ja => '折りたたむ',
+        AppLanguage.ko => '접기',
+      };
+
+  String toolExitLabel(int code) => switch (lang) {
+        AppLanguage.zh => '退出码 $code',
+        AppLanguage.en => 'exit $code',
+        AppLanguage.ja => '終了コード $code',
+        AppLanguage.ko => '종료 코드 $code',
+      };
+
+  // ===== 4.5 长按操作 =====
+
+  String get actionCopyText => switch (lang) {
+        AppLanguage.zh => '复制文本',
+        AppLanguage.en => 'Copy text',
+        AppLanguage.ja => 'テキストをコピー',
+        AppLanguage.ko => '텍스트 복사',
+      };
+
+  String get actionQuoteReply => switch (lang) {
+        AppLanguage.zh => '引用追问',
+        AppLanguage.en => 'Quote & reply',
+        AppLanguage.ja => '引用して返信',
+        AppLanguage.ko => '인용하여 답장',
+      };
+
+  String get actionResendFromHere => switch (lang) {
+        AppLanguage.zh => '从这里重试',
+        AppLanguage.en => 'Retry from here',
+        AppLanguage.ja => 'ここから再試行',
+        AppLanguage.ko => '여기부터 재시도',
+      };
 }

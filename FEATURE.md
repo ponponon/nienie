@@ -753,3 +753,9 @@
 - **测试声明对齐**：分隔线渲染断言（水平横线容器 predicate）、**HTTP 链接放行**用例（http/https 双协议，javascript/file/ftp 零新增）。
 - **UTC 日期测试确定性**：改固定 `now`（不依赖 DateTime.now，避免时序漂移）。
 - **4.2 连续点击复制**：二次点击时旧计时器已取消、新对勾不被提前清掉（断言1.7s 后仍 check）。
+
+### 2026-11-12 路线图#4.4~4.5（工具卡增强 + 长按操作）
+
+- **4.4 工具卡=执行过程可视化**：①五态语言层（等待中/运行中/已完成/失败 + 状态色文案，图标统一圆形轮廓 circleDashed/loaderCircle/circleCheck/circleX，边框色随态）；②**耗时**（tool_use→tool_result 事件时间差，durationLabel：120ms/3.2s/1m12s）；③**退出码徽标**（事件可选 `exitCode` 字段，exit 0 绿/非零红）；④长输出内滚动封顶 280px（不撑爆时间线）；⑤**输出可复制**（btn-copy-tool-output-*，复制原始文本）。
+- **4.5 长按操作**：用户气泡/助手回复长按 → 底部菜单：复制文本（Snack 反馈）/ 引用追问（`> 引用` 块追加输入框保留草稿、光标末尾，onQuoteReply 回调跨层注入）/ 从这里重试（failed 走 retrySendPrompt 幂等重发，否则重发同文案）；助手消息无重试项。
+- 测试：4.4 耗时 3.2s/exit 0/状态 Done/展开复制全等、失败态 exit 2/Failed；4.5 用户消息三菜单全链路（引用入输入框/重发出站+1/剪贴板全等）、助手消息两项无重试；mobile 68（+4）、全仓 270 vitest 全绿。

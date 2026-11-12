@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/protocol_models.dart';
 import '../models/timeline_items.dart';
@@ -12,10 +13,14 @@ class SessionTimelineList extends StatefulWidget {
   final MobileBridgeClient client;
   final AgentSession session;
 
+  /// 4.5：引用追问——把引用文本交回输入框（controller 在 app 层）
+  final void Function(String quoteText)? onQuoteReply;
+
   const SessionTimelineList({
     super.key,
     required this.client,
     required this.session,
+    this.onQuoteReply,
   });
 
   @override
@@ -146,6 +151,72 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
     });
   }
 
+  /// 4.5：长按操作菜单——复制文本 / 引用追问 / 从这里重试（用户消息）
+  void _showMessageActions(
+    BuildContext context, {
+    required String text,
+    UserPromptItem? userItem,
+  }) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            ListTile(
+              key: const Key('menu-copy-text'),
+              leading: const Icon(LucideIcons.copy, size: 19),
+              title: Text(widget.client.strings.actionCopyText),
+              onTap: () async {
+                Navigator.of(ctx).pop();
+                await Clipboard.setData(ClipboardData(text: text));
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(widget.client.strings.codeCopiedLabel),
+                      duration: const Duration(seconds: 1),
+                    ),
+                  );
+                }
+              },
+            ),
+            ListTile(
+              key: const Key('menu-quote-reply'),
+              leading: const Icon(LucideIcons.quote, size: 19),
+              title: Text(widget.client.strings.actionQuoteReply),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                // 引用块交回 app 层输入框（保留已有草稿）
+                final quote = text.length > 200 ? '${text.substring(0, 200)}…' : text;
+                widget.onQuoteReply?.call(quote);
+              },
+            ),
+            if (userItem != null)
+              ListTile(
+                key: const Key('menu-resend-from-here'),
+                leading: const Icon(LucideIcons.rotateCcw, size: 19),
+                title: Text(widget.client.strings.actionResendFromHere),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  if (userItem.receipt == SendReceipt.failed) {
+                    widget.client.retrySendPrompt(widget.session, userItem);
+                  } else {
+                    widget.client.sendMessage(userItem.message);
+                  }
+                },
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   static const Color _weTypeGreen = Color(0xFF17B378);
   static const Color _textPrimary = Color(0xFF141416);
   static const Color _textSecondary = Color(0xFF686C75);
@@ -168,7 +239,14 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
               children: [
                 Align(
               alignment: Alignment.centerRight,
-              child: Container(
+              child: GestureDetector(
+                // 4.5：长按——复制/引用追问/从这里重试
+                onLongPress: () => _showMessageActions(
+                  context,
+                  text: item.message,
+                  userItem: item,
+                ),
+                child: Container(
                 constraints: BoxConstraints(
                   maxWidth: MediaQuery.sizeOf(context).width * 0.8,
                 ),
@@ -277,6 +355,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     ],
                   ],
                 ),
+              ),
               ),
             ),
                 // 4.3：相对时间戳（事件真实时间，历史恢复不显示「刚刚」）
@@ -439,19 +518,26 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                 Padding(
                   padding: const EdgeInsets.only(left: 2),
                   // 4.1：Agent 输出按 Markdown 渲染（含语法高亮代码块）；思考过程保持纯文本
-                  child: item.isThinking
-                      ? Text(
-                          item.text,
-                          style: const TextStyle(
-                            color: _textSecondary,
-                            fontSize: 14,
-                            height: 1.55,
+                  child: GestureDetector(
+                    // 4.5：长按——复制/引用追问
+                    onLongPress: () => _showMessageActions(
+                      context,
+                      text: item.text,
+                    ),
+                    child: item.isThinking
+                        ? Text(
+                            item.text,
+                            style: const TextStyle(
+                              color: _textSecondary,
+                              fontSize: 14,
+                              height: 1.55,
+                            ),
+                          )
+                        : MarkdownMessage(
+                            data: item.text,
+                            strings: widget.client.strings,
                           ),
-                        )
-                      : MarkdownMessage(
-                          data: item.text,
-                          strings: widget.client.strings,
-                        ),
+                  ),
                 ),
                 ],
                 // 4.3：相对时间戳（事件真实时间；思考过程不打点）
@@ -465,15 +551,21 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
               ],
             ),
 
-          // Kelivo Compact Tool Call Pill
+          // 4.4 工具卡：执行过程可视化——状态徽标/耗时/退出码/长输出内滚动/输出可复制
           ToolCallCardItem() => Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
                 color: const Color(0xFFF7F8FA),
                 border: Border.all(
-                  color: item.status == ToolCallStatus.failed
-                      ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                      : _borderSubtle,
+                  color: switch (item.status) {
+                    ToolCallStatus.failed =>
+                      const Color(0xFFEF4444).withValues(alpha: 0.35),
+                    ToolCallStatus.completed =>
+                      _weTypeGreen.withValues(alpha: 0.25),
+                    ToolCallStatus.running =>
+                      _weTypeGreen.withValues(alpha: 0.35),
+                    ToolCallStatus.pending => _borderSubtle,
+                  },
                 ),
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -487,10 +579,21 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     borderRadius: BorderRadius.circular(8),
                     child: Row(
                     children: [
-                      const Icon(
-                        LucideIcons.terminal,
-                        size: 13.5,
-                        color: _textSecondary,
+                      // 状态图标来自显式 status（J0.4：禁止用 resultContent 推断成败）
+                      Icon(
+                        switch (item.status) {
+                          ToolCallStatus.pending => LucideIcons.circleDashed,
+                          ToolCallStatus.running => LucideIcons.loaderCircle,
+                          ToolCallStatus.completed => LucideIcons.circleCheck,
+                          ToolCallStatus.failed => LucideIcons.circleX,
+                        },
+                        size: 14,
+                        color: switch (item.status) {
+                          ToolCallStatus.failed => const Color(0xFFDC2626),
+                          ToolCallStatus.completed => _weTypeGreen,
+                          ToolCallStatus.running => _weTypeGreen,
+                          ToolCallStatus.pending => _textSecondary,
+                        },
                       ),
                       const SizedBox(width: 7),
                       Text(
@@ -515,24 +618,63 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                           ),
                         ),
                       ),
-                      // 状态图标来自显式 status（J0.4：禁止用 resultContent 推断成败）
-                      Icon(
+                      // 状态文案（五态可视化的语言层）
+                      Text(
                         switch (item.status) {
-                          ToolCallStatus.pending => LucideIcons.circleDashed,
-                          ToolCallStatus.running => LucideIcons.loaderCircle,
-                          ToolCallStatus.completed => LucideIcons.check,
-                          ToolCallStatus.failed => LucideIcons.circleX,
+                          ToolCallStatus.pending => widget.client.strings.toolStatusPending,
+                          ToolCallStatus.running => widget.client.strings.toolStatusRunning,
+                          ToolCallStatus.completed => widget.client.strings.toolStatusDone,
+                          ToolCallStatus.failed => widget.client.strings.toolStatusFailed,
                         },
-                        size: 13,
-                        color: switch (item.status) {
-                          ToolCallStatus.failed => const Color(0xFFDC2626),
-                          ToolCallStatus.completed => _weTypeGreen,
-                          ToolCallStatus.running => _weTypeGreen,
-                          ToolCallStatus.pending => _textSecondary,
-                        },
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w600,
+                          color: switch (item.status) {
+                            ToolCallStatus.failed => const Color(0xFFDC2626),
+                            ToolCallStatus.completed => _weTypeGreen,
+                            ToolCallStatus.running => _weTypeGreen,
+                            ToolCallStatus.pending => _textSecondary,
+                          },
+                        ),
                       ),
-                      if (item.resultContent != null) ...[
+                      // 4.4：耗时（完成后）/ 退出码徽标
+                      if (item.durationLabel != null) ...[
                         const SizedBox(width: 6),
+                        Text(
+                          item.durationLabel!,
+                          style: const TextStyle(
+                            fontSize: 10.5,
+                            fontFamily: 'monospace',
+                            color: _textSecondary,
+                          ),
+                        ),
+                      ],
+                      if (item.exitCode != null) ...[
+                        const SizedBox(width: 5),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: item.exitCode == 0
+                                ? _weTypeGreen.withValues(alpha: 0.12)
+                                : const Color(0xFFEF4444).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: Text(
+                            widget.client.strings.toolExitLabel(item.exitCode!),
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w600,
+                              fontFamily: 'monospace',
+                              color: item.exitCode == 0
+                                  ? _weTypeGreen
+                                  : const Color(0xFFDC2626),
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (item.resultContent != null) ...[
+                        const SizedBox(width: 4),
                         Icon(
                           item.expanded
                               ? LucideIcons.chevronUp
@@ -546,14 +688,41 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   ),
                   if (item.resultContent != null && item.expanded) ...[
                     const SizedBox(height: 5),
-                    Text(
-                      item.resultContent!,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontFamily: 'monospace',
-                        color: item.status == ToolCallStatus.failed
-                            ? const Color(0xFFDC2626)
-                            : _textSecondary,
+                    // 输出头部：可复制（远程复制=核心动作）
+                    Row(
+                      children: [
+                        const Spacer(),
+                        Tooltip(
+                          message: widget.client.strings.copyCodeLabel,
+                          child: GestureDetector(
+                            key: Key('btn-copy-tool-output-${item.toolCallId}'),
+                            onTap: () async {
+                              await Clipboard.setData(
+                                  ClipboardData(text: item.resultContent!));
+                            },
+                            child: const Icon(
+                              LucideIcons.copy,
+                              size: 13,
+                              color: _textSecondary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    // 4.4 长输出：内滚动封顶（不把时间线撑爆），全文可复制
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 280),
+                      child: SingleChildScrollView(
+                        child: Text(
+                          item.resultContent!,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontFamily: 'monospace',
+                            color: item.status == ToolCallStatus.failed
+                                ? const Color(0xFFDC2626)
+                                : _textSecondary,
+                          ),
+                        ),
                       ),
                     ),
                   ],

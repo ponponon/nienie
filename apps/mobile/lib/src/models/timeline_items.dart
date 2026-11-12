@@ -100,6 +100,10 @@ class ToolCallCardItem extends SessionTimelineItem {
   int revision;
   /// 工具结果详情可折叠（默认收起，点击展开/收起）。
   bool expanded;
+  /// 4.4：执行耗时（tool_use→tool_result 事件真实时间差）与退出码（事件可选字段）。
+  DateTime? startedAt;
+  DateTime? finishedAt;
+  int? exitCode;
   ToolCallCardItem({
     required this.toolCallId,
     required this.name,
@@ -110,7 +114,27 @@ class ToolCallCardItem extends SessionTimelineItem {
     this.partId,
     this.revision = 0,
     this.expanded = false,
+    this.startedAt,
+    this.finishedAt,
+    this.exitCode,
   }) : input = Map<String, dynamic>.of(input);
+
+  /// 4.4：执行耗时文案（120ms / 3.2s / 1m12s），未完成返回 null。
+  String? get durationLabel {
+    final start = startedAt;
+    final end = finishedAt;
+    if (start == null || end == null) return null;
+    final ms = end.difference(start).inMilliseconds;
+    if (ms < 0) return null;
+    if (ms < 1000) return '${ms}ms';
+    final totalSeconds = ms / 1000.0;
+    if (totalSeconds < 60) {
+      return '${totalSeconds.toStringAsFixed(totalSeconds < 10 ? 1 : 0)}s';
+    }
+    final minutes = totalSeconds ~/ 60;
+    final seconds = (totalSeconds % 60).round();
+    return '${minutes}m${seconds.toString().padLeft(2, '0')}s';
+  }
 }
 
 class ErrorCardItem extends SessionTimelineItem {

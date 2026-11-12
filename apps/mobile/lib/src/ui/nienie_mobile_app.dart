@@ -657,7 +657,21 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         Expanded(
           child: active == null
               ? const SizedBox.shrink()
-              : SessionTimelineList(client: client, session: active),
+              : SessionTimelineList(
+                  client: client,
+                  session: active,
+                  // 4.5：引用追问——引用块追加输入框（保留草稿），光标移到末尾
+                  onQuoteReply: (quote) {
+                    setState(() {
+                      final prefix = _promptController.text.isEmpty ? '' : '\n\n';
+                      _promptController.text =
+                          '${_promptController.text}$prefix> ${quote.replaceAll('\n', '\n> ')}\n\n';
+                      _promptController.selection = TextSelection.fromPosition(
+                        TextPosition(offset: _promptController.text.length),
+                      );
+                    });
+                  },
+                ),
         ),
 
         // Kelivo 1:1 Floating Two-Deck Rounded Composer Capsule (R22, always visible)

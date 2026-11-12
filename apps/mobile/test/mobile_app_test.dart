@@ -850,7 +850,7 @@ void main() {
     ]);
     // UI 图标按 status 渲染（非 resultContent）
     expect(find.byIcon(LucideIcons.loaderCircle), findsOneWidget);
-    expect(find.byIcon(LucideIcons.check), findsOneWidget);
+    expect(find.byIcon(LucideIcons.circleCheck), findsOneWidget);
     expect(find.byIcon(LucideIcons.circleX), findsOneWidget);
     client.dispose();
   });
@@ -2302,6 +2302,152 @@ void main() {
     if (local.day != 3) {
       expect(enDay, isNot(contains(' 3'))); // 跨 UTC 午夜场景验证不是错天
     }
+  });
+
+  testWidgets('4.4 工具卡：状态文案/耗时/退出码徽标 + 长输出展开可复制', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    final clipboardCalls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        clipboardCalls.add(call);
+        return null;
+      },
+    );
+
+    final t0 = DateTime.now().subtract(const Duration(seconds: 5));
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'tu1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': t0.toIso8601String(), 'type': 'tool_use',
+      'payload': {'toolCallId': 'tc_dur', 'name': 'bash', 'input': {'cmd': 'ls'}},
+    });
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'tr1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 2,
+      'timestamp': t0.add(const Duration(milliseconds: 3200)).toIso8601String(),
+      'type': 'tool_result',
+      'payload': {
+        'toolCallId': 'tc_dur',
+        'content': 'line-1\nline-2\n' + ('x' * 50),
+        'isError': false,
+        'exitCode': 0,
+      },
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // 五态语言层：状态文案 + 耗时 + 退出码徽标
+    expect(find.text('Done'), findsOneWidget);
+    expect(find.text('3.2s'), findsOneWidget);
+    expect(find.text('exit 0'), findsOneWidget);
+
+    // 展开 → 复制按钮 → 剪贴板内容完全一致
+    await tester.tap(find.text('bash'));
+    await tester.pumpAndSettle();
+    final copyBtn = find.byKey(const Key('btn-copy-tool-output-tc_dur'));
+    expect(copyBtn, findsOneWidget);
+    await tester.tap(copyBtn);
+    await tester.pump();
+    final setData = clipboardCalls.where((c) => c.method == 'Clipboard.setData');
+    expect((setData.first.arguments as Map)['text'] as String, contains('line-1'));
+  });
+
+  testWidgets('4.4 失败工具卡：失败文案 + 非零退出码徽标', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'tf1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(), 'type': 'tool_use',
+      'payload': {'toolCallId': 'tc_fail', 'name': 'bash', 'input': {'cmd': 'exit 2'}},
+    });
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'tf2', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 2, 'timestamp': DateTime.now().toIso8601String(), 'type': 'tool_result',
+      'payload': {'toolCallId': 'tc_fail', 'content': 'boom', 'isError': true, 'exitCode': 2},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('Failed'), findsOneWidget);
+    expect(find.text('exit 2'), findsOneWidget);
+  });
+
+  testWidgets('4.5 长按用户消息：复制文本/引用追问/从这里重试', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    final clipboardCalls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        clipboardCalls.add(call);
+        return null;
+      },
+    );
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '原始问题');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+
+    await tester.longPress(find.text('原始问题').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('menu-copy-text')), findsOneWidget);
+    expect(find.byKey(const Key('menu-quote-reply')), findsOneWidget);
+    expect(find.byKey(const Key('menu-resend-from-here')), findsOneWidget);
+
+    // 引用追问：引用块进入输入框
+    await tester.tap(find.byKey(const Key('menu-quote-reply')));
+    await tester.pumpAndSettle();
+    final field = tester.widget<TextField>(find.byKey(const Key('input-session-prompt')));
+    expect(field.controller!.text, contains('> 原始问题'));
+
+    // 从这里重试：重新出站同一条消息
+    final before = transport.sentPrompts.length;
+    await tester.longPress(find.text('原始问题').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('menu-resend-from-here')));
+    await tester.pumpAndSettle();
+    expect(transport.sentPrompts.length, before + 1);
+
+    // 复制文本：剪贴板内容一致
+    await tester.longPress(find.text('原始问题').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('menu-copy-text')));
+    await tester.pumpAndSettle();
+    final setData = clipboardCalls.where((c) => c.method == 'Clipboard.setData');
+    expect(setData, isNotEmpty);
+    expect((setData.last.arguments as Map)['text'], '原始问题');
+    client.dispose();
+  });
+
+  testWidgets('4.5 长按助手回复：复制/引用追问（无重试项）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'la1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {'delta': '助手的回复内容', 'partId': 'p_la', 'partRevision': 1},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.longPress(find.textContaining('助手的回复内容'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('menu-copy-text')), findsOneWidget);
+    expect(find.byKey(const Key('menu-quote-reply')), findsOneWidget);
+    expect(find.byKey(const Key('menu-resend-from-here')), findsNothing);
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {

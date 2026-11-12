@@ -1615,6 +1615,7 @@ class MobileBridgeClient extends ChangeNotifier {
         }
         if (existing != null) {
           final card = existing;
+          card.startedAt ??= eventTime; // 4.4：开始时间（首次 tool_use，重复事件不重置）
           // 状态机：pending→running 允许升级；running→pending 禁止降级；终态吸收
           if (card.status == ToolCallStatus.pending || card.status == ToolCallStatus.running) {
             if (requested == ToolCallStatus.running) card.status = ToolCallStatus.running;
@@ -1635,6 +1636,7 @@ class MobileBridgeClient extends ChangeNotifier {
               status: requested,
               partId: partId,
               revision: partRevision ?? 0,
+              startedAt: eventTime,
             ),
           );
         }
@@ -1645,6 +1647,8 @@ class MobileBridgeClient extends ChangeNotifier {
         final toolCallId = event.payload['toolCallId'] as String? ?? '';
         final content = event.payload['content'] as String? ?? '';
         final isError = event.payload['isError'] as bool? ?? false;
+        // 4.4：退出码（事件可选字段；进程型 adapter 可上报）
+        final exitCode = (event.payload['exitCode'] as num?)?.toInt();
         ToolCallCardItem? existing;
         for (final item in items.reversed) {
           if (item is ToolCallCardItem && item.toolCallId == toolCallId) {
@@ -1663,6 +1667,8 @@ class MobileBridgeClient extends ChangeNotifier {
           existing.resultContent = content;
           existing.isError = isError;
           existing.status = nextStatus;
+          existing.finishedAt = eventTime; // 4.4：结束时间（耗时=finishedAt-startedAt）
+          existing.exitCode = exitCode;
           if (partId != null) existing.partId = partId;
           if (partRevision != null && partRevision > existing.revision) {
             existing.revision = partRevision;
@@ -1678,6 +1684,8 @@ class MobileBridgeClient extends ChangeNotifier {
               status: isError ? ToolCallStatus.failed : ToolCallStatus.completed,
               partId: partId,
               revision: partRevision ?? 0,
+              finishedAt: eventTime,
+              exitCode: exitCode,
             ),
           );
         }
