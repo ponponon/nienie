@@ -55,7 +55,9 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             title: Text(
               isAlways
                   ? widget.client.strings.permConfirmTitle
-                  : widget.client.strings.permConfirmHighRiskNote,
+                  : item.risk == PermissionRiskLevel.high
+                      ? widget.client.strings.permConfirmHighRiskNote
+                      : widget.client.strings.permConfirmUnknownNote,
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
             ),
             content: Column(

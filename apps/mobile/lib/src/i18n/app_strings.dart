@@ -291,6 +291,13 @@ class NienieStrings {
         AppLanguage.ko => '이 작업은 고위험으로 분류되었습니다. 확인 후 계속하세요',
       };
 
+  String get permConfirmUnknownNote => switch (lang) {
+        AppLanguage.zh => '该操作尚未分类，无法确认其风险，请谨慎决定',
+        AppLanguage.en => 'This action is unclassified and its risk cannot be confirmed, please decide carefully',
+        AppLanguage.ja => 'この操作は未分類でリスクを確認できません。慎重に判断してください',
+        AppLanguage.ko => '이 작업은 미분류이며 위험을 확인할 수 없습니다. 신중히 결정하세요',
+      };
+
   String get permConfirmOk => switch (lang) {
         AppLanguage.zh => '确认执行',
         AppLanguage.en => 'Confirm',

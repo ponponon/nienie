@@ -654,3 +654,8 @@
 - **超时计时起点**（P2）：waitingSince 改用请求真实产生时间——实时事件 `event.timestamp`、Snapshot `createdAt`（无效才 fallback now），历史恢复不重新起算、重复 waiting upsert 保留原起点。测试改为真实旧时间戳事件/快照断言（不再直接篡改字段）。
 - P3：聚焦描边改独立蓝色 2px（与风险色解耦）+ decoration 断言；通知降级测试（有 action 无 detail 不编造命令、无 action 不拼空前缀）。
 - 测试：mobile 47（+2）、bridge-core 77（+1）；全仓 246 vitest 全绿。
+
+### 2026-11-12 路线图#2 Round 5（未分类/高风险概念区分，封板前最后一步）
+
+- **弹窗标题按风险分级**：allow_always→「确认始终允许」；高风险 allow_once→「高风险警示」；**未分类（unknown）→独立文案「该操作尚未分类，无法确认其风险，请谨慎决定」**（4 语言），绝不用高风险文案冒充未分类。
+- 测试：未分类 allow_once 弹框显示未分类警示、断言不出现高风险文案、取消不提交。mobile 47、全仓 246 vitest 全绿。

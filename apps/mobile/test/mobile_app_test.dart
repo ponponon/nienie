@@ -1792,7 +1792,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(transport.permissionReplies.length, 2);
 
-    // 未分类（unknown）allow_once：同样需要确认（不给未知操作普通误触保护级别）
+    // 未分类（unknown）allow_once：需要确认，但文案必须与「高风险」明确区分
     emit('status', {'status': 'waiting', 'permissionId': 'perm_un', 'permission': 'frobnicate', 'detail': 'x'});
     await tester.pumpAndSettle();
     await tester.drag(find.byType(Scrollable).first, const Offset(0, -3000));
@@ -1800,6 +1800,11 @@ void main() {
     await tester.tap(find.byKey(const Key('btn-perm-allow-once-perm_un')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('btn-perm-confirm-ok')), findsOneWidget);
+    expect(find.text('This action is unclassified and its risk cannot be confirmed, please decide carefully'), findsOneWidget);
+    expect(find.text('This action is marked high risk, please confirm to continue'), findsNothing); // 绝不误用高风险文案
+    await tester.tap(find.byKey(const Key('btn-perm-confirm-cancel')));
+    await tester.pumpAndSettle();
+    expect(transport.permissionReplies.length, 2); // 取消不提交（此前已 2 次）
     client.dispose();
   });
 
