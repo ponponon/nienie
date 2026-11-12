@@ -90,31 +90,59 @@ export class AcpEventNormalizer {
             asString(update.messageId) ?? `acp_msg_${this.messageState.size}`;
           const key = `${sessionId}#${messageId}`;
           const prev = this.messageState.get(key) ?? { content: '', revision: 0 };
-          const text = extractText(update.content ?? update.delta);
-          if (!text && !isChunk) {
-            // 完整 upsert 允许清空（替换为空）
-            this.messageState.set(key, { content: '', revision: prev.revision + 1 });
-            return [];
+          const rolePart = isUser
+            ? { role: 'user' as const }
+            : isThought
+              ? {}
+              : { role: 'assistant' as const };
+          // F4-2 清空语义：content 字段缺失=保留原内容；null/[]=清空；非空数组=替换；chunk=追加
+          const hasContent = 'content' in update;
+          const rawContent = update.content;
+          const cleared =
+            hasContent &&
+            (rawContent == null || (Array.isArray(rawContent) && rawContent.length === 0));
+          if (!isChunk) {
+            const revision = prev.revision + 1;
+            if (cleared) {
+              this.messageState.set(key, { content: '', revision });
+              // 清空也必须下发 full 覆盖事件（空 delta + full=true = 清空）
+              return [
+                this.buildEvent(sessionId, isThought ? 'thinking_delta' : 'text_delta', {
+                  delta: '',
+                  partId: messageId,
+                  messageId,
+                  partRevision: revision,
+                  full: true,
+                  ...rolePart,
+                }),
+              ];
+            }
+            if (!hasContent) return []; // 字段缺失=保留原内容
+            const text = extractText(rawContent);
+            this.messageState.set(key, { content: text, revision });
+            return [
+              this.buildEvent(sessionId, isThought ? 'thinking_delta' : 'text_delta', {
+                delta: text,
+                partId: messageId,
+                messageId,
+                partRevision: revision,
+                full: true,
+                ...rolePart,
+              }),
+            ];
           }
+          const text = extractText(update.content ?? update.delta);
           if (!text) return [];
-          // 完整消息 = upsert 覆盖；chunk = 增量追加
-          const nextContent = isChunk ? prev.content + text : text;
           const revision = prev.revision + 1;
-          this.messageState.set(key, { content: nextContent, revision });
-          const payload: Record<string, unknown> = {
-            delta: text,
-            partId: messageId,
-            messageId,
-            partRevision: revision,
-            ...(isChunk ? {} : { full: true }),
-            ...(isUser ? { role: 'user' } : isThought ? {} : { role: 'assistant' }),
-          };
+          this.messageState.set(key, { content: prev.content + text, revision });
           return [
-            this.buildEvent(
-              sessionId,
-              isThought ? 'thinking_delta' : 'text_delta',
-              payload,
-            ),
+            this.buildEvent(sessionId, isThought ? 'thinking_delta' : 'text_delta', {
+              delta: text,
+              partId: messageId,
+              messageId,
+              partRevision: revision,
+              ...rolePart,
+            }),
           ];
         }
 
@@ -165,14 +193,21 @@ export class AcpEventNormalizer {
               }),
             );
           }
-          // F4-2：tool_call_update.content（ToolCallContent[]）= 整体替换现有内容；
-          // rawOutput（兼容）同样替换；两者都没有则保持
-          const replaceText = extractText(update.content ?? update.rawOutput);
-          if (update.content != null || update.rawOutput != null) {
-            state.content = replaceText;
+          // F4-2：tool_call_update.content（ToolCallContent[]）= 整体替换；null/[]=**清空**；
+          // 字段缺失=保留；rawOutput（兼容）同样替换。必须按字段存在性判断，!=null 会漏掉清空
+          const hasContent = 'content' in update;
+          const hasRaw = 'rawOutput' in update;
+          if (hasContent) {
+            const raw = update.content;
+            state.content =
+              raw == null || (Array.isArray(raw) && raw.length === 0)
+                ? ''
+                : extractText(raw);
+          } else if (hasRaw) {
+            state.content = extractText(update.rawOutput);
           }
           const isTerminal = status === 'completed' || status === 'failed';
-          if (isTerminal || replaceText) {
+          if (isTerminal || hasContent || hasRaw) {
             const { content, truncated } = truncateOutput(state.content, this.maxToolOutputLength);
             events.push(
               this.buildEvent(sessionId, 'tool_result', {
@@ -302,19 +337,35 @@ function extractText(value: unknown): string {
     return value.map((item) => extractText(item)).join('');
   }
   if (isRecord(value)) {
-    const wrapper = value.content;
-    if (wrapper != null && value.type === 'content') {
-      return extractText(wrapper);
+    const type = asString(value.type);
+    if (type === 'content') return extractText(value.content);
+    if (type === 'text') return asString(value.text) ?? '';
+    // F4-2：diff 不得静默丢——提取变更摘要 + patch 文本
+    if (type === 'diff') {
+      const changes = Array.isArray(value.changes)
+        ? value.changes
+            .map((c) =>
+              isRecord(c)
+                ? `${asString(c.operation) ?? 'modify'} ${asString(c.path) ?? ''}`.trim()
+                : '',
+            )
+            .filter(Boolean)
+            .join('; ')
+        : '';
+      const patch = isRecord(value.patch) ? asString(value.patch.text) ?? '' : '';
+      const head = changes ? `[diff ${changes}]` : '[diff]';
+      return patch ? `${head}\n${patch}` : head;
     }
+    // F4-2：terminal 是 Agent 终端引用——明确标注不支持展示，不静默丢、不假装是文本
+    if (type === 'terminal') return '[terminal 输出暂不支持展示]';
+    // 未知扩展类型：不假装提取成功
+    if (type != null) return `[不支持的内容类型: ${type}]`;
+    const wrapper = value.content;
     const direct = asString(value.text);
     if (direct != null) return direct;
     if (wrapper != null) return extractText(wrapper);
     const parts = value.parts;
     if (Array.isArray(parts)) return extractText(parts);
-    const uri = asString(value.uri);
-    if (uri != null) return uri;
-    const path = asString(value.path);
-    if (path != null) return path;
   }
   return '';
 }
@@ -356,12 +407,19 @@ export class AcpAdapter implements AgentAdapter {
     this.normalizer = new AcpEventNormalizer(options);
 
     if (this.transport) {
-      this.unsubscribeTransport = this.transport.onNotification((msg) => {
-        for (const evt of this.normalizer.normalize(msg)) {
-          for (const listener of this.listeners) listener(evt);
-        }
-      });
+      this.attachTransport(this.transport);
     }
+  }
+
+  /** F4-1：统一挂载 transport 通知订阅（初始连接与 fallback 新连接都必须走这里）。 */
+  private attachTransport(transport: AcpTransport): void {
+    this.unsubscribeTransport?.();
+    this.transport = transport;
+    this.unsubscribeTransport = transport.onNotification((msg) => {
+      for (const evt of this.normalizer.normalize(msg)) {
+        for (const listener of this.listeners) listener(evt);
+      }
+    });
   }
 
   /**
@@ -396,12 +454,12 @@ export class AcpAdapter implements AgentAdapter {
         if (rawCode !== -32022) {
           throw error;
         }
-        // F4-1：按 -32022 的结构化版本信息判断是否真的存在 v1 可选版本
+        // F4-1：按 -32022 的结构化版本信息判断是否真的存在 v1 可选版本——
+        // **fail-closed**：supported 缺失/不为数组/不含 1 一律不回落（不得推测 Agent 支持 v1）
         const data = (error as { data?: { requested?: unknown; supported?: unknown } } | null)
           ?.data;
-        const supported = Array.isArray(data?.supported) ? data!.supported : null;
-        if (supported != null && !supported.includes(1)) {
-          throw error; // Agent 明确不支持 v1——回落无意义
+        if (!Array.isArray(data?.supported) || !data!.supported!.includes(1)) {
+          throw error;
         }
         // F4-1：一个连接只协商一个协议版本——v1 回落必须**关闭原连接、用新连接**重新协商
         if (!this.reconnect) {
@@ -410,7 +468,8 @@ export class AcpAdapter implements AgentAdapter {
           );
         }
         await this.transport?.close();
-        this.transport = await this.reconnect();
+        // F4-1：新连接必须重新注册通知监听（否则 Agent 的消息/工具/状态更新全部丢失）
+        this.attachTransport(await this.reconnect());
         // v1 initialize 使用 clientInfo/clientCapabilities（不是 v2 的 info/capabilities）
         const res = (await this.transport.request('initialize', {
           protocolVersion: 1,

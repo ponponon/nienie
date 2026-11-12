@@ -221,6 +221,8 @@ describe('AcpAdapter', () => {
     };
     // 新连接：v1-only Agent（initialize 返回 protocolVersion 1，prompt 走 turn 语义）
     const newCalls: Array<{ method: string; params?: Record<string, unknown> | undefined }> = [];
+    const notifyListeners = new Set<(notification: unknown) => void>();
+    let unsubscribed = false;
     const newTransport: AcpTransport = {
       async request(method, params) {
         newCalls.push({ method, params });
@@ -232,8 +234,12 @@ describe('AcpAdapter', () => {
         }
         return {};
       },
-      onNotification() {
-        return () => undefined;
+      onNotification(listener) {
+        notifyListeners.add(listener);
+        return () => {
+          unsubscribed = true;
+          notifyListeners.delete(listener);
+        };
       },
       async close() {},
     };
@@ -261,9 +267,54 @@ describe('AcpAdapter', () => {
     void adapter.sendMessage(session.id, 'hello'); // v1 派发语义
     await new Promise((r) => setTimeout(r, 0));
     expect(newCalls.some((c) => c.method === 'session/prompt')).toBe(true);
+
+    // F4-1（P1）：新连接必须重新注册通知监听——session/update 真正进入 onEvent
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((e) => events.push(e));
+    expect(notifyListeners.size).toBe(1); // 新连接已挂监听（旧连接的已退订）
+    for (const listener of notifyListeners) {
+      listener({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'v1_ses',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            messageId: 'm1',
+            content: [{ type: 'text', text: 'v1 reply' }],
+          },
+        },
+      });
+    }
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload?.delta).toBe('v1 reply');
+
+    // dispose 正确取消新连接订阅
+    await adapter.dispose();
+    expect(unsubscribed).toBe(true);
+    expect(notifyListeners.size).toBe(0);
   });
 
   it('F4-1 -32022 明确不支持 v1 / 网络错误 / 无 reconnect 工厂都不回落', async () => {
+    // supported 缺失：fail-closed 不回落（不得推测 Agent 支持 v1）
+    let missingInit = 0;
+    const missing: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          missingInit++;
+          throw { code: -32022, message: 'x', data: { requested: 2 } };
+        }
+        return {};
+      },
+      onNotification() {
+        return () => undefined;
+      },
+      async close() {},
+    };
+    const a0 = new AcpAdapter({ transport: missing, reconnect: async () => missing });
+    expect((await a0.detect()).available).toBe(false);
+    expect(missingInit).toBe(1);
+
     // supported 不含 1：回落无意义
     const noV1: AcpTransport = {
       async request(method) {
@@ -458,6 +509,128 @@ describe('AcpAdapter', () => {
     });
     const lastResult = events.filter((e) => e.type === 'tool_result').at(-1);
     expect(String(lastResult!.payload?.content)).toBe('B-only'); // 不与 ses_a 内容混合
+  });
+
+  it('F4-2 清空语义：content 缺失=保留 / null、[]=清空（消息+工具），diff/terminal 不静默丢', async () => {
+    const listeners = new Set<(notification: unknown) => void>();
+    const transport: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          return {
+            protocolVersion: 2,
+            info: { name: 'demo', title: 'Demo', version: '2.0.0' },
+            capabilities: {},
+          };
+        }
+        return {};
+      },
+      onNotification(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      async close() {
+        listeners.clear();
+      },
+    };
+    const adapter = new AcpAdapter({ transport });
+    await adapter.detect();
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((e) => events.push(e));
+    const emit = (sessionId: string, update: Record<string, unknown>) => {
+      for (const listener of listeners) {
+        listener({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: { sessionId, update },
+        });
+      }
+    };
+
+    // 消息：非空 → content:[] 清空 → 新 chunk
+    emit('ses_c', {
+      sessionUpdate: 'agent_message',
+      messageId: 'mm1',
+      content: [{ type: 'text', text: 'hello world' }],
+    });
+    emit('ses_c', {
+      sessionUpdate: 'agent_message',
+      messageId: 'mm1',
+      content: [], // 清空
+    });
+    emit('ses_c', {
+      sessionUpdate: 'agent_message_chunk',
+      messageId: 'mm1',
+      content: [{ type: 'text', text: 'fresh' }],
+    });
+    const msgEvents = events.filter((e) => e.type === 'text_delta');
+    expect(msgEvents).toHaveLength(3);
+    expect(msgEvents[1]!.payload).toMatchObject({ delta: '', full: true, messageId: 'mm1' }); // 清空事件
+    expect(msgEvents[2]!.payload).toMatchObject({ delta: 'fresh' });
+
+    // content 字段缺失 = 保留（不产生事件）
+    emit('ses_c', {
+      sessionUpdate: 'agent_message',
+      messageId: 'mm1',
+      status: 'x',
+    } as Record<string, unknown>);
+    expect(events.filter((e) => e.type === 'text_delta')).toHaveLength(3);
+
+    // content:null = 清空
+    emit('ses_c', {
+      sessionUpdate: 'agent_message',
+      messageId: 'mm1',
+      content: null,
+    } as unknown as Record<string, unknown>);
+    expect(events.filter((e) => e.type === 'text_delta')).toHaveLength(4);
+
+    // 工具：content:null 清空（即使 running 也要发 tool_result）
+    emit('ses_c', {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      title: 't',
+      status: 'running',
+    });
+    emit('ses_c', {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      status: 'running',
+      content: [{ type: 'content', content: { type: 'text', text: 'old' } }],
+    });
+    emit('ses_c', {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      status: 'running',
+      content: null, // 清空
+    } as unknown as Record<string, unknown>);
+    const tResults = events.filter((e) => e.type === 'tool_result');
+    expect(String(tResults.at(-1)!.payload?.content)).toBe('');
+
+    // diff 内容不静默丢：patch.text + changes 摘要
+    emit('ses_c', {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      status: 'completed',
+      content: [
+        {
+          type: 'diff',
+          changes: [{ operation: 'modify', path: '/workspace/a.ts', fileType: 'text' }],
+          patch: { format: 'git_patch', text: '--- a.ts\n+++ a.ts' },
+        },
+      ],
+    });
+    const diffResult = events.filter((e) => e.type === 'tool_result').at(-1)!;
+    expect(String(diffResult.payload?.content)).toContain('modify /workspace/a.ts');
+    expect(String(diffResult.payload?.content)).toContain('--- a.ts');
+
+    // terminal 类型明确标注不支持，不静默丢
+    emit('ses_c', {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc1',
+      status: 'completed',
+      content: [{ type: 'terminal', terminalId: 't1' }],
+    });
+    const termResult = events.filter((e) => e.type === 'tool_result').at(-1)!;
+    expect(String(termResult.payload?.content)).toContain('terminal');
   });
 
   it('F4-3 session/resume 使用会话已有 projectPath（不传错工作目录）', async () => {

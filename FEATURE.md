@@ -723,3 +723,10 @@
 - **F4-1 错误分类与连接生命周期**：回落 v1 **只认 -32022**（Unsupported protocol version）且按其 `data.supported` 结构化版本信息判断（不含 1 则不回落）；-32602/-32600/网络错误（字符串 code）一律上抛；**v1 回落必须走新连接**——新增 `AcpAdapterOptions.reconnect` 工厂，关闭原连接后在新连接上以 v1 形态（`clientInfo/clientCapabilities`）initialize（一个连接只协商一个协议版本）；无工厂则明确报错不重复初始化。测试：真 v1-only Agent 全流程（关闭旧连接/新连接 v1 initialize/prompt）+ supported 不含 1/网络错误/-32602/无工厂四类不回落。
 - **F4-2 真实 v2 数据结构归约**：`extractText` 兼容 ContentBlock[]（数组）、ToolCallContent 对象（`{type:'content',content:{type:'text'}}`）、字符串降级；完整消息 `user_message/agent_message/agent_thought` 按 **messageId upsert 覆盖**（`full:true`，mobile text_delta/thinking_delta 支持 full=替换语义），`*_chunk` 按 messageId 追加；`tool_call_update.content`（ToolCallContent[]）**整体替换**工具内容、`tool_call_content_chunk.content`（单个 ToolCallContent）追加，终态覆盖；messageId/toolCallId 状态**按 Session 隔离**（`${sessionId}#${id}` key）。测试用官方 v2 真实 JSON 形态（content 数组/messageId/ToolCallContent 对象）覆盖 upsert 替换、chunk 追加、替换+追加混合、跨 Session 同名 toolCallId 隔离。
 - 测试：acp 10（F4-A 全流程/不回落矩阵/真实结构归约）、mobile 58（+1 full upsert 覆盖语义）；全仓 269 vitest + 11 typecheck 全绿。
+
+### 2026-11-12 路线图#3 Round 8（F4 终局：重连订阅/fail-closed/清空语义/diff 内容）
+
+- **F4-1 新连接通知订阅**：抽取 `attachTransport()` 统一挂载（退订旧→挂新），初始连接与 v1 回落新连接都走它——修掉「v1 Agent initialize/prompt 成功但 session/update 全部丢失」的运行故障；dispose 正确退订。**fail-closed**：-32022 的 `data.supported` 缺失/非数组/不含 1 一律不回落（不得推测支持 v1）。
+- **F4-2 清空语义**：消息 upsert 区分 **content 缺失=保留 / null、[]=清空 / 非空=替换**——清空下发 `full:true + delta:''` 事件，mobile 放行空 delta 的 full 覆盖（此前 `delta.isEmpty break` 吞掉清空）；tool_call_update 同样按**字段存在性**判断（null/[]=清空且 running 也发 tool_result）。
+- **F4-2 diff/terminal 内容**：`extractText` 支持 `{type:'diff', changes, patch}`（变更摘要+patch.text）、`{type:'terminal'}` 明确标注不支持展示、未知扩展类型标注类型名——不再静默丢弃或假装提取成功。
+- 测试：acp 11（新连接通知投递+dispose 退订/缺 supported fail-closed/清空语义矩阵/diff+terminal/字段缺失保留）、mobile 58（清空→fresh 增量）；全仓 270 vitest + 11 typecheck 全绿。

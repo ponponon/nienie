@@ -1446,7 +1446,9 @@ class MobileBridgeClient extends ChangeNotifier {
 
       case 'text_delta':
         final delta = event.payload['delta'] as String? ?? '';
-        if (delta.isEmpty) break;
+        // F4-2：full=true 的空 delta 是清空信号（ACP upsert 清空），必须放行；空增量仍跳过
+        final full = event.payload['full'] == true;
+        if (delta.isEmpty && !full) break;
         final role = event.payload['role'] as String?;
         if (role == 'user') {
           // 用户消息同样按 partId 归属：增量追加到原消息，重放由 revision 门禁丢弃（J0.4）
@@ -1461,8 +1463,8 @@ class MobileBridgeClient extends ChangeNotifier {
               }
             }
             if (target != null) {
-              // F4-2：full=true 表示 upsert 完整替换（ACP v2 完整消息），否则增量追加
-              if (event.payload['full'] == true) {
+              // F4-2：full=true 表示 upsert 完整替换/清空（ACP v2 完整消息），否则增量追加
+              if (full) {
                 target.message = delta;
               } else {
                 target.message += delta;
@@ -1512,8 +1514,6 @@ class MobileBridgeClient extends ChangeNotifier {
               break;
             }
           }
-          // F4-2：full=true 表示 upsert 完整替换（ACP v2 完整消息），否则增量追加
-          final full = event.payload['full'] == true;
           if (target != null) {
             if (full) {
               target.text = delta;
@@ -1534,7 +1534,6 @@ class MobileBridgeClient extends ChangeNotifier {
         } else if (items.isNotEmpty &&
             items.last is StreamingTextItem &&
             !(items.last as StreamingTextItem).isThinking) {
-          final full = event.payload['full'] == true;
           if (full) {
             (items.last as StreamingTextItem).text = delta;
           } else {
@@ -1548,7 +1547,9 @@ class MobileBridgeClient extends ChangeNotifier {
 
       case 'thinking_delta':
         final delta = event.payload['delta'] as String? ?? '';
-        if (delta.isEmpty) break;
+        // F4-2：full=true 的空 delta 是清空信号（ACP upsert 清空），必须放行
+        final thinkFull = event.payload['full'] == true;
+        if (delta.isEmpty && !thinkFull) break;
         _resolvePending(event.sessionId);
         if (partId != null) {
           StreamingTextItem? target;
@@ -1559,8 +1560,8 @@ class MobileBridgeClient extends ChangeNotifier {
             }
           }
           if (target != null) {
-            // F4-2：full=true 表示 upsert 完整替换（ACP v2 完整思考），否则增量追加
-            if (event.payload['full'] == true) {
+            // F4-2：full=true 表示 upsert 完整替换/清空（ACP v2 完整思考），否则增量追加
+            if (thinkFull) {
               target.text = delta;
             } else {
               target.text += delta;

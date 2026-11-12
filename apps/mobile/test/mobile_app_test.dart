@@ -2080,6 +2080,14 @@ void main() {
 
     final item = client.timelineFor('ses_alpha').whereType<StreamingTextItem>().single;
     expect(item.text, 'corrected'); // upsert 覆盖而非 hello worldcorrected
+
+    // F4-2 清空语义：full=true 空 delta = 清空（不是丢弃）
+    emit('e4', 4, {'delta': '', 'partId': 'm1', 'partRevision': 4, 'full': true, 'role': 'assistant'});
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(item.text, isEmpty);
+    emit('e5', 5, {'delta': 'fresh', 'partId': 'm1', 'partRevision': 5, 'role': 'assistant'});
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(item.text, 'fresh'); // 清空后新增量从空开始
     client.dispose();
   });
 
