@@ -28,7 +28,6 @@ jobs:
           channel: 'stable'
           flutter-version: '3.47.9'
           cache: true
-          cache: true
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
