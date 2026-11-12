@@ -6,6 +6,7 @@ import '../models/protocol_models.dart';
 import '../models/timeline_items.dart';
 import '../state/mobile_bridge_client.dart';
 import 'agent_brand_logo.dart';
+import 'markdown_message.dart';
 
 class SessionTimelineList extends StatefulWidget {
   final MobileBridgeClient client;
@@ -161,7 +162,11 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
         final item = items[index];
         return switch (item) {
           // Kelivo Soft Gray User Prompt Bubble (borderless R18 pill)
-          UserPromptItem() => Align(
+          UserPromptItem() => Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Align(
               alignment: Alignment.centerRight,
               child: Container(
                 constraints: BoxConstraints(
@@ -273,6 +278,17 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   ],
                 ),
               ),
+            ),
+                // 4.3：相对时间戳（事件真实时间，历史恢复不显示「刚刚」）
+                const SizedBox(height: 3),
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Text(
+                    widget.client.strings.relativeTime(item.createdAt),
+                    style: const TextStyle(fontSize: 11, color: _textSecondary),
+                  ),
+                ),
+              ],
             ),
 
           // 等待回复占位 / 超时兜底卡片
@@ -422,15 +438,29 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                 const SizedBox(height: 6),
                 Padding(
                   padding: const EdgeInsets.only(left: 2),
-                  child: Text(
-                    item.text,
-                    style: TextStyle(
-                      color: item.isThinking ? _textSecondary : _textPrimary,
-                      fontSize: 14,
-                      height: 1.55,
-                    ),
-                  ),
+                  // 4.1：Agent 输出按 Markdown 渲染（含语法高亮代码块）；思考过程保持纯文本
+                  child: item.isThinking
+                      ? Text(
+                          item.text,
+                          style: const TextStyle(
+                            color: _textSecondary,
+                            fontSize: 14,
+                            height: 1.55,
+                          ),
+                        )
+                      : MarkdownMessage(
+                          data: item.text,
+                          strings: widget.client.strings,
+                        ),
                 ),
+                ],
+                // 4.3：相对时间戳（事件真实时间；思考过程不打点）
+                if (!item.isThinking) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.client.strings.relativeTime(item.createdAt),
+                    style: const TextStyle(fontSize: 11, color: _textSecondary),
+                  ),
                 ],
               ],
             ),

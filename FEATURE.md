@@ -730,3 +730,10 @@
 - **F4-2 清空语义**：消息 upsert 区分 **content 缺失=保留 / null、[]=清空 / 非空=替换**——清空下发 `full:true + delta:''` 事件，mobile 放行空 delta 的 full 覆盖（此前 `delta.isEmpty break` 吞掉清空）；tool_call_update 同样按**字段存在性**判断（null/[]=清空且 running 也发 tool_result）。
 - **F4-2 diff/terminal 内容**：`extractText` 支持 `{type:'diff', changes, patch}`（变更摘要+patch.text）、`{type:'terminal'}` 明确标注不支持展示、未知扩展类型标注类型名——不再静默丢弃或假装提取成功。
 - 测试：acp 11（新连接通知投递+dispose 退订/缺 supported fail-closed/清空语义矩阵/diff+terminal/字段缺失保留）、mobile 58（清空→fresh 增量）；全仓 270 vitest + 11 typecheck 全绿。
+
+### 2026-11-12 路线图#4.1~4.3（时间线阅读性：Markdown 渲染/代码块复制/相对时间戳）
+
+- **4.1 Markdown 渲染**：Agent 输出（StreamingTextItem 非思考）改用 `MarkdownMessage`（flutter_markdown + ExtensionSet.gitHubWeb）——标题/加粗/斜体/链接/行内代码/引用块/列表/分隔线全套样式对齐 design token（#141416/#686C75/#17B378）；围栏代码块=暗色容器（#17181C）+ 语言标签头 + `flutter_highlight`（atom-one-dark）语法高亮 + 横向滚动；用户气泡与思考过程保持纯文本（iMessage 心智/避免噪音）。
+- **4.2 代码块复制按钮**：代码块头部 LucideIcons.copy 图标按钮（Tooltip「复制代码」4 语言），点击 `Clipboard.setData` 并短暂切换对勾反馈（1.5s 回退）——远程复制=核心动作。
+- **4.3 相对时间戳**：UserPromptItem/StreamingTextItem 新增 `createdAt`（事件真实 timestamp/快照 createdAt/乐观=now），显示「刚刚/N 分钟前/N 小时前/N 天前/11月5日」（`NienieStrings.relativeTime` 4 语言 + 边界单测）；历史恢复不显示「刚刚」。
+- 测试：4.1 Markdown 全结构渲染（标题/加粗/行内/代码块+HighlightView+语言标签）、4.2 复制写剪贴板+图标反馈回退、4.3 时间戳（乐观 just now/历史 3 min ago/边界矩阵含中文）；mobile 62（+4）、全仓 270 vitest 全绿。

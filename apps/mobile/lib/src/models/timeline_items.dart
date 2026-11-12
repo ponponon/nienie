@@ -24,6 +24,8 @@ enum SendReceipt { pending, delivered, failed }
 class UserPromptItem extends SessionTimelineItem {
   SendReceipt receipt;
   String message;
+  /// 4.3：消息时间（事件真实时间/快照 createdAt），供相对时间戳显示
+  DateTime createdAt;
   /// 消息携带的附件元数据（文件名/MIME 可见）。
   List<AttachmentMeta> attachments;
   /// 内容归属标识与状态版本（J0.4）：同 partId 的用户消息增量精确追加，重放不重复。
@@ -36,7 +38,9 @@ class UserPromptItem extends SessionTimelineItem {
       this.revision = 0,
       this.messageId,
       this.attachments = const [],
-      this.receipt = SendReceipt.delivered});
+      this.receipt = SendReceipt.delivered,
+      DateTime? createdAt})
+      : createdAt = createdAt ?? DateTime.now();
 }
 
 /// 发送后、回复到达前的「等待中」占位卡片。
@@ -66,6 +70,8 @@ ToolCallStatus parseToolCallStatus(String? raw) {
 class StreamingTextItem extends SessionTimelineItem {
   String text;
   final bool isThinking;
+  /// 4.3：消息时间（事件真实时间/快照 createdAt），供相对时间戳显示
+  DateTime createdAt;
   /// 思考过程可折叠：回答完成后折叠，避免占用过多屏幕空间。
   bool collapsed;
   /// 内容归属标识与状态版本：同 partId 下 revision 严格单调递增，供幂等归约（J0.4）。
@@ -77,7 +83,8 @@ class StreamingTextItem extends SessionTimelineItem {
     this.collapsed = false,
     this.partId,
     this.revision = 0,
-  });
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
 }
 
 class ToolCallCardItem extends SessionTimelineItem {

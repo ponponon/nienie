@@ -580,6 +580,7 @@ class MobileBridgeClient extends ChangeNotifier {
             partId: p['partId'] as String?,
             revision: (p['revision'] as num?)?.toInt() ?? 0,
             attachments: attachments,
+            createdAt: DateTime.tryParse(p['createdAt'] as String? ?? '') ?? DateTime.now(),
           ));
         } else if (content.isNotEmpty) {
           nextTimeline.add(StreamingTextItem(
@@ -587,6 +588,7 @@ class MobileBridgeClient extends ChangeNotifier {
             isThinking: false,
             partId: p['partId'] as String?,
             revision: (p['revision'] as num?)?.toInt() ?? 0,
+            createdAt: DateTime.tryParse(p['createdAt'] as String? ?? '') ?? DateTime.now(),
           ));
         }
       } else if (kind == 'thinking') {
@@ -595,6 +597,7 @@ class MobileBridgeClient extends ChangeNotifier {
           isThinking: true,
           partId: p['partId'] as String?,
           revision: (p['revision'] as num?)?.toInt() ?? 0,
+          createdAt: DateTime.tryParse(p['createdAt'] as String? ?? '') ?? DateTime.now(),
         ));
       } else if (kind == 'tool_call') {
         nextTimeline.add(ToolCallCardItem(
@@ -1122,7 +1125,7 @@ class MobileBridgeClient extends ChangeNotifier {
     // 本地乐观消息：发送前即生成 clientMessageId 并打标，历史/事件到达时按 messageId 认领（J0.6b-3b）
     final clientMessageId = 'msg_${DateTime.now().microsecondsSinceEpoch}_${++_requestCounter}';
     final optimistic = UserPromptItem(trimmed,
-        messageId: clientMessageId, receipt: SendReceipt.pending);
+        messageId: clientMessageId, receipt: SendReceipt.pending, createdAt: DateTime.now());
     items.add(optimistic);
     final pending = PendingResponseItem(promptText: trimmed);
     items.add(pending);
@@ -1355,6 +1358,8 @@ class MobileBridgeClient extends ChangeNotifier {
   /// 将事件写入时间线（状态归约）；事件必须已按 sequence 有序调用。
   void _applyCanonicalEvent(CanonicalAgentEvent event) {
     final items = _timelineBySession.putIfAbsent(event.sessionId, () => []);
+    // 4.3：时间戳取事件真实时间（历史恢复不显示为「刚刚」）
+    final eventTime = DateTime.tryParse(event.timestamp) ?? DateTime.now();
     // J0.4 幂等归约：partId + revision 门禁——同 revision 重放丢弃、低 revision 晚到不覆盖新状态
     final rawPartId = event.payload['partId'];
     final rawPartRevision = event.payload['partRevision'];
@@ -1494,11 +1499,13 @@ class MobileBridgeClient extends ChangeNotifier {
                     partId: partId,
                     revision: partRevision ?? 0,
                     messageId: messageId,
-                    attachments: attachments));
+                    attachments: attachments,
+                    createdAt: eventTime));
               }
             }
           } else {
-            items.add(UserPromptItem(delta, messageId: messageId, attachments: attachments));
+            items.add(UserPromptItem(delta,
+                messageId: messageId, attachments: attachments, createdAt: eventTime));
           }
           markApplied();
           break;
@@ -1529,6 +1536,7 @@ class MobileBridgeClient extends ChangeNotifier {
               isThinking: false,
               partId: partId,
               revision: partRevision ?? 0,
+              createdAt: eventTime,
             ));
           }
         } else if (items.isNotEmpty &&
@@ -1540,7 +1548,7 @@ class MobileBridgeClient extends ChangeNotifier {
             (items.last as StreamingTextItem).text += delta;
           }
         } else {
-          items.add(StreamingTextItem(text: delta, isThinking: false));
+          items.add(StreamingTextItem(text: delta, isThinking: false, createdAt: eventTime));
         }
         markApplied();
         break;
@@ -1575,6 +1583,7 @@ class MobileBridgeClient extends ChangeNotifier {
               isThinking: true,
               partId: partId,
               revision: partRevision ?? 0,
+              createdAt: eventTime,
             ));
           }
         } else if (items.isNotEmpty &&
@@ -1582,7 +1591,7 @@ class MobileBridgeClient extends ChangeNotifier {
             (items.last as StreamingTextItem).isThinking) {
           (items.last as StreamingTextItem).text += delta;
         } else {
-          items.add(StreamingTextItem(text: delta, isThinking: true));
+          items.add(StreamingTextItem(text: delta, isThinking: true, createdAt: eventTime));
         }
         markApplied();
         break;

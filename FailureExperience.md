@@ -1065,3 +1065,10 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - **事故**：F1 测试发 `sequence: 100` 的 idle 事件（跳号 1..99），客户端缺口缓冲把它暂存并触发 replay（fake 无回放内容）→ 事件永不应用 → pending 不消、`_isGenerating` 卡真，测试行为诡异。
 - **教训**：J0 事件流是严格连续序号（`seq <= lastApplied` 丢重复、`> lastApplied+1` 暂存+回放）；**测试构造事件必须用连续序号**（从 1 起递增），跳号事件不是「丢弃」而是「等回放补齐」，没有回放源时等于永久滞留。
 - **预防**：测试 emit 辅助函数统一维护 per-session 自增 sequence；排查「事件没生效」先查是否被缺口缓冲暂存。
+
+### 2026-11-12 flutter_markdown 自定义 pre builder 会触发 `_inlines.isEmpty` 断言
+
+- **事故**：MarkdownMessage 用 `builders: {'pre': 自定义 builder}` 整体接管围栏代码块渲染，builder.dart 运行时断言 `assert(_inlines.isEmpty)` 崩溃。
+- **根因**：visitText 优先命中 `builders[_blocks.last.tag]`（即我们的 pre builder），返回 null → inline 缓冲的 `_InlineElement` 没有任何 child；`_addAnonymousBlockIfNeeded` 只在 `inline.children.isNotEmpty` 时才 `_inlines.clear()` → 缓冲泄漏 → 尾部断言失败。
+- **修复**：自定义 block builder 必须同时实现 `visitText` 返回占位 widget（`SizedBox.shrink()`），保证 inline 缓冲可被清空；同时把 `codeblockDecoration` 置空避免默认 pre 底色包裹自定义块。
+- **预防**：接管 flutter_markdown 的 block 级 tag（pre/table 等）时，先读 builder.dart 的 `_addAnonymousBlockIfNeeded`/`visitText` 分支契约，别假设「children 就不会被访问」。

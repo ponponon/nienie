@@ -402,4 +402,70 @@ class NienieStrings {
         AppLanguage.ja => '日本語',
         AppLanguage.ko => '한국어',
       };
+
+  // ===== 4.3 相对时间戳 =====
+
+  String get relJustNow => switch (lang) {
+        AppLanguage.zh => '刚刚',
+        AppLanguage.en => 'just now',
+        AppLanguage.ja => 'たった今',
+        AppLanguage.ko => '방금',
+      };
+
+  String relMinutesAgo(int n) => switch (lang) {
+        AppLanguage.zh => '$n 分钟前',
+        AppLanguage.en => n == 1 ? '1 min ago' : '$n min ago',
+        AppLanguage.ja => '$n分前',
+        AppLanguage.ko => '$n분 전',
+      };
+
+  String relHoursAgo(int n) => switch (lang) {
+        AppLanguage.zh => '$n 小时前',
+        AppLanguage.en => n == 1 ? '1 h ago' : '$n h ago',
+        AppLanguage.ja => '$n時間前',
+        AppLanguage.ko => '$n시간 전',
+      };
+
+  String relDaysAgo(int n) => switch (lang) {
+        AppLanguage.zh => '$n 天前',
+        AppLanguage.en => n == 1 ? '1 d ago' : '$n d ago',
+        AppLanguage.ja => '$n日前',
+        AppLanguage.ko => '$n일 전',
+      };
+
+  /// 4.3：相对时间戳（刚刚 / 3 分钟前 / 2 小时前 / 3 天前 / 11月5日）
+  String relativeTime(DateTime time, {DateTime? now}) {
+    final ref = now ?? DateTime.now();
+    final diff = ref.difference(time);
+    if (diff.inSeconds < 45) return relJustNow;
+    if (diff.inMinutes < 60) return relMinutesAgo(diff.inMinutes);
+    if (diff.inHours < 24) return relHoursAgo(diff.inHours);
+    if (diff.inDays < 7) return relDaysAgo(diff.inDays);
+    const monthsEn = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return switch (lang) {
+      AppLanguage.zh => '${time.month}月${time.day}日',
+      AppLanguage.en => '${monthsEn[time.month - 1]} ${time.day}',
+      AppLanguage.ja => '${time.month}/${time.day}',
+      AppLanguage.ko => '${time.month}.${time.day}',
+    };
+  }
+
+  // ===== 4.2 代码块复制 =====
+
+  String get copyCodeLabel => switch (lang) {
+        AppLanguage.zh => '复制代码',
+        AppLanguage.en => 'Copy code',
+        AppLanguage.ja => 'コードをコピー',
+        AppLanguage.ko => '코드 복사',
+      };
+
+  String get codeCopiedLabel => switch (lang) {
+        AppLanguage.zh => '已复制',
+        AppLanguage.en => 'Copied',
+        AppLanguage.ja => 'コピーしました',
+        AppLanguage.ko => '복사됨',
+      };
 }

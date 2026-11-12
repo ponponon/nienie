@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:nienie_mobile/main.dart';
 import 'package:nienie_mobile/src/services/attachment_picker.dart';
+import 'package:flutter_highlight/flutter_highlight.dart';
 
 void main() {
   test('decodes nienie://pair QR URI and pairs tool_use with tool_result by sequence', () async {
@@ -2089,6 +2091,108 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 10));
     expect(item.text, 'fresh'); // 清空后新增量从空开始
     client.dispose();
+  });
+
+  testWidgets('4.1 Markdown 渲染：标题/加粗/行内代码/围栏代码块（语法高亮容器）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'md1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {
+        'delta': '# Fix applied\n\n**bold text** and `inline code`\n\n```dart\nvoid main() {}\n```\n',
+        'partId': 'p_md', 'partRevision': 1,
+      },
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // 标题/加粗/行内代码文本可达
+    expect(find.textContaining('Fix applied'), findsWidgets);
+    expect(find.textContaining('bold text'), findsWidgets);
+    // 围栏代码块：暗色容器 + 高亮视图 + 语言标签
+    expect(find.byKey(const Key('code-block')), findsOneWidget);
+    expect(find.byType(HighlightView), findsOneWidget);
+    expect(find.text('dart'), findsOneWidget);
+  });
+
+  testWidgets('4.2 代码块复制按钮：点击写入剪贴板 + 图标反馈', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    final clipboardCalls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        clipboardCalls.add(call);
+        return null;
+      },
+    );
+
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'md2', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {
+        'delta': '```sh\nnpm test\n```\n',
+        'partId': 'p_cp', 'partRevision': 1,
+      },
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.tap(find.byKey(const Key('btn-copy-code')));
+    await tester.pump();
+    final setData = clipboardCalls.where((c) => c.method == 'Clipboard.setData');
+    expect(setData, isNotEmpty);
+    final text = (setData.first.arguments as Map)['text'] as String;
+    expect(text, contains('npm test'));
+    // 复制后图标切换为对勾（短暂反馈）
+    expect(find.byIcon(LucideIcons.check), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2)); // 排空复位计时器
+    expect(find.byIcon(LucideIcons.copy), findsOneWidget); // 图标回退
+  });
+
+  testWidgets('4.3 相对时间戳：历史事件按真实时间显示（3 min ago），乐观消息 just now', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'hello');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+    expect(find.text('just now'), findsWidgets); // 乐观消息=刚刚
+
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'ts1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1,
+      'timestamp': DateTime.now().subtract(const Duration(minutes: 3)).toIso8601String(),
+      'type': 'text_delta',
+      'payload': {'delta': 'old reply', 'partId': 'p_ts', 'partRevision': 1},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('3 min ago'), findsOneWidget); // 历史恢复不显示「刚刚」
+    client.dispose();
+  });
+
+  test('4.3 relativeTime 边界：刚刚/分钟/小时/天/日期（含中文）', () {
+    final en = NienieStrings(AppLanguage.en);
+    final zh = NienieStrings(AppLanguage.zh);
+    final now = DateTime(2026, 11, 12, 12);
+
+    expect(en.relativeTime(now.subtract(const Duration(seconds: 10)), now: now), 'just now');
+    expect(en.relativeTime(now.subtract(const Duration(minutes: 3)), now: now), '3 min ago');
+    expect(en.relativeTime(now.subtract(const Duration(hours: 2)), now: now), '2 h ago');
+    expect(en.relativeTime(now.subtract(const Duration(days: 3)), now: now), '3 d ago');
+    expect(en.relativeTime(now.subtract(const Duration(days: 9)), now: now), 'Nov 3');
+    expect(zh.relativeTime(now.subtract(const Duration(minutes: 5)), now: now), '5 分钟前');
+    expect(zh.relativeTime(now.subtract(const Duration(days: 9)), now: now), '11月3日');
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
