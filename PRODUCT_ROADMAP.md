@@ -30,6 +30,7 @@
 
 ## 3. 状态安抚与「放心感」（P0）— 消灭静默
 
+- [x] **路线图 #3「状态安抚」2026-11-12 整体 ACCEPTED（终审签署 @ 5879dab，八轮：c124994→491bfeb→f398646→7acb293→1969bd8→54cb7f7→de409b9→5879dab）**。封板项：F1 草稿身份快照、F2 幂等缓存（in-flight 永不淘汰，评审称为可参考实现）、F3 Session 终态持久化、F4 ACP v1/v2 协议合规（-32022 结构化回落走新连接/真实 ContentBlock 与 ToolCallContent 归约/清空语义/diff 内容）、F5 串行锁到真实进程退出。原则固化：delivered=已送达电脑（接受即确认，不等 Agent 执行完成）；kill≠已退出；fail-closed（supported 缺失不推测、缺 messageId 不假送达）。
 - [x] 3.1 顶栏状态胶囊：电脑在线/离线/重连中(第 N 次)、Agent 思考中(计时)/运行工具/等待审批/空闲
 - [x] 3.2 断线重连语言（保留会话视图+琥珀横幅+补发语义，重试失败才回配对页）
 - [x] 3.3 送达回执（pending/delivered/failed + 未送达点击重发不新建）
