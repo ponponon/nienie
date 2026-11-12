@@ -54,28 +54,32 @@ export function validateWebhookUrl(raw: string): string | undefined {
 
 /** 路径脱敏（R3-4）：识别 POSIX/Windows 盘符/UNC 绝对路径（允许空格与 Unicode），整条折叠为 ~/或…/ + 文件名。
  *  无法可靠识别时宁可整体折叠，不泄露目录结构/项目名。 */
-const HARD_STOP = '[\r\n"<>|]';
-const PATH_ROOT = '(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\\\r\\n]+\\\\|\\/)';
-/** 文件扩展名必须是纯字母（R5.4）：v1/v2/2024 等「目录名带点」不是扩展名，不做文件锚定。 */
-const FILE_SUFFIX = '\\.[A-Za-z]{1,8}';
-const LINE_SUFFIX = '(?::\\d+(?::\\d+)?)?';
-const END_BOUNDARY = '(?=[\\s,;!?:\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\"<>|]|$)';
-/** 锚定守卫（R5.4b）：扩展名必须属于最终文件名——同一子句内若还有路径分隔符，说明点号属于中间目录，不得提前锚定。 */
-const SLASH_GUARD = `(?!(?:(?!${HARD_STOP}).)*[\\/])`;
+const HARD_STOP = /[\r\n"<>|]/;
+/** POSIX 文件名仅排除 `/` 与 NUL：引号、<、>、| 均为合法路径字符，不能当作 POSIX 路径终止（R5.4d）。 */
+const POSIX_STOP = /[\r\n]/;
+/** Windows 文件名禁用字符（" < > | ? *）可作为 Windows/UNC 路径终止。 */
+const WIN_STOP = /[\r\n"<>|?*]/;
+const PATH_ROOT = /(?:[A-Za-z]:[\\/]|\\\\[^\\/\r\n]+\\|\/)/;
+const FILE_SUFFIX = /\.[A-Za-z]{1,8}/;
+const LINE_SUFFIX = /(?::\d+(?::\d+)?)?/;
+const QUOTE = /["'\u2018\u2019\u201C\u201D]/;
 
-/** 文件锚定主规则：根起点 → 任意中段 → 文件名.纯字母扩展名[:行[:列]] → 边界。 */
-const FILE_ANCHORED_RE = new RegExp(
-  `${PATH_ROOT}(?:(?!${HARD_STOP}).)*?${FILE_SUFFIX}${LINE_SUFFIX}${END_BOUNDARY}${SLASH_GUARD}`,
+const WIN_PATH_RE = new RegExp(
+  `${PATH_ROOT.source}(?:(?!${WIN_STOP.source}).)*?${FILE_SUFFIX.source}${LINE_SUFFIX.source}(?![\\w-])(?!(?:(?!${WIN_STOP.source}).)*[\\\\/])`,
   'g',
 );
-/** 兜底：无合格扩展名的路径到硬边界整体折叠（fail-closed，禁止前缀式部分脱敏）。 */
-const DIR_FALLBACK_RE = new RegExp(`${PATH_ROOT}(?:(?!${HARD_STOP}).)+`, 'g');
-const TMP_FOLDERS_RE = new RegExp(
-  `\\/?(?:private\\/)?var\\/folders\\/.*?\\.[A-Za-z0-9]{1,8}(?=[\\s"'\\u3000\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A\\u3001,;!?()<>]|$)`,
+const WIN_DIR_RE = new RegExp(`${PATH_ROOT.source}(?:(?!${WIN_STOP.source}).)+`, 'g');
+/** POSIX 文件锚定：中段仅换行为界；引号作为包裹符随匹配吞掉并剥离；
+ *  守卫 = 同一逻辑行内扩展名之后不得再出现 `/`（`"`、`|` 等合法字符行不提前终止）。 */
+const POSIX_FILE_RE = new RegExp(
+  `${QUOTE.source}?${PATH_ROOT.source}(?:(?!${POSIX_STOP.source}).)*?${FILE_SUFFIX.source}${LINE_SUFFIX.source}${QUOTE.source}?(?![\\w-])(?!(?:(?!${POSIX_STOP.source}).)*[\\\\/])`,
   'g',
 );
+const POSIX_DIR_RE = new RegExp(`${QUOTE.source}?${PATH_ROOT.source}(?:(?!${POSIX_STOP.source}).)+${QUOTE.source}?`, 'g');
+const TMP_FOLDERS_RE = /\/?(?:private\/)?var\/folders\/.*?\.[A-Za-z0-9]{1,8}(?=[\s"'、，。！？；：…,;!?()<>]|$)/g;
 
-function redactPathMatch(match: string, style: 'home' | 'ellipsis' | 'unc'): string {
+function redactPathMatch(rawMatch: string, style: 'home' | 'ellipsis' | 'unc'): string {
+  const match = rawMatch.replace(/^(?:["'\u2018\u2019\u201C\u201D])+|(?:["'\u2018\u2019\u201C\u201D])+$/g, '');
   const parts = match.split(/[\\/]/).filter((part) => part.length > 0);
   let base = parts[parts.length - 1] ?? '';
   let suffix = '';
@@ -84,7 +88,6 @@ function redactPathMatch(match: string, style: 'home' | 'ellipsis' | 'unc'): str
     suffix = suffixMatch[0];
     base = base.slice(0, -suffix.length);
   }
-  // 文件名判定同样遵守「扩展名纯字母」：project.v1 等目录名不冒充文件名
   const filenameLike = /^[\w-]{1,64}$/.test(base) || /^[\w-]{1,55}\.[A-Za-z]{1,8}$/.test(base);
   const label = filenameLike ? base : '\u2026';
   if (style === 'home') return `~/${label}${suffix}`;
@@ -93,11 +96,12 @@ function redactPathMatch(match: string, style: 'home' | 'ellipsis' | 'unc'): str
 }
 
 function classifyPath(match: string): string {
-  if (match.startsWith('\\\\')) return redactPathMatch(match, 'unc');
-  if (/^[A-Za-z]:[\\/]/.test(match)) {
-    return redactPathMatch(match, /^[A-Za-z]:[\\/]Users[\\/]/.test(match) ? 'home' : 'ellipsis');
+  const bare = match.replace(/^(?:["'\u2018\u2019\u201C\u201D])+/, '');
+  if (bare.startsWith('\\\\')) return redactPathMatch(match, 'unc');
+  if (/^[A-Za-z]:[\\/]/.test(bare)) {
+    return redactPathMatch(match, /^[A-Za-z]:[\\/]Users[\\/]/.test(bare) ? 'home' : 'ellipsis');
   }
-  return redactPathMatch(match, /^\/(?:Users|home)\//.test(match) ? 'home' : 'ellipsis');
+  return redactPathMatch(match, /^\/(?:Users|home)\//.test(bare) ? 'home' : 'ellipsis');
 }
 
 export function sanitizePushBody(text: string, detailed: boolean): string {
@@ -110,8 +114,10 @@ export function sanitizePushBody(text: string, detailed: boolean): string {
   };
   const restored = secrets
     .replace(TMP_FOLDERS_RE, () => stash('\u2026'))
-    .replace(FILE_ANCHORED_RE, (match) => stash(classifyPath(match)))
-    .replace(DIR_FALLBACK_RE, (match) => stash(classifyPath(match)));
+    .replace(POSIX_FILE_RE, (match) => stash(classifyPath(match)))
+    .replace(WIN_PATH_RE, (match) => stash(classifyPath(match)))
+    .replace(POSIX_DIR_RE, (match) => stash(classifyPath(match)))
+    .replace(WIN_DIR_RE, (match) => stash(classifyPath(match)));
   return restored.replace(/\u0000(\d+)\u0000/g, (_all, index: string) => labels[Number(index)] ?? '\u2026');
 }
 

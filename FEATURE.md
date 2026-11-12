@@ -585,3 +585,11 @@
 - **保守边界语义统一**：HARD_STOP 收窄为「真正不可能出现在路径中的字符」（`\r\n"<>|`）——全角逗号 U+FF0C、全角空格 U+3000、顿号 U+3001 等**合法路径字符**不再作为提前终止点；SLASH_GUARD 扫描、文件锚定中段、DIR_FALLBACK 三处共用同一停止集（一致语义）。`cat /Users/alice/project.private，secret/src/main.py`→`cat ~/main.py`（三个 Unicode 反例全过）。
 - 文档计数修正：测试数量以 CI 日志为准（本轮全仓 240 vitest：protocol 9 / agent-events 23 / 适配器 9 / opencode 120 / bridge-core 73 / desktop 6）。
 - 路径脱敏反例全集（R5.2→5.4c）均已入回归：带空格三平台、Unicode 目录、标点目录、单引号、Stack Trace 行号、`.v1` 目录、`.private` 前缀、Unicode 标点、var/folders、根文件。
+
+### 2026-11-11 路线图#1 Round 5.4d POSIX 合法路径字符边界（隐私封板终章）
+
+- **平台化边界语义**（不再对所有 OS 用同一 HARD_STOP 假设）：POSIX 文件名仅排除 `/` 与 NUL——`"` `<` `>` `|` 均为合法路径字符，POSIX 路径的中段/守卫只以换行为界；Windows/UNC 路径仍以 Windows 禁用字符（`" < > | ? *`）为终止。引号包裹的路径随匹配吞掉并剥离。
+- 你点名的反例通过：`cat '/Users/alice/.private"secret/src/main.py'` → `cat ~/main.py`（目录名 `secret` 不泄漏）；`x<y|z>/src/main.ts` → `~/main.ts`；`a<b>c/d<e` → `~/…`。
+- 顺带修两处静默未生效的旧补丁（扩展名词边界 `(?![\w-])` 防 `.v1` 的 `.v` 被当扩展名、WIN 规则补全句守卫）——这正是 `.private` 反例的另一半根因。
+- 计数口径修正：以 CI 日志为准，本轮全仓 242 vitest（protocol 9 / agent-events 23 / 适配器 9 / opencode 120 / bridge-core 75 / desktop 6）。
+- 路径脱敏反例全集 R5.2→5.4d 共 30+ 例全部入回归。

@@ -531,3 +531,13 @@ describe('R5.4c Unicode 路径边界完整性', () => {
       .toBe('cat ~/main.py');
   });
 });
+
+describe('R5.4d POSIX 合法路径字符（" < > |）不得提前终止', () => {
+  it('双引号内嵌目录不泄漏（引号包裹随匹配吞掉）', () => {
+    expect(sanitizePushBody("cat '/Users/alice/.private\"secret/src/main.py'", false)).toBe('cat ~/main.py');
+  });
+  it('尖括号与竖线是 POSIX 合法文件名字符，不截断路径', () => {
+    expect(sanitizePushBody('cat /Users/alice/x<y|z>/src/main.ts', false)).toBe('cat ~/main.ts');
+    expect(sanitizePushBody('cd /Users/alice/a<b>c/d<e', false)).toBe('cd ~/…');
+  });
+});
