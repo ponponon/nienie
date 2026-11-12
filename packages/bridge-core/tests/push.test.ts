@@ -508,3 +508,11 @@ describe('R5.4 目录名带点不得冒充文件扩展名', () => {
     expect(sanitizePushBody('cat /Users/bob/main.py', false)).toBe('cat ~/main.py');
   });
 });
+
+describe('R5.4b 锚定守卫：扩展名必须属于最终文件名', () => {
+  it('点号目录后仍带路径时不得提前锚定（.private!dir/src 前缀泄漏消除）', () => {
+    expect(sanitizePushBody('cat /Users/alice/.private!dir/src', false)).toBe('cat ~/src');
+    expect(sanitizePushBody('see /Users/alice/.private!x/y.log, ok', false)).toBe('see ~/y.log, ok');
+    expect(sanitizePushBody('log /Users/a/.config/foo.txt:3 x', false)).toBe('log ~/foo.txt:3 x');
+  });
+});

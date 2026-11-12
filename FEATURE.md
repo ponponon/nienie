@@ -573,3 +573,9 @@
 - 结果：`cd /Users/alice/project.v1`→`cd ~/…`；点号目录在中段时后续文件名正常锚定（`project.v1/src/main.ts`→`~/main.ts`、`file.txt:12` 行号保留）；纯字母扩展名文件名正常显示（`~/main.py`）。
 - 顺带修：Stack Trace `:42: secret` 边界（END_BOUNDARY 补 `:`，扩展名纯字母规则已消除目录误判风险）；fail-closed 语义明确（无扩展名路径向后整体折叠，宁可过度）。
 - 回归：R5.4 三组场景入测试；bridge-core 69 测试、全仓 233 vitest 全绿。
+
+### 2026-11-11 路线图#1 Round 5.4b 锚定守卫（前缀泄漏根治）
+
+- **SLASH_GUARD**：文件锚定后同一子句（到硬边界）内不得再出现路径分隔符——`.private!dir/src` 这类「点号目录+边界字符+后续路径」不再提前锚定（前缀泄漏与 R5.3 同根因的复发消除）：`cat /Users/alice/.private!dir/src`→`cat ~/src`、`.private!x/y.log, ok`→`~/y.log, ok`。
+- 修一处转义回归：END_BOUNDARY 的 `\\s` 曾被写成单反斜杠（JS 字符串 `\s` 退化为字符 `s`），导致根文件 `/secret.txt`、Stack Trace 锚定失效——修正并留测试锁定。
+- bridge-core 70 测试、全仓 234 vitest 全绿。

@@ -59,11 +59,13 @@ const PATH_ROOT = '(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\\\r\\n]+\\\\|\\/)';
 /** 文件扩展名必须是纯字母（R5.4）：v1/v2/2024 等「目录名带点」不是扩展名，不做文件锚定。 */
 const FILE_SUFFIX = '\\.[A-Za-z]{1,8}';
 const LINE_SUFFIX = '(?::\\d+(?::\\d+)?)?';
-const END_BOUNDARY = '(?=[\\s,;!?:\\u3000\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A\\"<>|]|$)';
+const END_BOUNDARY = '(?=[\\s,;!?:\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\"<>|]|$)';
+/** 锚定守卫（R5.4b）：扩展名必须属于最终文件名——同一子句内若还有路径分隔符，说明点号属于中间目录，不得提前锚定。 */
+const SLASH_GUARD = '(?!(?:(?![\\r\\n"<>|\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u201C\u201D\u3010\u3011]).)*[\\\\/])';
 
 /** 文件锚定主规则：根起点 → 任意中段 → 文件名.纯字母扩展名[:行[:列]] → 边界。 */
 const FILE_ANCHORED_RE = new RegExp(
-  `${PATH_ROOT}(?:(?!${HARD_STOP}).)*?${FILE_SUFFIX}${LINE_SUFFIX}${END_BOUNDARY}`,
+  `${PATH_ROOT}(?:(?!${HARD_STOP}).)*?${FILE_SUFFIX}${LINE_SUFFIX}${END_BOUNDARY}${SLASH_GUARD}`,
   'g',
 );
 /** 兜底：无合格扩展名的路径到硬边界整体折叠（fail-closed，禁止前缀式部分脱敏）。 */
