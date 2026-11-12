@@ -546,7 +546,11 @@ describe('路线图#2 目标① 通知 URL 与审批语义', () => {
   const now = new Date('2026-11-11T12:00:00');
   it('待审批通知 clickUrl 携带 permissionId（正确编码），其他通知不带', async () => {
     const sent: PushNotificationMessage[] = [];
-    const router = new PushNotificationRouter({ webhookSender: async (m) => sent.push(m) });
+    const router = new PushNotificationRouter({
+      webhookSender: async (m) => {
+        sent.push(m);
+      },
+    });
     await router.notifyEvent(event({
       type: 'status',
       payload: { status: 'waiting', permissionId: 'perm/1 x', detail: '执行命令' },

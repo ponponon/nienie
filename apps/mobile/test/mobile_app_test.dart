@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -1385,7 +1386,7 @@ void main() {
       ['perm_a', 'allow_always'],
       ['perm_r', 'reject'],
     ]) {
-      final pid = entry[0]!;
+      final pid = entry[0];
       transport.emitServerEvent(j04Evt(eventId: 'w_$pid', seq: ++mapSeq, type: 'status',
           payload: {'status': 'waiting', 'permissionId': pid, 'permission': 'bash', 'detail': 'z'}));
       transport.emitServerEvent(j04Evt(eventId: 'x_$pid', seq: ++mapSeq, type: 'status',
@@ -1441,6 +1442,143 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(cardP.resolvedDecision, 'allow_once');
     expect(cardP.detail, 'p');
+    client.dispose();
+  });
+
+  test('路线图#2 目标① Round 3 竞态：权威 resolved 定格后，迟到 RPC 异常不得降级、成功不得覆盖', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
+    void emit(String type, Map<String, dynamic> payload, {int seq = 1}) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'r$seq', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': seq, 'timestamp': '2026-11-12T10:00:00Z', 'type': type, 'payload': payload,
+      });
+    }
+
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_r', 'permission': 'bash', 'detail': 'x'});
+    await Future<void>.delayed(Duration.zero);
+    transport.permissionReplyGate = Completer<void>();
+    final pending = client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_r', decision: 'allow_once');
+    await Future<void>.delayed(Duration.zero); // RPC in-flight
+    var card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().single;
+    expect(card.replyPending, isTrue);
+
+    // RPC 未返回期间，权威 resolved 到达并定格
+    emit('status', {'status': 'resolved', 'permissionId': 'perm_r', 'decision': 'reject'}, seq: 2);
+    await Future<void>.delayed(Duration.zero);
+    expect(card.resolvedDecision, 'reject');
+    expect(card.replyPending, isFalse);
+
+    // 迟到 RPC 异常（回执失配）→ 不得降级为不确定、不得改写结论
+    transport.permissionReplyEchoMode = 'permissionIdMismatch';
+    transport.permissionReplyGate!.complete();
+    await pending;
+    expect(card.resolvedDecision, 'reject');
+    expect(card.resolutionUncertain, isFalse);
+
+    // 另一卡：RPC 成功不得覆盖已定格的不同结果
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_r2', 'permission': 'bash', 'detail': 'y'}, seq: 3);
+    await Future<void>.delayed(Duration.zero);
+    transport.permissionReplyGate = Completer<void>();
+    transport.permissionReplyEchoMode = 'ok';
+    final pending2 = client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_r2', decision: 'allow_once');
+    await Future<void>.delayed(Duration.zero);
+    emit('status', {'status': 'resolved', 'permissionId': 'perm_r2', 'decision': 'reject'}, seq: 4);
+    await Future<void>.delayed(Duration.zero);
+    transport.permissionReplyGate!.complete();
+    await pending2;
+    card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().singleWhere((c) => c.permissionId == 'perm_r2');
+    expect(card.resolvedDecision, 'reject'); // 权威结果不被 RPC 成功覆盖
+    client.dispose();
+  });
+
+  test('路线图#2 目标① Round 3 业务层禁重试 + unknown 可升级为明确结果', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
+    void emit(String type, Map<String, dynamic> payload, {int seq = 1}) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 's$seq', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': seq, 'timestamp': '2026-11-12T10:00:00Z', 'type': type, 'payload': payload,
+      });
+    }
+
+    // 不确定态 → 业务方法层拒绝重试（即使 UI 按钮被绕过）
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_u1', 'permission': 'bash', 'detail': 'x'});
+    await Future<void>.delayed(Duration.zero);
+    transport.permissionReplyEchoMode = 'missing';
+    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_u1', decision: 'allow_once');
+    var card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().single;
+    expect(card.resolutionUncertain, isTrue);
+    transport.permissionReplyEchoMode = 'ok';
+    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_u1', decision: 'allow_once');
+    expect(transport.permissionReplies.length, 1); // 第二次调用被状态机拒绝
+
+    // unknown 可被后续明确结果升级
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_u2', 'permission': 'bash', 'detail': 'y'}, seq: 2);
+    emit('status', {'status': 'resolved', 'permissionId': 'perm_u2'}, seq: 3); // 缺失 decision → unknown
+    await Future<void>.delayed(Duration.zero);
+    card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().singleWhere((c) => c.permissionId == 'perm_u2');
+    expect(card.resolvedDecision, 'unknown');
+    emit('status', {'status': 'resolved', 'permissionId': 'perm_u2', 'decision': 'allow_once'}, seq: 4);
+    await Future<void>.delayed(Duration.zero);
+    expect(card.resolvedDecision, 'allow_once'); // 升级为明确结果
+    // 明确结果不再被未知事件降级
+    emit('status', {'status': 'resolved', 'permissionId': 'perm_u2', 'decision': 'weird'}, seq: 5);
+    await Future<void>.delayed(Duration.zero);
+    expect(card.resolvedDecision, 'allow_once');
+    client.dispose();
+  });
+
+  test('路线图#2 目标① Round 3 回执缺字段逐项 fail-closed', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
+    var seq = 0;
+    Future<void> attempt(String pid, String mode) async {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'f_$pid', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': ++seq, 'timestamp': '2026-11-12T10:00:00Z', 'type': 'status',
+        'payload': {'status': 'waiting', 'permissionId': pid, 'permission': 'bash', 'detail': 'x'},
+      });
+      await Future<void>.delayed(Duration.zero);
+      transport.permissionReplyEchoMode = mode;
+      await client.replyPermission(sessionId: 'ses_alpha', permissionId: pid, decision: 'allow_once');
+    }
+
+    for (final entry in [
+      ['perm_notok', 'notOk'],
+      ['perm_noreplied', 'missingReplied'],
+      ['perm_nosid', 'missingSessionId'],
+      ['perm_nopid', 'missingPermissionId'],
+      ['perm_nodecision', 'missingDecision'],
+    ]) {
+      await attempt(entry[0]!, entry[1]!);
+    }
+    for (final pid in ['perm_notok', 'perm_noreplied', 'perm_nosid', 'perm_nopid', 'perm_nodecision']) {
+      final card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().singleWhere((c) => c.permissionId == pid);
+      expect(card.resolvedDecision, isNull, reason: pid);
+      expect(card.resolutionUncertain, isTrue, reason: pid);
+    }
+    client.dispose();
+  });
+
+  test('路线图#2 目标① Round 3 深链双键聚焦最终态 + 普通通知清焦点 + URL 编码回归', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
+    await client.refreshSessions();
+    client.connectionState = BridgeConnectionState.connected;
+
+    // 带 permission 的深链：会话进入后双键聚焦
+    expect(client.handleDeepLink(Uri.parse('nienie://session/ses_alpha?permission=perm%2F1%20x')), isTrue);
+    await Future<void>.delayed(Duration.zero);
+    expect(client.focusedPermissionId, 'perm/1 x'); // 编码解析正确
+    expect(client.focusedPermissionSessionId, 'ses_alpha');
+    expect(client.pendingDeepLinkPermissionId, isNull);
+
+    // 普通会话通知：清除遗留聚焦
+    expect(client.handleDeepLink(Uri.parse('nienie://session/ses_alpha')), isTrue);
+    await Future<void>.delayed(Duration.zero);
+    expect(client.focusedPermissionId, isNull);
+    expect(client.focusedPermissionSessionId, isNull);
     client.dispose();
   });
 

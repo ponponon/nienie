@@ -9,8 +9,11 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<String?> sentModelIds = [];
   final List<String?> sentClientMessageIds = [];
   bool diffUnavailable = false;
-  /// ok | missing | sessionIdMismatch | permissionIdMismatch | decisionMismatch
+  /// ok | missing | notOk | missingReplied | missingSessionId | missingPermissionId |
+  /// missingDecision | sessionIdMismatch | permissionIdMismatch | decisionMismatch
   String permissionReplyEchoMode = 'ok';
+  /// 挂起 permission.reply 响应（竞态测试用）：complete 后才返回
+  Completer<void>? permissionReplyGate;
   List<Map<String, dynamic>> diffResponse = [
     {
       'diffId': 'd1',
@@ -202,24 +205,33 @@ class FakeBridgeTransport implements BridgeTransport {
           'permissionId': request['permissionId'] as String,
           'decision': request['decision'] as String,
         });
+        if (permissionReplyGate != null) {
+          await permissionReplyGate!.future;
+        }
         if (permissionReplyEchoMode == 'missing') {
           return {'type': 'response', 'requestId': requestId, 'ok': true};
+        }
+        if (permissionReplyEchoMode == 'notOk') {
+          return {'type': 'response', 'requestId': requestId, 'ok': false};
         }
         return {
           'type': 'response',
           'requestId': requestId,
           'ok': true,
           'data': {
-            'replied': true,
-            'sessionId': permissionReplyEchoMode == 'sessionIdMismatch'
-                ? 'ses_other'
-                : request['sessionId'],
-            'permissionId': permissionReplyEchoMode == 'permissionIdMismatch'
-                ? '${request['permissionId']}_mismatch'
-                : request['permissionId'],
-            'decision': permissionReplyEchoMode == 'decisionMismatch'
-                ? 'allow_always'
-                : request['decision'],
+            if (permissionReplyEchoMode != 'missingReplied') 'replied': true,
+            if (permissionReplyEchoMode != 'missingSessionId')
+              'sessionId': permissionReplyEchoMode == 'sessionIdMismatch'
+                  ? 'ses_other'
+                  : request['sessionId'],
+            if (permissionReplyEchoMode != 'missingPermissionId')
+              'permissionId': permissionReplyEchoMode == 'permissionIdMismatch'
+                  ? '${request['permissionId']}_mismatch'
+                  : request['permissionId'],
+            if (permissionReplyEchoMode != 'missingDecision')
+              'decision': permissionReplyEchoMode == 'decisionMismatch'
+                  ? 'allow_always'
+                  : request['decision'],
           },
         };
       case 'session.diff':

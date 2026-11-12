@@ -616,3 +616,12 @@
 - **P1**：in-flight 幂等键改 `(sessionId, permissionId)`（跨会话同 ID 不互相阻塞）；外部 resolved 事件同时清 `replyPending`/`resolutionUncertain`（他端审批后不再悬挂"提交中"）。
 - **P2**：深链聚焦补 `focusedPermissionSessionId` 双键限定 + notifyListeners；通知 URL permissionId 编码/解析测试。
 - 测试 +5（mobile 38：回执四态 fail-closed、决策映射四值、并发/归位四场景；opencode：unknown 映射；bridge-core：通知 URL 编码）；全仓 245 vitest 全绿。
+
+### 2026-11-12 路线图#2 目标① Round 3（竞态与状态机收口）
+
+- **P0 CI 修复**：push 测试 sender 回调返回类型（`async (m) => sent.push(m)` → block）。
+- **P0 业务层禁重试**：`replyPermission` 对 `resolvedDecision != null || resolutionUncertain` 直接拒绝（状态机约束，不依赖 UI 隐藏按钮）——测试：不确定态二次调用 permissionReplies 仍为 1。
+- **P1 状态优先级**（`_applyResolution`）：明确结果（allow/reject）终态不可覆盖/降级；unknown 可被后续明确结果升级、不被未知事件降级；RPC 异常仅在"尚无任何权威结果"时标记 resolutionUncertain——测试：权威 resolved 定格后迟到 RPC 异常不降级、RPC 成功不覆盖不同结果、unknown→allow_once 升级、明确态不被 weird 降级。
+- **P1 竞态测试**：Completer 挂起 RPC→in-flight 中收到 resolved 定格→迟到异常/成功均不改写结论（真实 in-flight 模拟，非顺序 emit）。
+- **P2**：回执缺字段逐项 fail-closed（ok=false / replied 缺 / sessionId 缺 / permissionId 缺 / decision 缺五种模式全测）；深链双键最终态断言（含 `perm%2F1%20x` 编码解析）；普通会话通知清除遗留审批聚焦。
+- 测试：mobile 42（+4 大场景）、全仓 245 vitest + flutter analyze 全绿。

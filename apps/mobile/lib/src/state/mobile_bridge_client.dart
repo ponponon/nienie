@@ -689,6 +689,19 @@ class MobileBridgeClient extends ChangeNotifier {
     }
   }
 
+  /// 审批状态优先级（Round 3）：明确结果（allow/reject）是终态不可覆盖/降级；
+  /// unknown 可被后续明确结果升级；尚无结果时才接受赋值。
+  void _applyResolution(PermissionRequestCardItem card, String decision) {
+    final current = card.resolvedDecision;
+    final currentIsDefinite =
+        current == 'allow_once' || current == 'allow_always' || current == 'reject';
+    if (currentIsDefinite) return;
+    final nextIsDefinite =
+        decision == 'allow_once' || decision == 'allow_always' || decision == 'reject';
+    if (current == 'unknown' && !nextIsDefinite) return;
+    card.resolvedDecision = decision;
+  }
+
   /// 目标③：审批幂等——已决/审批中的卡片不再重复提交，防误触与重复审批（键含 sessionId，跨会话同 ID 不互相阻塞）
   final Set<String> _permissionReplyInFlight = <String>{};
 
@@ -707,7 +720,11 @@ class MobileBridgeClient extends ChangeNotifier {
         }
       }
     }
-    if (target != null && target.resolvedDecision != null) return; // 已决：拒绝重复审批
+    // 目标① Round 3：禁止重试是状态机约束（不依赖 UI 隐藏按钮）——
+    // 已决或结果不确定（resolutionUncertain）时，业务方法层直接拒绝
+    if (target != null && (target.resolvedDecision != null || target.resolutionUncertain)) {
+      return;
+    }
     final inflightKey = '$sessionId#$permissionId';
     if (!_permissionReplyInFlight.add(inflightKey)) return; // 审批中：防双击
     if (target != null) target.replyPending = true;
@@ -732,7 +749,8 @@ class MobileBridgeClient extends ChangeNotifier {
         throw StateError('permission receipt invalid');
       }
       if (target != null) {
-        target.resolvedDecision = decision;
+        // 状态优先级：已收到明确权威结果不被 RPC 覆盖；unknown 可升级为明确结果
+        _applyResolution(target, decision);
         target.replyPending = false;
         target.resolutionUncertain = false;
       }
@@ -741,10 +759,12 @@ class MobileBridgeClient extends ChangeNotifier {
         focusedPermissionId = null;
       }
     } catch (_) {
-      // 审批结果不确定：禁止盲目重试（按钮不重新开放），等待权威 resolved 事件同步
+      // 竞态防护：仅当尚无任何权威结果时才标记不确定；已有明确/未知结果不被 RPC 异常降级
       if (target != null) {
         target.replyPending = false;
-        target.resolutionUncertain = true;
+        if (target.resolvedDecision == null) {
+          target.resolutionUncertain = true;
+        }
       }
       errorMessage = '审批结果暂时无法确认，正在等待服务端状态同步，请勿重复操作';
     } finally {
@@ -952,6 +972,11 @@ class MobileBridgeClient extends ChangeNotifier {
       pendingDeepLinkSessionId = uri.pathSegments.first;
       final permission = uri.queryParameters['permission'];
       pendingDeepLinkPermissionId = (permission != null && permission.isNotEmpty) ? permission : null;
+      if (pendingDeepLinkPermissionId == null) {
+        // 普通会话通知：清除遗留审批聚焦，防旧卡片残留高亮
+        focusedPermissionId = null;
+        focusedPermissionSessionId = null;
+      }
       unawaited(_consumePendingDeepLink());
       notifyListeners();
       return true;
@@ -1309,14 +1334,15 @@ class MobileBridgeClient extends ChangeNotifier {
           // 目标①（fail-closed）：permission.replied 归位——只接受明确决策值；
           // 未知/缺失决策定格为 unknown（结果未知），绝不伪装成批准或拒绝
           final raw = event.payload['decision'] as String?;
-          final decision = (raw == 'allow_once' || raw == 'allow_always' || raw == 'reject')
-              ? raw
-              : 'unknown';
+          final decision = switch (raw) {
+            'allow_once' => 'allow_once',
+            'allow_always' => 'allow_always',
+            'reject' => 'reject',
+            _ => 'unknown',
+          };
           for (final item in items) {
             if (item is PermissionRequestCardItem && item.permissionId == permissionId) {
-              if (item.resolvedDecision == null) {
-                item.resolvedDecision = decision;
-              }
+              _applyResolution(item, decision);
               item.replyPending = false;
               item.resolutionUncertain = false;
             }
