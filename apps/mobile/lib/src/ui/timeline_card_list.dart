@@ -456,11 +456,31 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   const SizedBox(height: 8),
                   if (item.resolvedDecision != null)
                     Text(
-                      'Decision: ${item.resolvedDecision}',
+                      switch (item.resolvedDecision!) {
+                        'allow_once' => widget.client.strings.permResultOnce,
+                        'allow_always' => widget.client.strings.permResultAlways,
+                        'reject' => widget.client.strings.permResultReject,
+                        _ => widget.client.strings.permResultUnknown,
+                      },
+                      key: Key('perm-result-${item.permissionId}'),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: item.resolvedDecision == 'reject'
+                            ? const Color(0xFFDC2626)
+                            : item.resolvedDecision == 'unknown'
+                                ? _textSecondary
+                                : _weTypeGreen,
+                      ),
+                    )
+                  else if (item.resolutionUncertain)
+                    Text(
+                      widget.client.strings.permUncertainNote,
+                      key: Key('perm-uncertain-${item.permissionId}'),
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
-                        color: _textPrimary,
+                        color: Color(0xFFD97706),
                       ),
                     )
                   else

@@ -689,7 +689,7 @@ class MobileBridgeClient extends ChangeNotifier {
     }
   }
 
-  /// 目标③：审批幂等——已决/审批中的卡片不再重复提交，防误触与重复审批
+  /// 目标③：审批幂等——已决/审批中的卡片不再重复提交，防误触与重复审批（键含 sessionId，跨会话同 ID 不互相阻塞）
   final Set<String> _permissionReplyInFlight = <String>{};
 
   Future<void> replyPermission({
@@ -708,7 +708,8 @@ class MobileBridgeClient extends ChangeNotifier {
       }
     }
     if (target != null && target.resolvedDecision != null) return; // 已决：拒绝重复审批
-    if (!_permissionReplyInFlight.add(permissionId)) return; // 审批中：防双击
+    final inflightKey = '$sessionId#$permissionId';
+    if (!_permissionReplyInFlight.add(inflightKey)) return; // 审批中：防双击
     if (target != null) target.replyPending = true;
     notifyListeners();
     try {
@@ -719,25 +720,35 @@ class MobileBridgeClient extends ChangeNotifier {
         'permissionId': permissionId,
         'decision': decision,
       });
-      if (res['ok'] != true) {
-        throw StateError('permission reply failed');
-      }
-      // 目标①：回执校验——响应必须回显同一 permissionId，否则视为串单风险，不落定
-      final data = res['data'] as Map<String, dynamic>?;
-      final echoedId = data?['permissionId'] as String?;
-      if (echoedId != null && echoedId != permissionId) {
-        throw StateError('permission reply echo mismatch');
+      // 目标①（fail-closed）：完整回执校验——ok / replied / sessionId / permissionId / decision
+      // 任一缺失或不匹配都不落定，绝不把不确定结果伪装成已批准/已拒绝
+      final data = res['ok'] == true ? res['data'] as Map<String, dynamic>? : null;
+      final receiptValid = data != null &&
+          data['replied'] == true &&
+          data['sessionId'] == sessionId &&
+          data['permissionId'] == permissionId &&
+          data['decision'] == decision;
+      if (!receiptValid) {
+        throw StateError('permission receipt invalid');
       }
       if (target != null) {
         target.resolvedDecision = decision;
         target.replyPending = false;
+        target.resolutionUncertain = false;
       }
-      focusedPermissionId = null;
+      if (focusedPermissionSessionId == sessionId && focusedPermissionId == permissionId) {
+        focusedPermissionSessionId = null;
+        focusedPermissionId = null;
+      }
     } catch (_) {
-      if (target != null) target.replyPending = false;
-      errorMessage = '审批提交失败，请重试';
+      // 审批结果不确定：禁止盲目重试（按钮不重新开放），等待权威 resolved 事件同步
+      if (target != null) {
+        target.replyPending = false;
+        target.resolutionUncertain = true;
+      }
+      errorMessage = '审批结果暂时无法确认，正在等待服务端状态同步，请勿重复操作';
     } finally {
-      _permissionReplyInFlight.remove(permissionId);
+      _permissionReplyInFlight.remove(inflightKey);
       notifyListeners();
     }
   }
@@ -930,8 +941,9 @@ class MobileBridgeClient extends ChangeNotifier {
   String? pendingDeepLinkSessionId;
   /// 深链目标审批（目标①）：nienie://session/<id>?permission=<pid> 直达具体待审批项。
   String? pendingDeepLinkPermissionId;
-  /// 当前聚焦的待审批 permissionId（UI 高亮该卡片，绝不串单）。
+  /// 当前聚焦的待审批（UI 高亮该卡片，绝不串单）——会话与 permissionId 双键限定。
   String? focusedPermissionId;
+  String? focusedPermissionSessionId;
 
   /// 处理通知深链。返回是否识别。未配对/未加载时先挂起，sessions 刷新后自动进入。
   bool handleDeepLink(Uri uri) {
@@ -962,7 +974,9 @@ class MobileBridgeClient extends ChangeNotifier {
       if (permission != null) {
         pendingDeepLinkPermissionId = null;
         focusedPermissionId = permission;
+        focusedPermissionSessionId = id;
       }
+      notifyListeners();
     } catch (_) {
       // 保留 pendingDeepLinkSessionId
     }
@@ -1292,13 +1306,19 @@ class MobileBridgeClient extends ChangeNotifier {
             );
           }
         } else if (status == 'resolved' && permissionId != null) {
-          // 目标①：permission.replied 归位——他人/其他端审批后卡片立即定格，不悬挂
-          final decision = event.payload['decision'] as String?;
+          // 目标①（fail-closed）：permission.replied 归位——只接受明确决策值；
+          // 未知/缺失决策定格为 unknown（结果未知），绝不伪装成批准或拒绝
+          final raw = event.payload['decision'] as String?;
+          final decision = (raw == 'allow_once' || raw == 'allow_always' || raw == 'reject')
+              ? raw
+              : 'unknown';
           for (final item in items) {
-            if (item is PermissionRequestCardItem &&
-                item.permissionId == permissionId &&
-                item.resolvedDecision == null) {
-              item.resolvedDecision = decision ?? 'allow_once';
+            if (item is PermissionRequestCardItem && item.permissionId == permissionId) {
+              if (item.resolvedDecision == null) {
+                item.resolvedDecision = decision;
+              }
+              item.replyPending = false;
+              item.resolutionUncertain = false;
             }
           }
         }

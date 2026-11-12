@@ -541,3 +541,18 @@ describe('R5.4d POSIX 合法路径字符（" < > |）不得提前终止', () => 
     expect(sanitizePushBody('cd /Users/alice/a<b>c/d<e', false)).toBe('cd ~/…');
   });
 });
+
+describe('路线图#2 目标① 通知 URL 与审批语义', () => {
+  const now = new Date('2026-11-11T12:00:00');
+  it('待审批通知 clickUrl 携带 permissionId（正确编码），其他通知不带', async () => {
+    const sent: PushNotificationMessage[] = [];
+    const router = new PushNotificationRouter({ webhookSender: async (m) => sent.push(m) });
+    await router.notifyEvent(event({
+      type: 'status',
+      payload: { status: 'waiting', permissionId: 'perm/1 x', detail: '执行命令' },
+    }), { now, sessionTitle: '修 GC' });
+    await router.notifyEvent(event({ type: 'status', payload: { status: 'idle' } }), { now, sessionTitle: '修 GC' });
+    expect(sent[0]!.clickUrl).toBe('nienie://session/ses_1?permission=perm%2F1%20x');
+    expect(sent[1]!.clickUrl).toBe('nienie://session/ses_1');
+  });
+});

@@ -158,6 +158,41 @@ class NienieStrings {
         AppLanguage.ko => '거부',
       };
 
+  String get permResultOnce => switch (lang) {
+        AppLanguage.zh => '已允许一次',
+        AppLanguage.en => 'Allowed once',
+        AppLanguage.ja => '今回のみ許可済み',
+        AppLanguage.ko => '한 번 허용됨',
+      };
+
+  String get permResultAlways => switch (lang) {
+        AppLanguage.zh => '已始终允许',
+        AppLanguage.en => 'Always allowed',
+        AppLanguage.ja => '常に許可済み',
+        AppLanguage.ko => '항상 허용됨',
+      };
+
+  String get permResultReject => switch (lang) {
+        AppLanguage.zh => '已拒绝',
+        AppLanguage.en => 'Rejected',
+        AppLanguage.ja => '拒否済み',
+        AppLanguage.ko => '거부됨',
+      };
+
+  String get permResultUnknown => switch (lang) {
+        AppLanguage.zh => '结果未知，等待电脑端状态同步',
+        AppLanguage.en => 'Result unknown, waiting for computer sync',
+        AppLanguage.ja => '結果不明、PC側の同期を待っています',
+        AppLanguage.ko => '결과 알 수 없음, PC 동기화 대기 중',
+      };
+
+  String get permUncertainNote => switch (lang) {
+        AppLanguage.zh => '审批结果暂时无法确认，请勿重复操作',
+        AppLanguage.en => 'Approval result cannot be confirmed yet, do not retry',
+        AppLanguage.ja => '承認結果を確認できません。再操作しないでください',
+        AppLanguage.ko => '승인 결과를 확인할 수 없습니다. 다시 시도하지 마세요',
+      };
+
   String get langShortLabel => switch (lang) {
         AppLanguage.zh => '中文',
         AppLanguage.en => 'EN',

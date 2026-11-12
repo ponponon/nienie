@@ -157,14 +157,18 @@ export class V2LiveEventMapper {
         ];
       }
       case 'permission.replied': {
-        // 目标①：他人/其他端审批后归位卡片（不串单、不悬挂）
+        // 目标①（fail-closed）：只接受明确的 once/always/reject；
+        // 未知/缺失决策映射为 'unknown'，绝不伪装成批准或拒绝。
         const reply = asRecord(data['reply']);
-        const decisionRaw = String(reply?.['decision'] ?? '');
-        const decision = decisionRaw === 'once'
+        const decisionRaw = reply === undefined ? undefined : String(reply['decision']);
+        const decision =
+          decisionRaw === 'once'
             ? 'allow_once'
             : decisionRaw === 'always'
                 ? 'allow_always'
-                : 'reject';
+                : decisionRaw === 'reject'
+                    ? 'reject'
+                    : 'unknown';
         return [
           {
             type: 'status',

@@ -118,6 +118,8 @@ class PermissionRequestCardItem extends SessionTimelineItem {
   String? resolvedDecision;
   /// 审批提交中（目标③：防误触/重复审批的进行中状态）
   bool replyPending;
+  /// 回执不可信（fail-closed）：结果未知，禁止重试按钮，等待权威状态同步
+  bool resolutionUncertain;
 
   PermissionRequestCardItem({
     required this.permissionId,
@@ -126,6 +128,7 @@ class PermissionRequestCardItem extends SessionTimelineItem {
     this.patterns = const [],
     this.resolvedDecision,
     this.replyPending = false,
+    this.resolutionUncertain = false,
   });
 }
 

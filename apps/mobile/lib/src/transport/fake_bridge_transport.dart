@@ -9,7 +9,8 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<String?> sentModelIds = [];
   final List<String?> sentClientMessageIds = [];
   bool diffUnavailable = false;
-  bool permissionReplyEchoMismatch = false;
+  /// ok | missing | sessionIdMismatch | permissionIdMismatch | decisionMismatch
+  String permissionReplyEchoMode = 'ok';
   List<Map<String, dynamic>> diffResponse = [
     {
       'diffId': 'd1',
@@ -201,17 +202,24 @@ class FakeBridgeTransport implements BridgeTransport {
           'permissionId': request['permissionId'] as String,
           'decision': request['decision'] as String,
         });
+        if (permissionReplyEchoMode == 'missing') {
+          return {'type': 'response', 'requestId': requestId, 'ok': true};
+        }
         return {
           'type': 'response',
           'requestId': requestId,
           'ok': true,
           'data': {
             'replied': true,
-            'sessionId': request['sessionId'],
-            'permissionId': permissionReplyEchoMismatch
+            'sessionId': permissionReplyEchoMode == 'sessionIdMismatch'
+                ? 'ses_other'
+                : request['sessionId'],
+            'permissionId': permissionReplyEchoMode == 'permissionIdMismatch'
                 ? '${request['permissionId']}_mismatch'
                 : request['permissionId'],
-            'decision': request['decision'],
+            'decision': permissionReplyEchoMode == 'decisionMismatch'
+                ? 'allow_always'
+                : request['decision'],
           },
         };
       case 'session.diff':

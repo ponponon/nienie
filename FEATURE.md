@@ -608,3 +608,11 @@
 - **审批幂等三防线**：已决卡拒绝重复提交、审批中防双击（in-flight 集合）、回执 `permissionId` 不一致视为串单风险不落定并提示重试。
 - **深链直达审批项**：待审批通知 `clickUrl` 带 `?permission=<pid>`；`handleDeepLink` 解析并置 `focusedPermissionId`（UI 高亮目标卡，目标②③的展示基础）。
 - 测试 +3（mobile 36：单卡 upsert/已决不改写/resolved 归位/回执失配不落定；opencode：permission.replied 映射）；全仓 243 vitest 全绿。
+
+### 2026-11-12 路线图#2 目标① Round 2（审批状态 fail-closed 语义）
+
+- **P0 未知决策不伪装**（两端）：mapper 只映射 once/always/reject，未知/缺失 decision → `unknown`（不默认 reject/allow_once）；手机端 `resolvedDecision='unknown'` 定格为「结果未知，等待电脑端状态同步」（无按钮）。
+- **P0 严格回执**：`ok`/`data.replied`/`sessionId`/`permissionId`/`decision` 五项全等才落定；任一缺失或不匹配 → `resolutionUncertain` 不确定态（按钮不重新开放、禁止盲目重试），提示「审批结果暂时无法确认…请勿重复操作」，等待权威 resolved 事件同步。
+- **P1**：in-flight 幂等键改 `(sessionId, permissionId)`（跨会话同 ID 不互相阻塞）；外部 resolved 事件同时清 `replyPending`/`resolutionUncertain`（他端审批后不再悬挂"提交中"）。
+- **P2**：深链聚焦补 `focusedPermissionSessionId` 双键限定 + notifyListeners；通知 URL permissionId 编码/解析测试。
+- 测试 +5（mobile 38：回执四态 fail-closed、决策映射四值、并发/归位四场景；opencode：unknown 映射；bridge-core：通知 URL 编码）；全仓 245 vitest 全绿。

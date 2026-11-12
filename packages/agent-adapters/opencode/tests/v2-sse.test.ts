@@ -101,6 +101,18 @@ describe('V2LiveEventMapper（最小 v2 SSE 映射）', () => {
     });
   });
 
+  it('permission.replied 未知/缺失 decision 映射为 unknown（fail-closed 不伪装）', () => {
+    const mapper = new V2LiveEventMapper();
+    const weird = mapper.map(frame('permission.replied', {
+      sessionID: 'ses_1', requestID: 'perm_x', reply: { decision: 'weird' },
+    }));
+    expect(weird[0]!.payload['decision']).toBe('unknown');
+    const missing = mapper.map(frame('permission.replied', {
+      sessionID: 'ses_1', requestID: 'perm_y', reply: {},
+    }));
+    expect(missing[0]!.payload['decision']).toBe('unknown');
+  });
+
   it('未知事件与无 sessionID 帧被忽略', () => {
     const mapper = new V2LiveEventMapper();
     expect(mapper.map(frame('session.created', { sessionID: 'ses_1' }))).toEqual([]);

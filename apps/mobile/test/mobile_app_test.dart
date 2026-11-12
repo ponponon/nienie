@@ -1306,25 +1306,141 @@ void main() {
     client.dispose();
   });
 
-  test('路线图#2 目标① 回执校验：echo permissionId 不一致不落定并提示', () async {
+  test('路线图#2 目标① 回执 fail-closed：缺失/不一致回执不落定、不确定态禁重试', () async {
     final transport = FakeBridgeTransport();
     final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
-    transport.permissionReplyEchoMismatch = true;
-    transport.emitServerEvent({
-      'version': 1,
-      'eventId': 'pe1',
-      'streamEpoch': 'ep1',
-      'sessionId': 'ses_alpha',
-      'sequence': 1,
-      'timestamp': '2026-11-12T10:00:00Z',
-      'type': 'status',
-      'payload': {'status': 'waiting', 'permissionId': 'perm_9', 'permission': 'bash', 'detail': '写文件'},
-    });
+    var seedSeq = 0;
+    Future<void> seed(String pid) async {
+      transport.emitServerEvent({
+        'version': 1,
+        'eventId': 'pe_$pid',
+        'streamEpoch': 'ep1',
+        'sessionId': 'ses_alpha',
+        'sequence': ++seedSeq,
+        'timestamp': '2026-11-12T10:00:00Z',
+        'type': 'status',
+        'payload': {'status': 'waiting', 'permissionId': pid, 'permission': 'bash', 'detail': '写文件'},
+      });
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    // 回执缺失 → 不落定 + 不确定态
+    await seed('perm_missing');
+    transport.permissionReplyEchoMode = 'missing';
+    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_missing', decision: 'allow_once');
+    var card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().firstWhere((c) => c.permissionId == 'perm_missing');
+    expect(card.resolvedDecision, isNull);
+    expect(card.resolutionUncertain, isTrue);
+    expect(client.errorMessage, contains('请勿重复操作'));
+
+    // permissionId 不一致 → 不落定
+    await seed('perm_id');
+    transport.permissionReplyEchoMode = 'permissionIdMismatch';
+    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_id', decision: 'allow_once');
+    card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().firstWhere((c) => c.permissionId == 'perm_id');
+    expect(card.resolvedDecision, isNull);
+
+    // sessionId 不一致 → 不落定
+    await seed('perm_sess');
+    transport.permissionReplyEchoMode = 'sessionIdMismatch';
+    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_sess', decision: 'allow_once');
+    card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().firstWhere((c) => c.permissionId == 'perm_sess');
+    expect(card.resolvedDecision, isNull);
+
+    // decision 不一致 → 不落定
+    await seed('perm_dec');
+    transport.permissionReplyEchoMode = 'decisionMismatch';
+    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_dec', decision: 'allow_once');
+    card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().firstWhere((c) => c.permissionId == 'perm_dec');
+    expect(card.resolvedDecision, isNull);
+    client.dispose();
+  });
+
+  testWidgets('路线图#2 目标① fail-closed 决策映射：未知/缺失 decision 不伪装批准或拒绝', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.emitServerEvent(j04Evt(eventId: 'u1', seq: 1, type: 'status',
+        payload: {'status': 'waiting', 'permissionId': 'perm_u', 'permission': 'bash', 'detail': 'x'}));
+    // 未知 decision → unknown（不伪装 allow/reject）
+    transport.emitServerEvent(j04Evt(eventId: 'u2', seq: 2, type: 'status',
+        payload: {'status': 'resolved', 'permissionId': 'perm_u', 'decision': 'weird'}));
+    // 缺失 decision → unknown
+    transport.emitServerEvent(j04Evt(eventId: 'u3', seq: 3, type: 'status',
+        payload: {'status': 'waiting', 'permissionId': 'perm_v', 'permission': 'bash', 'detail': 'y'}));
+    transport.emitServerEvent(j04Evt(eventId: 'u4', seq: 4, type: 'status',
+        payload: {'status': 'resolved', 'permissionId': 'perm_v'}));
+    await tester.pump();
+    final cards = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().toList();
+    final cu = cards.firstWhere((c) => c.permissionId == 'perm_u');
+    final cv = cards.firstWhere((c) => c.permissionId == 'perm_v');
+    expect(cu.resolvedDecision, 'unknown');
+    expect(cv.resolvedDecision, 'unknown');
+
+    // 三种合法映射（canonical 值，经 mapper 归一后进入 reducer）
+    var mapSeq = 4;
+    for (final entry in [
+      ['perm_o', 'allow_once'],
+      ['perm_a', 'allow_always'],
+      ['perm_r', 'reject'],
+    ]) {
+      final pid = entry[0]!;
+      transport.emitServerEvent(j04Evt(eventId: 'w_$pid', seq: ++mapSeq, type: 'status',
+          payload: {'status': 'waiting', 'permissionId': pid, 'permission': 'bash', 'detail': 'z'}));
+      transport.emitServerEvent(j04Evt(eventId: 'x_$pid', seq: ++mapSeq, type: 'status',
+          payload: {'status': 'resolved', 'permissionId': pid, 'decision': entry[1]}));
+    }
+    await tester.pump();
+    final all = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().toList();
+    expect(all.firstWhere((c) => c.permissionId == 'perm_o').resolvedDecision, 'allow_once');
+    expect(all.firstWhere((c) => c.permissionId == 'perm_a').resolvedDecision, 'allow_always');
+    expect(all.firstWhere((c) => c.permissionId == 'perm_r').resolvedDecision, 'reject');
+    client.dispose();
+  });
+
+  test('路线图#2 目标① 并发与归位：双击只发一次、跨会话不阻塞、外部 resolved 清 pending、重复 waiting 不改写已决', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
+    final seqBySession = <String, int>{};
+    void emit(String sid, String type, Map<String, dynamic> payload) {
+      final seq = (seqBySession[sid] ?? 0) + 1;
+      seqBySession[sid] = seq;
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'e_${sid}_$seq', 'streamEpoch': 'ep1', 'sessionId': sid,
+        'sequence': seq, 'timestamp': '2026-11-12T10:00:00Z', 'type': type, 'payload': payload,
+      });
+    }
+
+    emit('ses_alpha', 'status', {'status': 'waiting', 'permissionId': 'perm_c', 'permission': 'bash', 'detail': 'c'});
     await Future<void>.delayed(Duration.zero);
-    await client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_9', decision: 'allow_once');
-    final card = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().single;
-    expect(card.resolvedDecision, isNull); // 串单风险：不落定
-    expect(client.errorMessage, contains('审批'));
+    // 双击并发：只发一次
+    await Future.wait([
+      client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_c', decision: 'allow_once'),
+      client.replyPermission(sessionId: 'ses_alpha', permissionId: 'perm_c', decision: 'allow_once'),
+    ]);
+    expect(transport.permissionReplies.where((r) => r['permissionId'] == 'perm_c').length, 1);
+
+    // 跨会话同 permissionId 不互相阻塞
+    emit('ses_beta', 'status', {'status': 'waiting', 'permissionId': 'perm_c', 'permission': 'bash', 'detail': 'c2'});
+    await Future<void>.delayed(Duration.zero);
+    await client.replyPermission(sessionId: 'ses_beta', permissionId: 'perm_c', decision: 'reject');
+    expect(transport.permissionReplies.length, 2);
+
+    // 外部 resolved 清除 replyPending（模拟本机请求未返回、他端已审批）
+    emit('ses_alpha', 'status', {'status': 'waiting', 'permissionId': 'perm_p', 'permission': 'bash', 'detail': 'p'});
+    await Future<void>.delayed(Duration.zero);
+    emit('ses_alpha', 'status', {'status': 'resolved', 'permissionId': 'perm_p', 'decision': 'allow_once'});
+    await Future<void>.delayed(Duration.zero);
+    final cardP = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().firstWhere((c) => c.permissionId == 'perm_p');
+    expect(cardP.replyPending, isFalse);
+    expect(cardP.resolvedDecision, 'allow_once');
+
+    // 已决卡收到重复 waiting 不被重新打开或改写
+    emit('ses_alpha', 'status', {'status': 'waiting', 'permissionId': 'perm_p', 'permission': 'bash', 'detail': '改写尝试'});
+    await Future<void>.delayed(Duration.zero);
+    expect(cardP.resolvedDecision, 'allow_once');
+    expect(cardP.detail, 'p');
     client.dispose();
   });
 
