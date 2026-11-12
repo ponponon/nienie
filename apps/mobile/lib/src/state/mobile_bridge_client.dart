@@ -600,15 +600,26 @@ class MobileBridgeClient extends ChangeNotifier {
           createdAt: DateTime.tryParse(p['createdAt'] as String? ?? '') ?? DateTime.now(),
         ));
       } else if (kind == 'tool_call') {
+        // Round 2：Snapshot 与实时事件产出一致 DTO——时间/退出码从 part 自身恢复
+        final toolStatus = parseToolCallStatus(p['status'] as String?);
+        final toolTerminal = toolStatus == ToolCallStatus.completed ||
+            toolStatus == ToolCallStatus.failed;
+        final toolCreatedAt =
+            DateTime.tryParse(p['createdAt'] as String? ?? '') ?? DateTime.now();
+        final toolUpdatedAt = DateTime.tryParse(p['updatedAt'] as String? ?? '');
         nextTimeline.add(ToolCallCardItem(
           toolCallId: p['toolCallId'] as String? ?? '',
           name: p['name'] as String? ?? 'tool',
           input: Map<String, dynamic>.from(p['input'] as Map? ?? const {}),
           resultContent: p['output'] as String?,
           isError: p['isError'] as bool? ?? false,
-          status: parseToolCallStatus(p['status'] as String?),
+          status: toolStatus,
           partId: p['partId'] as String?,
           revision: (p['revision'] as num?)?.toInt() ?? 0,
+          startedAt: toolCreatedAt,
+          // 终态才恢复 finishedAt（pending/running 不设置）
+          finishedAt: toolTerminal ? (toolUpdatedAt ?? toolCreatedAt) : null,
+          exitCode: (p['exitCode'] as num?)?.toInt(),
         ));
       } else if (kind == 'error') {
         nextTimeline.add(ErrorCardItem(

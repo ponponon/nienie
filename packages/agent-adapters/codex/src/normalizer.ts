@@ -175,10 +175,11 @@ export class CodexEventNormalizer {
           asString(item.aggregated_output) ??
           asString(item.output) ??
           '';
-        const exitCode = typeof item.exit_code === 'number' ? item.exit_code : 0;
+        // Round 2：真实退出码透传；缺失不伪造 exit 0（isError 仍按 failed 状态判定）
+        const exitCode = typeof item.exit_code === 'number' ? item.exit_code : undefined;
         const status = asString(item.status);
-        const isError = exitCode !== 0 || status === 'failed';
-        events.push(...this.emitToolResult(sessionId, itemId, output, isError));
+        const isError = (exitCode !== undefined && exitCode !== 0) || status === 'failed';
+        events.push(...this.emitToolResult(sessionId, itemId, output, isError, exitCode));
       }
       return events;
     }
@@ -248,6 +249,7 @@ export class CodexEventNormalizer {
     toolCallId: string,
     rawContent: string,
     isError: boolean,
+    exitCode?: number | undefined,
   ): CanonicalAgentEvent[] {
     const key = `${sessionId}:${toolCallId}`;
     if (this.emittedToolResults.has(key)) return [];
@@ -259,6 +261,8 @@ export class CodexEventNormalizer {
         toolCallId,
         content,
         isError,
+        // Round 2：真实退出码透传到 payload（缺失不伪造）
+        ...(exitCode !== undefined ? { exitCode } : {}),
         ...(truncated ? { truncated: true } : {}),
       }),
     ];

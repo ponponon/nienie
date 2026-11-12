@@ -2353,7 +2353,187 @@ void main() {
     await tester.tap(copyBtn);
     await tester.pump();
     final setData = clipboardCalls.where((c) => c.method == 'Clipboard.setData');
-    expect((setData.first.arguments as Map)['text'] as String, contains('line-1'));
+    expect((setData.first.arguments as Map)['text'] as String, 'line-1\nline-2\n${'x' * 50}');
+  });
+
+  test('Snapshot 恢复工具卡：startedAt/finishedAt/exitCode 一致还原（耗时不丢失）', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions();
+    final t0 = DateTime.utc(2026, 11, 1, 10, 0, 0);
+    final t1 = t0.add(const Duration(seconds: 4));
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_tool',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep1',
+      'watermark': 2,
+      'capturedAt': DateTime.now().toIso8601String(),
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {
+          'kind': 'tool_call',
+          'ordinal': 0,
+          'partId': 't_snap',
+          'revision': 2,
+          'createdAt': t0.toIso8601String(),
+          'updatedAt': t1.toIso8601String(),
+          'toolCallId': 'tc_snap',
+          'name': 'bash',
+          'input': {'cmd': 'ls'},
+          'output': 'ok',
+          'isError': false,
+          'status': 'completed',
+          'exitCode': 0,
+        },
+      ],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    final tool = client.timelineFor('ses_alpha').whereType<ToolCallCardItem>().single;
+    expect(tool.startedAt, t0);
+    expect(tool.finishedAt, t1);
+    expect(tool.exitCode, 0);
+    expect(tool.durationLabel, '4.0s');
+    client.dispose();
+  });
+
+  test('durationLabel 舍入边界：59.6s/60s/119.6s 不出 1m60s', () {
+    String labelOf(int ms) {
+      final start = DateTime(2026, 11, 1);
+      return ToolCallCardItem(
+        toolCallId: 't',
+        name: 'x',
+        input: const {},
+        startedAt: start,
+        finishedAt: start.add(Duration(milliseconds: ms)),
+      ).durationLabel!;
+    }
+
+    expect(labelOf(120), '120ms');
+    expect(labelOf(1200), '1.2s');
+    expect(labelOf(59600), '60s'); // 原展示规则：<10s 保留一位小数，≥10s 取整
+    expect(labelOf(60000), '1m00s');
+    expect(labelOf(119600), '2m00s'); // 舍入整数秒后拆分（旧逻辑会出 1m60s）
+  });
+
+  testWidgets('4.4 长输出：展开区 280px 约束 + 内滚动', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+    final longOutput = List.generate(60, (i) => 'output line $i').join('\n');
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'lo1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(), 'type': 'tool_use',
+      'payload': {'toolCallId': 'tc_long', 'name': 'bash', 'input': {'cmd': 'cat big'}},
+    });
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'lo2', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 2, 'timestamp': DateTime.now().toIso8601String(), 'type': 'tool_result',
+      'payload': {'toolCallId': 'tc_long', 'content': longOutput, 'isError': false},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.tap(find.text('bash'));
+    await tester.pumpAndSettle();
+    // 工具卡输出区以 280px 封顶 + 内滚动（不撑爆时间线）
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is ConstrainedBox && w.constraints.maxHeight == 280,
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('btn-copy-tool-output-tc_long')),
+        matching: find.byType(SingleChildScrollView),
+      ),
+      findsNothing,
+    );
+    // 内滚动在输出区（ConstrainedBox 内）
+    expect(
+      find.descendant(
+        of: find.byWidgetPredicate(
+          (w) => w is ConstrainedBox && w.constraints.maxHeight == 280,
+        ),
+        matching: find.byType(SingleChildScrollView),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('4.5 失败消息长按重试：同条复用不新增、pending 双触发只一次有效', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.failNextSend = true;
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '失败消息');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+    final item = client.timelineFor('ses_alpha').whereType<UserPromptItem>().single;
+    expect(item.receipt, SendReceipt.failed);
+    final msgId = item.messageId;
+
+    // 重试挂起（sendGate）期间双触发——pending 保护不二次出站
+    transport.sendGate = Completer<void>();
+    final before = transport.sentPrompts.length;
+    await tester.longPress(find.text('失败消息').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('menu-resend-from-here')));
+    await tester.pumpAndSettle();
+    expect(item.receipt, SendReceipt.pending);
+
+    await tester.longPress(find.text('失败消息').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('menu-resend-from-here')));
+    await tester.pumpAndSettle();
+    expect(item.receipt, SendReceipt.pending); // 仍是 pending（第二击被拒）
+
+    transport.sendGate!.complete();
+    await tester.pumpAndSettle();
+    expect(transport.sentPrompts.length, before + 1); // 整轮只有一次有效出站
+    expect(item.receipt, SendReceipt.delivered);
+    // 同条复用：不新增用户消息、messageId 不变
+    expect(client.timelineFor('ses_alpha').whereType<UserPromptItem>().length, 1);
+    expect(item.messageId, msgId);
+    client.dispose();
+  });
+
+  testWidgets('4.5 引用追问保留草稿 + 光标置末尾', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '原始问题');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pump();
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'idle_q', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'idle'},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // 输入框已有未发送草稿
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '这是我尚未发送的草稿');
+    await tester.longPress(find.text('原始问题').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('menu-quote-reply')));
+    await tester.pumpAndSettle();
+
+    final field = tester.widget<TextField>(find.byKey(const Key('input-session-prompt')));
+    expect(field.controller!.text, '这是我尚未发送的草稿\n\n> 原始问题\n\n');
+    expect(field.controller!.selection.baseOffset, field.controller!.text.length);
   });
 
   testWidgets('4.4 失败工具卡：失败文案 + 非零退出码徽标', (WidgetTester tester) async {

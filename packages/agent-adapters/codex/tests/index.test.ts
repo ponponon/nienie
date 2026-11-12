@@ -23,6 +23,44 @@ describe('CodexEventNormalizer', () => {
       events.push(...normalizer.normalize('ses_codex_1', raw));
     }
 
+    // Round 2：exitCode 端到端——exit_code: 2 → payload.exitCode=2；缺失 → 不伪造字段
+    const n2 = new CodexEventNormalizer({
+      machineId: 'machine_codex',
+      now: () => new Date('2026-11-04T09:00:00.000Z'),
+      idGenerator: () => 'cx_evt_x',
+    });
+    const failedEvents = n2.normalize('ses_exit', {
+      type: 'item.completed',
+      item: {
+        id: 'cmd_2',
+        type: 'command_execution',
+        command: 'exit 2',
+        aggregated_output: 'boom',
+        exit_code: 2,
+        status: 'failed',
+      },
+    });
+    const failedResult = failedEvents.find((e) => e.type === 'tool_result');
+    expect(failedResult!.payload).toMatchObject({ exitCode: 2, isError: true });
+
+    const n3 = new CodexEventNormalizer({
+      machineId: 'machine_codex',
+      now: () => new Date('2026-11-04T09:00:00.000Z'),
+      idGenerator: () => 'cx_evt_y',
+    });
+    const noExitEvents = n3.normalize('ses_noexit', {
+      type: 'item.completed',
+      item: {
+        id: 'cmd_3',
+        type: 'command_execution',
+        command: 'ls',
+        aggregated_output: 'ok',
+        status: 'completed',
+      },
+    });
+    const noExitResult = noExitEvents.find((e) => e.type === 'tool_result');
+    expect(noExitResult!.payload!.exitCode).toBeUndefined(); // 缺失不伪造
+
     expect(events.map((e) => ({ seq: e.sequence, type: e.type, payload: e.payload }))).toEqual([
       {
         seq: 1,
@@ -50,6 +88,7 @@ describe('CodexEventNormalizer', () => {
           toolCallId: 'item_cmd_1',
           content: 'All tests passed',
           isError: false,
+          exitCode: 0, // Round 2：真实退出码透传（fixture 有 exit_code: 0）
         },
       },
       {

@@ -346,6 +346,10 @@ export class CodexAdapter implements AgentAdapter {
                       toolCallId: callId,
                       content: result.content,
                       isError: (item.exit_code ?? 0) !== 0,
+                      // Round 2：历史回放同样透传真实退出码（缺失不伪造）
+                      ...(typeof item.exit_code === 'number'
+                        ? { exitCode: item.exit_code }
+                        : {}),
                       truncated: result.truncated,
                     },
                   }),

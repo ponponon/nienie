@@ -205,6 +205,8 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   Navigator.of(ctx).pop();
                   if (userItem.receipt == SendReceipt.failed) {
                     widget.client.retrySendPrompt(widget.session, userItem);
+                  } else if (userItem.receipt == SendReceipt.pending) {
+                    // 发送中：不重复出站（幂等保护，双触发只一次有效）
                   } else {
                     widget.client.sendMessage(userItem.message);
                   }

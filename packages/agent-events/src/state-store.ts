@@ -136,6 +136,8 @@ export class InMemorySessionStateStore implements SessionStateStore {
         status: p.isError ? 'failed' : 'completed',
         output: (p.content as string) ?? '',
         isError: (p.isError as boolean) ?? false,
+        // Round 2：exitCode 事件→Snapshot 投影不丢失（缺失不伪造）
+        ...(typeof p.exitCode === 'number' ? { exitCode: p.exitCode } : {}),
         _seq: event.sequence,
       });
     }

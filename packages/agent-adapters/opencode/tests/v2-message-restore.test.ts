@@ -303,3 +303,65 @@ describe('J0.6b-3.3 显式 synthetic 标记', () => {
     expect(String(events[0]!.payload['delta'])).toContain('file:a.txt|');
   });
 });
+
+describe('buildSnapshotParts tool time', () => {
+  it('Round 2：tool part 用自身 time.created/ran/completed（不沿用 Message 时间）', () => {
+    const created = 1760000001100;
+    const ran = 1760000002100;
+    const completed = 1760000006100;
+    const msg: OpenCodeV2AssistantMessage = {
+      id: 'msg_t2',
+      time: { created: 1760000000000 }, // Message 时间刻意不同
+      type: 'assistant',
+      agent: 'build',
+      model: { id: 'm', providerID: 'p' },
+      content: [
+        {
+          type: 'tool',
+          id: 'call_t',
+          name: 'shell',
+          state: { status: 'completed', input: { command: 'ls' }, content: [{ type: 'text', text: 'ok' }] },
+          time: { created, ran, completed },
+        },
+      ],
+    };
+    const parts = buildSnapshotParts([msg]);
+    const tool = parts.find((p) => p.kind === 'tool_call');
+    expect(tool).toBeDefined();
+    expect(tool!.createdAt).toBe(new Date(created).toISOString());
+    expect(tool!.updatedAt).toBe(new Date(completed).toISOString());
+  });
+
+  it('Round 2：completed 缺失时回落 ran；都缺失回落 created', () => {
+    const created = 1760000001100;
+    const ran = 1760000002100;
+    const base = {
+      id: 'call_t2',
+      name: 'shell',
+      state: { status: 'running', input: { command: 'ls' } } as unknown as OpenCodeV2ToolState,
+    };
+    const withRan = buildSnapshotParts([
+      {
+        id: 'msg_t3',
+        time: { created: 1 },
+        type: 'assistant',
+        agent: 'a',
+        model: { id: 'm', providerID: 'p' },
+        content: [{ type: 'tool', ...base, time: { created, ran } }],
+      },
+    ]);
+    expect(withRan[0]!.updatedAt).toBe(new Date(ran).toISOString());
+
+    const onlyCreated = buildSnapshotParts([
+      {
+        id: 'msg_t4',
+        time: { created: 1 },
+        type: 'assistant',
+        agent: 'a',
+        model: { id: 'm', providerID: 'p' },
+        content: [{ type: 'tool', ...base, time: { created } }],
+      },
+    ]);
+    expect(onlyCreated[0]!.updatedAt).toBe(new Date(created).toISOString());
+  });
+});

@@ -759,3 +759,12 @@
 - **4.4 工具卡=执行过程可视化**：①五态语言层（等待中/运行中/已完成/失败 + 状态色文案，图标统一圆形轮廓 circleDashed/loaderCircle/circleCheck/circleX，边框色随态）；②**耗时**（tool_use→tool_result 事件时间差，durationLabel：120ms/3.2s/1m12s）；③**退出码徽标**（事件可选 `exitCode` 字段，exit 0 绿/非零红）；④长输出内滚动封顶 280px（不撑爆时间线）；⑤**输出可复制**（btn-copy-tool-output-*，复制原始文本）。
 - **4.5 长按操作**：用户气泡/助手回复长按 → 底部菜单：复制文本（Snack 反馈）/ 引用追问（`> 引用` 块追加输入框保留草稿、光标末尾，onQuoteReply 回调跨层注入）/ 从这里重试（failed 走 retrySendPrompt 幂等重发，否则重发同文案）；助手消息无重试项。
 - 测试：4.4 耗时 3.2s/exit 0/状态 Done/展开复制全等、失败态 exit 2/Failed；4.5 用户消息三菜单全链路（引用入输入框/重发出站+1/剪贴板全等）、助手消息两项无重试；mobile 68（+4）、全仓 270 vitest 全绿。
+
+### 2026-11-12 路线图#4.4~4.5 Round 2（三链路打通：实时→卡片 / Snapshot→卡片 / Codex exitCode→徽标）
+
+- **Snapshot 恢复一致 DTO**：loadSessionSnapshot tool_call 分支补齐 `startedAt=createdAt`、终态 `finishedAt=updatedAt`（pending/running 不设）、`exitCode`——重连/事件截断后耗时与退出码不再丢失。
+- **OpenCode V2 Snapshot tool 时间**：message-restore tool part 用自身 `time.created/ran/completed`（createdAt=created、updatedAt=completed ?? ran ?? created），不沿用 Message 时间。
+- **Codex exitCode 链路**：normalizer `emitToolResult` 透传真实 `exit_code`（缺失**不伪造**——不发字段）；历史回放（commandExecution）同样透传；`agent-events/state-store` 事件→Snapshot 投影保留 exitCode。
+- **durationLabel 舍入**：先整数秒舍入再拆分（119.6s→2m00s，不再出 1m60s）。
+- **菜单分派修复**：长按「从这里重试」pending 态不出站（此前会走 sendMessage 新发——双触发可双出站）。
+- 测试：Snapshot 恢复耗时/退出码、durationLabel 边界（59.6s/60s/119.6s）、长输出 280px 约束+内滚动、Codex exitCode 端到端（2/缺失）、opencode tool 自身时间（completed 缺失回落 ran/created）、failed 重试（同条 messageId 不变/双触发一次有效）、引用保留草稿+光标；mobile 73（+5）、全仓 273 vitest 全绿。

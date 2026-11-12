@@ -131,8 +131,10 @@ class ToolCallCardItem extends SessionTimelineItem {
     if (totalSeconds < 60) {
       return '${totalSeconds.toStringAsFixed(totalSeconds < 10 ? 1 : 0)}s';
     }
-    final minutes = totalSeconds ~/ 60;
-    final seconds = (totalSeconds % 60).round();
+    // 先舍入整数秒再拆分（修 1m60s 边界）
+    final roundedSeconds = (ms / 1000).round();
+    final minutes = roundedSeconds ~/ 60;
+    final seconds = roundedSeconds % 60;
     return '${minutes}m${seconds.toString().padLeft(2, '0')}s';
   }
 }

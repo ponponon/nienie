@@ -266,8 +266,18 @@ export function buildSnapshotParts(messages: OpenCodeV2SessionMessageInfo[]): Se
       } else if (part.type === 'tool') {
         const { input, output, isError } = extractToolOutput(part.state);
         const terminal = part.state.status === 'completed' || part.state.status === 'error';
+        // Round 2：Tool Part 用自身 time.created/ran/completed（不沿用 Message 时间）
+        const toolCreated = new Date(part.time.created).toISOString();
+        const toolEnded =
+          part.time.completed != null
+            ? new Date(part.time.completed).toISOString()
+            : part.time.ran != null
+              ? new Date(part.time.ran).toISOString()
+              : toolCreated;
         parts.push({
           ...base(),
+          createdAt: toolCreated,
+          updatedAt: toolEnded,
           kind: 'tool_call',
           toolCallId: part.id,
           name: part.name,
