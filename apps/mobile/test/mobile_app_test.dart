@@ -2058,6 +2058,31 @@ void main() {
     client.dispose();
   });
 
+  test('F4-2 text_delta full=true upsert 覆盖（ACP v2 完整消息），无 full 增量追加', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
+    await client.refreshSessions();
+    client.connectionState = BridgeConnectionState.connected;
+    client.activeSession = client.sessions.firstWhere((s) => s.id == 'ses_alpha');
+
+    void emit(String eid, int seq, Map<String, dynamic> payload) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': eid, 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': seq, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'text_delta', 'payload': payload,
+      });
+    }
+
+    emit('e1', 1, {'delta': 'hello', 'partId': 'm1', 'partRevision': 1, 'full': true, 'role': 'assistant'});
+    emit('e2', 2, {'delta': ' world', 'partId': 'm1', 'partRevision': 2, 'role': 'assistant'});
+    emit('e3', 3, {'delta': 'corrected', 'partId': 'm1', 'partRevision': 3, 'full': true, 'role': 'assistant'});
+    await Future<void>.delayed(const Duration(milliseconds: 10)); // 事件流异步消费
+
+    final item = client.timelineFor('ses_alpha').whereType<StreamingTextItem>().single;
+    expect(item.text, 'corrected'); // upsert 覆盖而非 hello worldcorrected
+    client.dispose();
+  });
+
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
     await pumpToSession(tester);
     final transport = tester

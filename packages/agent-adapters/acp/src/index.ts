@@ -42,9 +42,16 @@ export class AcpEventNormalizer {
   private readonly now: () => Date;
   private readonly idGenerator: () => string;
   private readonly sequences = new Map<string, number>();
-  /** F4-2：已归约 tool_use 的 toolCallId（每个只创建一次）与工具内容累积。 */
-  private readonly emittedToolUse = new Set<string>();
-  private readonly toolContent = new Map<string, string>();
+  /**
+   * F4-2：按 Session 隔离的 upsert 状态（ACP 的 messageId/toolCallId 只在会话内唯一）：
+   * `${sessionId}#${messageId}` → 已累计文本 + revision（完整消息 upsert 覆盖 / chunk 追加）
+   */
+  private readonly messageState = new Map<string, { content: string; revision: number }>();
+  /** `${sessionId}#${toolCallId}` → 工具内容状态（tool_call_update.content 整体替换 / content_chunk 追加）。 */
+  private readonly toolState = new Map<
+    string,
+    { content: string; useEmitted: boolean }
+  >();
   readonly streamEpoch: string;
 
   constructor(options: AcpNormalizerOptions = {}) {
@@ -69,37 +76,46 @@ export class AcpEventNormalizer {
       const sessionUpdate = asString(update.sessionUpdate) ?? asString(update.type);
 
       switch (sessionUpdate) {
+        // F4-2：v2 消息更新——content 为 ContentBlock[]（完整 upsert 用 messageId 替换；chunk 追加）
+        case 'agent_thought':
         case 'agent_thought_chunk':
-        case 'agent_thought': {
-          // F4-2：v2 完整消息 upsert（agent_thought）与增量（chunk）都归约 thinking
-          const content = isRecord(update.content) ? update.content : update;
-          const delta = asString(content.text) ?? asString(update.delta) ?? '';
-          if (!delta) return [];
-          return [this.buildEvent(sessionId, 'thinking_delta', { delta })];
-        }
-
+        case 'agent_message':
         case 'agent_message_chunk':
-        case 'agent_message': {
-          const content = isRecord(update.content) ? update.content : update;
-          const delta = asString(content.text) ?? asString(update.delta) ?? '';
-          if (!delta) return [];
-          return [this.buildEvent(sessionId, 'text_delta', { delta, role: 'assistant' })];
-        }
-
-        // F4-2：v2 用户消息历史（resume replay）——按 role:user 归约，不能丢
-        case 'user_message_chunk':
-        case 'user_message': {
-          const content = isRecord(update.content) ? update.content : update;
-          const text =
-            asString(content.text) ??
-            asString(update.delta) ??
-            (Array.isArray(content.parts)
-              ? content.parts
-                  .map((part) => (isRecord(part) ? asString(part.text) ?? '' : ''))
-                  .join('')
-              : '');
+        case 'user_message':
+        case 'user_message_chunk': {
+          const isChunk = sessionUpdate.endsWith('_chunk');
+          const isUser = sessionUpdate.startsWith('user_');
+          const isThought = sessionUpdate.startsWith('agent_thought');
+          const messageId =
+            asString(update.messageId) ?? `acp_msg_${this.messageState.size}`;
+          const key = `${sessionId}#${messageId}`;
+          const prev = this.messageState.get(key) ?? { content: '', revision: 0 };
+          const text = extractText(update.content ?? update.delta);
+          if (!text && !isChunk) {
+            // 完整 upsert 允许清空（替换为空）
+            this.messageState.set(key, { content: '', revision: prev.revision + 1 });
+            return [];
+          }
           if (!text) return [];
-          return [this.buildEvent(sessionId, 'text_delta', { delta: text, role: 'user' })];
+          // 完整消息 = upsert 覆盖；chunk = 增量追加
+          const nextContent = isChunk ? prev.content + text : text;
+          const revision = prev.revision + 1;
+          this.messageState.set(key, { content: nextContent, revision });
+          const payload: Record<string, unknown> = {
+            delta: text,
+            partId: messageId,
+            messageId,
+            partRevision: revision,
+            ...(isChunk ? {} : { full: true }),
+            ...(isUser ? { role: 'user' } : isThought ? {} : { role: 'assistant' }),
+          };
+          return [
+            this.buildEvent(
+              sessionId,
+              isThought ? 'thinking_delta' : 'text_delta',
+              payload,
+            ),
+          ];
         }
 
         case 'tool_call': {
@@ -110,7 +126,10 @@ export class AcpEventNormalizer {
             : isRecord(update.input)
               ? redactSensitiveData(update.input)
               : {};
-          this.emittedToolUse.add(toolCallId);
+          this.toolState.set(`${sessionId}#${toolCallId}`, {
+            content: '',
+            useEmitted: true,
+          });
           return [
             this.buildEvent(sessionId, 'tool_use', {
               toolCallId,
@@ -123,12 +142,15 @@ export class AcpEventNormalizer {
         case 'tool_call_update': {
           const toolCallId = asString(update.toolCallId) ?? '';
           if (!toolCallId) return [];
+          const key = `${sessionId}#${toolCallId}`; // toolCallId 按 Session 隔离
+          const state = this.toolState.get(key) ?? { content: '', useEmitted: false };
+          this.toolState.set(key, state);
           const status = asString(update.status);
           const events: CanonicalAgentEvent[] = [];
           // F4-2：v2 第一个 tool_call_update 即创建工具调用（tool_call 已从 v2 移除）——
-          // pending/running/未知状态也归约 tool_use（每个 toolCallId 只建一次，防重复卡片）
-          if (!this.emittedToolUse.has(toolCallId)) {
-            this.emittedToolUse.add(toolCallId);
+          // 每个 (session, toolCallId) 只建一次
+          if (!state.useEmitted) {
+            state.useEmitted = true;
             const name = asString(update.title) ?? asString(update.name) ?? 'tool';
             const input = isRecord(update.rawInput)
               ? redactSensitiveData(update.rawInput)
@@ -143,19 +165,15 @@ export class AcpEventNormalizer {
               }),
             );
           }
-          // F4-2：tool_call_content_chunk 流式内容累积进结果
-          const rawContent =
-            asString(update.rawOutput) ?? asString(update.content) ?? '';
-          const accumulated = (this.toolContent.get(toolCallId) ?? '') + rawContent;
-          if (rawContent) {
-            this.toolContent.set(toolCallId, accumulated);
+          // F4-2：tool_call_update.content（ToolCallContent[]）= 整体替换现有内容；
+          // rawOutput（兼容）同样替换；两者都没有则保持
+          const replaceText = extractText(update.content ?? update.rawOutput);
+          if (update.content != null || update.rawOutput != null) {
+            state.content = replaceText;
           }
           const isTerminal = status === 'completed' || status === 'failed';
-          const finalContent = isTerminal
-            ? (asString(update.rawOutput) ?? asString(update.content) ?? accumulated)
-            : accumulated;
-          if (isTerminal || rawContent) {
-            const { content, truncated } = truncateOutput(finalContent, this.maxToolOutputLength);
+          if (isTerminal || replaceText) {
+            const { content, truncated } = truncateOutput(state.content, this.maxToolOutputLength);
             events.push(
               this.buildEvent(sessionId, 'tool_result', {
                 toolCallId,
@@ -168,14 +186,16 @@ export class AcpEventNormalizer {
           return events;
         }
 
-        // F4-2：工具流式内容片段——累积后以 tool_result 增量上报
+        // F4-2：tool_call_content_chunk.content 为单个 ToolCallContent 对象——追加到现有内容
         case 'tool_call_content_chunk': {
           const toolCallId = asString(update.toolCallId) ?? '';
-          const chunk = asString(update.content) ?? '';
-          if (!toolCallId || !chunk) return [];
-          const accumulated = (this.toolContent.get(toolCallId) ?? '') + chunk;
-          this.toolContent.set(toolCallId, accumulated);
-          const { content, truncated } = truncateOutput(accumulated, this.maxToolOutputLength);
+          const chunkText = extractText(update.content);
+          if (!toolCallId || !chunkText) return [];
+          const key = `${sessionId}#${toolCallId}`;
+          const state = this.toolState.get(key) ?? { content: '', useEmitted: false };
+          state.content += chunkText;
+          this.toolState.set(key, state);
+          const { content, truncated } = truncateOutput(state.content, this.maxToolOutputLength);
           return [
             this.buildEvent(sessionId, 'tool_result', {
               toolCallId,
@@ -269,6 +289,36 @@ export class AcpEventNormalizer {
   }
 }
 
+/**
+ * F4-2：从 ACP v2 真实数据结构提取文本：
+ * - 字符串（兼容/降级）
+ * - ContentBlock[]：[{type:'text',text}, ...]，非文本块取其 text/uri/path 标注
+ * - ToolCallContent 对象：{type:'content', content: ContentBlock}（chunk 单个 / update 数组）
+ */
+function extractText(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => extractText(item)).join('');
+  }
+  if (isRecord(value)) {
+    const wrapper = value.content;
+    if (wrapper != null && value.type === 'content') {
+      return extractText(wrapper);
+    }
+    const direct = asString(value.text);
+    if (direct != null) return direct;
+    if (wrapper != null) return extractText(wrapper);
+    const parts = value.parts;
+    if (Array.isArray(parts)) return extractText(parts);
+    const uri = asString(value.uri);
+    if (uri != null) return uri;
+    const path = asString(value.path);
+    if (path != null) return path;
+  }
+  return '';
+}
+
 export type AcpTransport = {
   request(method: string, params?: Record<string, unknown>): Promise<unknown>;
   onNotification(listener: (notification: unknown) => void): () => void;
@@ -277,6 +327,8 @@ export type AcpTransport = {
 
 export type AcpAdapterOptions = AcpNormalizerOptions & {
   transport?: AcpTransport | undefined;
+  /** F4-1：v1 回落必须走**新连接**（一个连接只协商一个协议版本）——提供重建 transport 的工厂。 */
+  reconnect?: (() => Promise<AcpTransport>) | undefined;
   defaultProjectPath?: string | undefined;
 };
 
@@ -285,7 +337,8 @@ export class AcpAdapter implements AgentAdapter {
   readonly name = 'ACP Agent';
   readonly capabilities = { ...capabilities };
 
-  private readonly transport: AcpTransport | undefined;
+  private transport: AcpTransport | undefined;
+  private readonly reconnect: (() => Promise<AcpTransport>) | undefined;
   private readonly defaultProjectPath: string;
   private readonly normalizer: AcpEventNormalizer;
   private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
@@ -298,6 +351,7 @@ export class AcpAdapter implements AgentAdapter {
 
   constructor(options: AcpAdapterOptions = {}) {
     this.transport = options.transport;
+    this.reconnect = options.reconnect;
     this.defaultProjectPath = options.defaultProjectPath ?? process.cwd();
     this.normalizer = new AcpEventNormalizer(options);
 
@@ -335,16 +389,29 @@ export class AcpAdapter implements AgentAdapter {
         this.agentVersion = res?.info?.version ?? res?.agentInfo?.version;
         this.protocolVersion = res?.protocolVersion === 2 ? 2 : 1;
       } catch (error) {
-        // F4-1：仅 JSON-RPC **数字**错误码且属于版本/参数类才回落 v1：
-        // -32022 Unsupported protocol version / -32602 Invalid params / -32600 Invalid request。
-        // 网络错误（ECONNRESET/ETIMEDOUT 等字符串 code）与其余错误直接上抛——
-        // legacy Agent 不支持重复初始化，需 Bridge 重建连接后重新协商
+        // F4-1：只有 -32022（Unsupported protocol version）才是版本不兼容——
+        // -32602/-32600 不是版本信号（官方要求 Agent 先读 protocolVersion 再协商），
+        // 网络错误（ECONNRESET 等字符串 code）更不是。一律直接上抛。
         const rawCode = (error as { code?: unknown } | null)?.code;
-        const FALLBACK_CODES = new Set([-32022, -32602, -32600]);
-        if (typeof rawCode !== 'number' || !FALLBACK_CODES.has(rawCode)) {
+        if (rawCode !== -32022) {
           throw error;
         }
-        // F4-1：v1 initialize 使用 clientInfo/clientCapabilities（不是 v2 的 info/capabilities）
+        // F4-1：按 -32022 的结构化版本信息判断是否真的存在 v1 可选版本
+        const data = (error as { data?: { requested?: unknown; supported?: unknown } } | null)
+          ?.data;
+        const supported = Array.isArray(data?.supported) ? data!.supported : null;
+        if (supported != null && !supported.includes(1)) {
+          throw error; // Agent 明确不支持 v1——回落无意义
+        }
+        // F4-1：一个连接只协商一个协议版本——v1 回落必须**关闭原连接、用新连接**重新协商
+        if (!this.reconnect) {
+          throw new Error(
+            'ACP v2 initialize 被拒（-32022）且未提供 reconnect 工厂，无法在新连接上回落 v1',
+          );
+        }
+        await this.transport?.close();
+        this.transport = await this.reconnect();
+        // v1 initialize 使用 clientInfo/clientCapabilities（不是 v2 的 info/capabilities）
         const res = (await this.transport.request('initialize', {
           protocolVersion: 1,
           clientInfo: { name: 'nienie-bridge', title: 'Nienie Bridge', version: '0.1.0' },

@@ -717,3 +717,9 @@
 - **F4-3 resume cwd**：`session/resume|load` 优先用会话已有 `projectPath`，不再一律传 defaultProjectPath；测试断言自定义工作目录。
 - **F5-1/2 串行锁生命周期**：`sessionLocks` 从 sendMessage 入口同步加锁直到**真实 onExit** 才释放（kill≠已退出）；cancel 只设 `cancelRequested` 意图+kill，**不释放锁**——封死「kill 后 exit 前双进程」与「cancel 释放占位后并发 spawn」两个窗口；mock 按真实进程语义（exit 只发一次/异步 kill）。
 - 测试：三 adapter「异步 kill 锁保持/启动中取消持久化+锁不释放/运行期 error 持久化」组合用例（codex 9、claude-code 4、pi 4）、acp 9（+4：错误码分类/历史归约/resume cwd/回落参数）；全仓 268 vitest + 57 mobile + 11 typecheck 全绿。
+
+### 2026-11-12 路线图#3 Round 7（F4-1/F4-2 终局：ACP 真实 v2 数据结构 + 新连接回落）
+
+- **F4-1 错误分类与连接生命周期**：回落 v1 **只认 -32022**（Unsupported protocol version）且按其 `data.supported` 结构化版本信息判断（不含 1 则不回落）；-32602/-32600/网络错误（字符串 code）一律上抛；**v1 回落必须走新连接**——新增 `AcpAdapterOptions.reconnect` 工厂，关闭原连接后在新连接上以 v1 形态（`clientInfo/clientCapabilities`）initialize（一个连接只协商一个协议版本）；无工厂则明确报错不重复初始化。测试：真 v1-only Agent 全流程（关闭旧连接/新连接 v1 initialize/prompt）+ supported 不含 1/网络错误/-32602/无工厂四类不回落。
+- **F4-2 真实 v2 数据结构归约**：`extractText` 兼容 ContentBlock[]（数组）、ToolCallContent 对象（`{type:'content',content:{type:'text'}}`）、字符串降级；完整消息 `user_message/agent_message/agent_thought` 按 **messageId upsert 覆盖**（`full:true`，mobile text_delta/thinking_delta 支持 full=替换语义），`*_chunk` 按 messageId 追加；`tool_call_update.content`（ToolCallContent[]）**整体替换**工具内容、`tool_call_content_chunk.content`（单个 ToolCallContent）追加，终态覆盖；messageId/toolCallId 状态**按 Session 隔离**（`${sessionId}#${id}` key）。测试用官方 v2 真实 JSON 形态（content 数组/messageId/ToolCallContent 对象）覆盖 upsert 替换、chunk 追加、替换+追加混合、跨 Session 同名 toolCallId 隔离。
+- 测试：acp 10（F4-A 全流程/不回落矩阵/真实结构归约）、mobile 58（+1 full upsert 覆盖语义）；全仓 269 vitest + 11 typecheck 全绿。

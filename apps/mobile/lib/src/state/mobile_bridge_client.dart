@@ -1461,7 +1461,12 @@ class MobileBridgeClient extends ChangeNotifier {
               }
             }
             if (target != null) {
-              target.message += delta;
+              // F4-2：full=true 表示 upsert 完整替换（ACP v2 完整消息），否则增量追加
+              if (event.payload['full'] == true) {
+                target.message = delta;
+              } else {
+                target.message += delta;
+              }
               if (partRevision != null && partRevision > target.revision) {
                 target.revision = partRevision;
               }
@@ -1507,8 +1512,14 @@ class MobileBridgeClient extends ChangeNotifier {
               break;
             }
           }
+          // F4-2：full=true 表示 upsert 完整替换（ACP v2 完整消息），否则增量追加
+          final full = event.payload['full'] == true;
           if (target != null) {
-            target.text += delta;
+            if (full) {
+              target.text = delta;
+            } else {
+              target.text += delta;
+            }
             if (partRevision != null && partRevision > target.revision) {
               target.revision = partRevision;
             }
@@ -1523,7 +1534,12 @@ class MobileBridgeClient extends ChangeNotifier {
         } else if (items.isNotEmpty &&
             items.last is StreamingTextItem &&
             !(items.last as StreamingTextItem).isThinking) {
-          (items.last as StreamingTextItem).text += delta;
+          final full = event.payload['full'] == true;
+          if (full) {
+            (items.last as StreamingTextItem).text = delta;
+          } else {
+            (items.last as StreamingTextItem).text += delta;
+          }
         } else {
           items.add(StreamingTextItem(text: delta, isThinking: false));
         }
@@ -1543,7 +1559,12 @@ class MobileBridgeClient extends ChangeNotifier {
             }
           }
           if (target != null) {
-            target.text += delta;
+            // F4-2：full=true 表示 upsert 完整替换（ACP v2 完整思考），否则增量追加
+            if (event.payload['full'] == true) {
+              target.text = delta;
+            } else {
+              target.text += delta;
+            }
             if (partRevision != null && partRevision > target.revision) {
               target.revision = partRevision;
             }

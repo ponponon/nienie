@@ -97,30 +97,27 @@ describe('AcpAdapter', () => {
       info: { name: 'nienie-bridge' },
       capabilities: {},
     });
-    expect(events.map((e) => ({ seq: e.sequence, type: e.type, payload: e.payload }))).toEqual([
-      { seq: 1, type: 'thinking_delta', payload: { delta: 'Analyzing ACP request' } },
-      {
-        seq: 2,
-        type: 'tool_use',
-        payload: {
-          toolCallId: 'acp_tool_1',
-          name: 'fs.read',
-          input: { path: 'README.md', token: '[REDACTED]' },
-        },
-      },
-      {
-        seq: 3,
-        type: 'tool_result',
-        payload: {
-          toolCallId: 'acp_tool_1',
-          content: '# Nienie',
-          isError: false,
-        },
-      },
-      { seq: 4, type: 'text_delta', payload: { delta: 'Done reading README.', role: 'assistant' } },
+    expect(events.map((e) => ({ seq: e.sequence, type: e.type }))).toEqual([
+      { seq: 1, type: 'thinking_delta' },
+      { seq: 2, type: 'tool_use' },
+      { seq: 3, type: 'tool_result' },
+      { seq: 4, type: 'text_delta' },
       // v1：prompt 响应=turn 完成 → 派发语义下以 status 事件补报结束
-      { seq: 5, type: 'status', payload: { status: 'idle', detail: 'ACP turn completed' } },
+      { seq: 5, type: 'status' },
     ]);
+    expect(events[0]!.payload.delta).toBe('Analyzing ACP request');
+    expect(events[1]!.payload).toMatchObject({
+      toolCallId: 'acp_tool_1',
+      name: 'fs.read',
+      input: { path: 'README.md', token: '[REDACTED]' },
+    });
+    expect(events[2]!.payload).toMatchObject({
+      toolCallId: 'acp_tool_1',
+      content: '# Nienie',
+      isError: false,
+    });
+    expect(events[3]!.payload).toMatchObject({ delta: 'Done reading README.', role: 'assistant' });
+    expect(events[4]!.payload).toMatchObject({ status: 'idle' });
   });
 
   it('F4 v2：session/prompt 插入即返回 messageId（接受语义），不做 turn 级等待', async () => {
@@ -201,18 +198,37 @@ describe('AcpAdapter', () => {
     await expect(adapter.sendMessage(session.id, 'hi')).rejects.toThrow(/messageId/);
   });
 
-  it('F4-A v2 initialize 被拒（JSON-RPC 数字错误码）回落 v1；网络错误不盲目重试', async () => {
-    let initCount = 0;
-    const initCalls: Array<{ method: string; params?: Record<string, unknown> | undefined }> = [];
-    const transport: AcpTransport = {
-      async request(method, params) {
+  it('F4-1 真 v1-only Agent 全流程：-32022 → 关闭原连接 → 新连接 v1 initialize（clientInfo）→ prompt', async () => {
+    // 原连接：v2 initialize 被拒（-32022 结构化版本信息：支持 1）
+    let oldClosed = false;
+    const oldTransport: AcpTransport = {
+      async request(method) {
         if (method === 'initialize') {
-          initCount++;
-          initCalls.push({ method, params });
-          if (initCount === 1) {
-            throw { code: -32022, message: 'unsupported protocol version' }; // 版本类协议拒绝
-          }
+          throw {
+            code: -32022,
+            message: 'unsupported protocol version',
+            data: { requested: 2, supported: [1] },
+          };
+        }
+        return {};
+      },
+      onNotification() {
+        return () => undefined;
+      },
+      async close() {
+        oldClosed = true;
+      },
+    };
+    // 新连接：v1-only Agent（initialize 返回 protocolVersion 1，prompt 走 turn 语义）
+    const newCalls: Array<{ method: string; params?: Record<string, unknown> | undefined }> = [];
+    const newTransport: AcpTransport = {
+      async request(method, params) {
+        newCalls.push({ method, params });
+        if (method === 'initialize') {
           return { protocolVersion: 1, agentInfo: { version: '1.0.0' } };
+        }
+        if (method === 'session/new') {
+          return { sessionId: 'v1_ses' };
         }
         return {};
       },
@@ -221,25 +237,55 @@ describe('AcpAdapter', () => {
       },
       async close() {},
     };
-    const adapter = new AcpAdapter({ transport });
+
+    const adapter = new AcpAdapter({
+      transport: oldTransport,
+      reconnect: async () => newTransport,
+    });
     const info = await adapter.detect();
     expect(info.available).toBe(true);
     expect(info.version).toBe('1.0.0');
-    expect(initCount).toBe(2); // v2 被拒 → v1 重试
-    // F4-1：v1 回落必须使用 v1 参数形态（clientInfo/clientCapabilities，非 v2 的 info/capabilities）
-    expect(initCalls[1]!.params).toMatchObject({
+    expect(oldClosed).toBe(true); // 原连接已关闭（一个连接只协商一个版本）
+    // v1 initialize 在**新连接**上、使用 v1 参数形态
+    const init = newCalls.find((c) => c.method === 'initialize');
+    expect(init!.params).toMatchObject({
       protocolVersion: 1,
       clientInfo: { name: 'nienie-bridge' },
       clientCapabilities: {},
     });
-    expect(initCalls[1]!.params).not.toHaveProperty('info');
+    expect(init!.params).not.toHaveProperty('info');
 
-    // F4-1：网络错误（字符串 code，如 ECONNRESET）不重试 initialize
-    let initCount2 = 0;
+    // v1 后续 session/prompt 全流程可用
+    const session = await adapter.createSession({ title: 'V1', projectPath: '/workspace/v1' });
+    expect(session.id).toBe('v1_ses');
+    void adapter.sendMessage(session.id, 'hello'); // v1 派发语义
+    await new Promise((r) => setTimeout(r, 0));
+    expect(newCalls.some((c) => c.method === 'session/prompt')).toBe(true);
+  });
+
+  it('F4-1 -32022 明确不支持 v1 / 网络错误 / 无 reconnect 工厂都不回落', async () => {
+    // supported 不含 1：回落无意义
+    const noV1: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          throw { code: -32022, message: 'x', data: { requested: 2, supported: [2] } };
+        }
+        return {};
+      },
+      onNotification() {
+        return () => undefined;
+      },
+      async close() {},
+    };
+    const a1 = new AcpAdapter({ transport: noV1 });
+    expect((await a1.detect()).available).toBe(false);
+
+    // 网络错误（字符串 code）不回落
+    let initCount = 0;
     const broken: AcpTransport = {
       async request(method) {
         if (method === 'initialize') {
-          initCount2++;
+          initCount++;
           throw { code: 'ECONNRESET', message: 'socket hang up' };
         }
         return {};
@@ -249,13 +295,47 @@ describe('AcpAdapter', () => {
       },
       async close() {},
     };
-    const adapter2 = new AcpAdapter({ transport: broken });
-    const info2 = await adapter2.detect();
-    expect(info2.available).toBe(false);
-    expect(initCount2).toBe(1);
+    const a2 = new AcpAdapter({ transport: broken });
+    expect((await a2.detect()).available).toBe(false);
+    expect(initCount).toBe(1);
+
+    // -32602/-32600 不是版本信号，不回落
+    let initCount3 = 0;
+    const paramsErr: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          initCount3++;
+          throw { code: -32602, message: 'invalid params' };
+        }
+        return {};
+      },
+      onNotification() {
+        return () => undefined;
+      },
+      async close() {},
+    };
+    const a3 = new AcpAdapter({ transport: paramsErr });
+    expect((await a3.detect()).available).toBe(false);
+    expect(initCount3).toBe(1);
+
+    // 无 reconnect 工厂：不重复 initialize，明确报错
+    const v2reject: AcpTransport = {
+      async request(method) {
+        if (method === 'initialize') {
+          throw { code: -32022, message: 'x', data: { requested: 2, supported: [1] } };
+        }
+        return {};
+      },
+      onNotification() {
+        return () => undefined;
+      },
+      async close() {},
+    };
+    const a4 = new AcpAdapter({ transport: v2reject });
+    expect((await a4.detect()).available).toBe(false);
   });
 
-  it('F4-2 v2 历史回放归约：user_message/agent_message/tool_call_update 创建/content chunk', async () => {
+  it('F4-2 v2 真实数据结构归约：ContentBlock[] upsert / ToolCallContent 替换与追加 / Session 隔离', async () => {
     const listeners = new Set<(notification: unknown) => void>();
     const transport: AcpTransport = {
       async request(method) {
@@ -280,53 +360,104 @@ describe('AcpAdapter', () => {
     await adapter.detect();
     const events: CanonicalAgentEvent[] = [];
     adapter.onEvent((e) => events.push(e));
-    const emit = (update: Record<string, unknown>) => {
+    const emit = (sessionId: string, update: Record<string, unknown>) => {
       for (const listener of listeners) {
         listener({
           jsonrpc: '2.0',
           method: 'session/update',
-          params: { sessionId: 'acp_ses_replay', update },
+          params: { sessionId, update },
         });
       }
     };
 
-    emit({ sessionUpdate: 'user_message', content: { type: 'text', text: '帮我修 bug' } });
-    emit({ sessionUpdate: 'agent_message', content: { type: 'text', text: '好的' } });
-    emit({
+    // 官方 v2 真实形态：content 为 ContentBlock[]、带 messageId
+    emit('ses_a', {
+      sessionUpdate: 'user_message',
+      messageId: 'msg_001',
+      content: [{ type: 'text', text: '帮我修 bug' }],
+    });
+    emit('ses_a', {
+      sessionUpdate: 'user_message_chunk',
+      messageId: 'msg_001',
+      content: [{ type: 'text', text: '（补充）' }],
+    });
+    // upsert 覆盖：最后一次完整消息替换之前内容
+    emit('ses_a', {
+      sessionUpdate: 'user_message',
+      messageId: 'msg_001',
+      content: [{ type: 'text', text: 'corrected' }],
+    });
+    emit('ses_a', {
+      sessionUpdate: 'agent_message',
+      messageId: 'msg_002',
+      content: [{ type: 'text', text: '好的' }],
+    });
+
+    const userItems = events.filter(
+      (e) => e.type === 'text_delta' && e.payload?.role === 'user',
+    );
+    // chunk 追加 + upsert 替换：最终文本 = corrected（full 覆盖），此前有增量与完整两条
+    expect(userItems[0]!.payload).toMatchObject({
+      delta: '帮我修 bug',
+      full: true,
+      messageId: 'msg_001',
+      partId: 'msg_001',
+    });
+    expect(userItems[1]!.payload).toMatchObject({ delta: '（补充）', messageId: 'msg_001' });
+    expect(userItems[1]!.payload!.full).toBeUndefined(); // chunk 是追加不是覆盖
+    expect(userItems[2]!.payload).toMatchObject({ delta: 'corrected', full: true });
+    const asst = events.find((e) => e.payload?.role === 'assistant');
+    expect(asst!.payload).toMatchObject({ delta: '好的', full: true, messageId: 'msg_002' });
+
+    // 工具：tool_call_update 创建 + content 替换/追加（ToolCallContent 真实形态）
+    emit('ses_a', {
       sessionUpdate: 'tool_call_update',
-      toolCallId: 'call_1',
+      toolCallId: 'call_001',
       title: 'fs.read',
       status: 'running',
       rawInput: { path: 'a.ts' },
     });
-    emit({
+    emit('ses_a', {
       sessionUpdate: 'tool_call_update',
-      toolCallId: 'call_1',
+      toolCallId: 'call_001',
       status: 'running',
-      rawContent: undefined,
-      content: 'chunk-1',
-    } as Record<string, unknown>);
-    emit({
-      sessionUpdate: 'tool_call_content_chunk',
-      toolCallId: 'call_1',
-      content: '+chunk-2',
+      content: [{ type: 'content', content: { type: 'text', text: 'v1 content' } }],
     });
-    emit({
+    emit('ses_a', {
+      sessionUpdate: 'tool_call_content_chunk',
+      toolCallId: 'call_001',
+      content: { type: 'content', content: { type: 'text', text: '+more' } },
+    });
+    emit('ses_a', {
       sessionUpdate: 'tool_call_update',
-      toolCallId: 'call_1',
+      toolCallId: 'call_001',
       status: 'completed',
-      rawOutput: 'final output',
+      content: [{ type: 'content', content: { type: 'text', text: 'final output' } }],
     });
 
-    const userMsg = events.find((e) => e.payload?.role === 'user');
-    expect(userMsg).toBeDefined();
-    expect(String(userMsg!.payload?.delta)).toContain('帮我修 bug'); // 历史用户消息不丢
-    const asstMsg = events.find((e) => e.payload?.role === 'assistant');
-    expect(String(asstMsg!.payload?.delta)).toBe('好的');
-    // tool_call_update 创建工具调用（v2 无 tool_call）且只建一次
-    expect(events.filter((e) => e.type === 'tool_use')).toHaveLength(1);
-    const results = events.filter((e) => e.type === 'tool_result');
-    expect(String(results[results.length - 1]!.payload?.content)).toBe('final output'); // 终态覆盖累积
+    const toolUses = events.filter((e) => e.type === 'tool_use');
+    expect(toolUses).toHaveLength(1); // (session, toolCallId) 只创建一次
+    const toolResults = events.filter((e) => e.type === 'tool_result');
+    expect(String(toolResults[0]!.payload?.content)).toBe('v1 content'); // update.content 整体替换
+    expect(String(toolResults[1]!.payload?.content)).toBe('v1 content+more'); // chunk 追加
+    expect(String(toolResults[2]!.payload?.content)).toBe('final output'); // 终态再替换
+
+    // Session 隔离：不同 session 的同名 toolCallId 互不干扰
+    emit('ses_b', {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call_001',
+      title: 'other',
+      status: 'running',
+    });
+    const usesAll = events.filter((e) => e.type === 'tool_use');
+    expect(usesAll).toHaveLength(2); // ses_b 的 call_001 独立创建
+    emit('ses_b', {
+      sessionUpdate: 'tool_call_content_chunk',
+      toolCallId: 'call_001',
+      content: { type: 'content', content: { type: 'text', text: 'B-only' } },
+    });
+    const lastResult = events.filter((e) => e.type === 'tool_result').at(-1);
+    expect(String(lastResult!.payload?.content)).toBe('B-only'); // 不与 ses_a 内容混合
   });
 
   it('F4-3 session/resume 使用会话已有 projectPath（不传错工作目录）', async () => {
