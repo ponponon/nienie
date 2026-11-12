@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:nienie_mobile/src/ui/quick_commands_bar.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:nienie_mobile/main.dart';
@@ -2864,6 +2865,166 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
     expect(find.textContaining('迟到的新回复'), findsOneWidget);
+  });
+
+  test('P2 FileCredentialStore 磁盘恢复/Agent 隔离/空数组与 clear 语义', () async {
+    final dir = Directory.systemTemp.createTempSync('nie_qc');
+    final store = FileCredentialStore(File('${dir.path}/state.json'));
+    await store.saveQuickCommands('codex', ['a', 'b']);
+    await store.saveQuickCommands('opencode', ['x']);
+
+    // 全新实例（模拟 App 重启）
+    final store2 = FileCredentialStore(File('${dir.path}/state.json'));
+    expect(await store2.loadQuickCommands('codex'), ['a', 'b']); // 磁盘恢复
+    expect(await store2.loadQuickCommands('opencode'), ['x']); // Agent 隔离
+    expect(await store2.loadQuickCommands('claude-code'), isNull); // 无自定义=null=默认
+
+    // 显式空数组语义（用户删光）≠ null
+    await store2.saveQuickCommands('pi', <String>[]);
+    expect(await store2.loadQuickCommands('pi'), isEmpty);
+
+    // InMemory clear 清快捷指令（与 File 语义一致）
+    final inmem = InMemoryCredentialStore();
+    await inmem.saveQuickCommands('codex', ['q']);
+    await inmem.clear();
+    expect(await inmem.loadQuickCommands('codex'), isNull);
+
+    // File clear（删除文件）→ 恢复为 null
+    await store2.clear();
+    expect(await FileCredentialStore(File('${dir.path}/state.json')).loadQuickCommands('codex'), isNull);
+    dir.deleteSync(recursive: true);
+  });
+
+  testWidgets('P1 快捷指令生产路径自动加载（QuickCommandsBar 感知 agentId）', (WidgetTester tester) async {
+    final store = InMemoryCredentialStore();
+    // 预置持久化数据（模拟上次运行留下的自定义）
+    await store.saveQuickCommands('codex', ['codex 专属指令']);
+    final client = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: store,
+    );
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: QuickCommandsBar(
+          client: client,
+          agentId: 'codex',
+          onUse: (_) {},
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    // 未手动调用 load——initState 自动加载
+    expect(find.byKey(const Key('quick-command-codex 专属指令')), findsOneWidget);
+    client.dispose();
+  });
+
+  testWidgets('P1 5.2 流式增量（同 partId）持续跟随 + 历史位置持续提示不跳底', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    // 首条 + 3 段同 partId 增量（模拟流式）
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 's1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {'delta': '第一段', 'partId': 'p_flow', 'partRevision': 1},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    for (var i = 2; i <= 6; i++) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 's$i', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': i, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'text_delta',
+        'payload': {
+          'delta': '\n\n${List.filled(10, '增量行 $i').join('\n\n')}',
+          'partId': 'p_flow', 'partRevision': i,
+        },
+      });
+      await tester.pump(const Duration(milliseconds: 50));
+      // 在底部：同 partId 多段增量持续跟随——每段到来时该段最新内容保持可见
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('增量行 $i', findRichText: true).hitTestable(),
+        findsWidgets,
+      );
+    }
+
+    // 翻历史 → 同 partId 持续增量 → 提示持续可见（不是只有第一段），且不强制跳底
+    await tester.drag(find.byKey(const Key('session-timeline-list')), const Offset(0, 3000));
+    await tester.pump(const Duration(milliseconds: 300));
+    for (var i = 7; i <= 9; i++) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 's$i', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': i, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'text_delta',
+        'payload': {
+          'delta': '\n\n历史中的增量 $i\n\n尾段',
+          'partId': 'p_flow', 'partRevision': i,
+        },
+      });
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.byKey(const Key('btn-jump-to-latest')), findsOneWidget); // 持续可见
+    }
+    // 不强制跳底：历史中的最新增量不在视野（否则=被拉回）
+    expect(
+      find.textContaining('历史中的增量 9', findRichText: true).hitTestable(),
+      findsNothing,
+    );
+
+    // 点击 → 跳到最新（增量可见 + 提示消失）
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-jump-to-latest')));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('历史中的增量 9', findRichText: true).hitTestable(),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
+  });
+
+  testWidgets('P2 5.2 切换会话重置滚动状态（提示消失、定位最新）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 会话 A 翻历史 + 新内容 → 浮出提示
+    for (var i = 1; i <= 8; i++) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'sw$i', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': i, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'text_delta',
+        'payload': {
+          'delta': '内容 $i\n${List.filled(12, '行').join('\n')}',
+          'partId': 'p$i', 'partRevision': 1,
+        },
+      });
+    }
+    await tester.pumpAndSettle();
+    await tester.drag(find.byKey(const Key('session-timeline-list')), const Offset(0, 3000));
+    await tester.pump(const Duration(milliseconds: 300));
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'sw9', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 9, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {'delta': 'A 的新回复', 'partId': 'p9', 'partRevision': 1},
+    });
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsOneWidget);
+
+    // 切到会话 B（ValueKey 变化 → Timeline State 重建）
+    final other = await client.createSession(agentId: 'opencode', title: 'B 会话');
+    client.activeSession = other;
+    await client.loadSessionSnapshot(other.id);
+    await tester.pumpAndSettle();
+    // 重置：提示消失 + B 定位最新（初始底部）
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
+    final lv = tester.widget<ListView>(find.byKey(const Key('session-timeline-list')));
+    final pos = lv.controller!.position;
+    expect(pos.pixels, greaterThanOrEqualTo(pos.maxScrollExtent - 60));
+    client.dispose();
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {

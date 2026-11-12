@@ -33,6 +33,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
   bool _atBottom = true;
   bool _showJumpToBottom = false;
   int _lastItemCount = 0;
+  int _lastContentVersion = 0;
   Timer? _waitingRefreshTimer;
 
   @override
@@ -251,17 +252,32 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
 
   void _onClientChanged() {
     if (!mounted) return;
-    final count = widget.client.timelineFor(widget.session.id).length;
-    if (count > _lastItemCount) {
+    // P1：内容水位判定（含同 partId 增量/工具卡/占位消失），普通状态通知不触发滚动
+    final version = widget.client.timelineVersionFor(widget.session.id);
+    if (version > _lastContentVersion) {
+      _lastContentVersion = version;
       if (_atBottom) {
-        // 在底部：静默跟随新内容
+        // 在底部：静默跟随新内容（流式增量持续跟随）
         WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottomImmediate());
       } else {
-        // 5.2：翻历史时新内容到达 → 浮出按钮，不强制跳底
+        // 5.2：翻历史时新内容到达 → 浮出按钮，不强制跳底（持续可见）
         setState(() => _showJumpToBottom = true);
       }
     }
-    _lastItemCount = count;
+    _lastItemCount = widget.client.timelineFor(widget.session.id).length;
+  }
+
+  @override
+  void didUpdateWidget(covariant SessionTimelineList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.session.id != widget.session.id) {
+      // P2：切换会话——重置滚动状态/提示并定位最新（同一会话普通 rebuild 不重置）
+      _atBottom = true;
+      _showJumpToBottom = false;
+      _lastItemCount = widget.client.timelineFor(widget.session.id).length;
+      _lastContentVersion = widget.client.timelineVersionFor(widget.session.id);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottomImmediate());
+    }
   }
 
   void _jumpToBottom() {

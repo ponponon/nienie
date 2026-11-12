@@ -77,8 +77,32 @@ class MobileBridgeClient extends ChangeNotifier {
 
   NienieStrings get strings => NienieStrings(language);
 
+  // ===== 5.2 Timeline 内容水位：任何可见内容变化（含同 partId 增量）都递增 =====
+  final Map<String, int> _timelineVersionBySession = {};
+
+  /// 5.2：内容变更版本——普通状态通知不递增（不触发滚动），流式增量递增
+  int timelineVersionFor(String sessionId) =>
+      _timelineVersionBySession[sessionId] ?? 0;
+
+  void _bumpTimeline(String sessionId) {
+    _timelineVersionBySession[sessionId] =
+        (_timelineVersionBySession[sessionId] ?? 0) + 1;
+  }
+
   // ===== 5.1 快捷指令（按 Agent 定制，scope=agentId）=====
   final Map<String, List<String>> _quickCommandsByAgent = {};
+  final Set<String> _quickCommandsLoaded = {};
+
+  /// P1：生产路径自动加载（感知 agentId 变化的组件调用）；已加载不重复、异步结果按 scope 隔离无竞态
+  Future<void> ensureQuickCommandsLoaded(String agentId) async {
+    if (agentId.isEmpty || _quickCommandsLoaded.contains(agentId)) return;
+    _quickCommandsLoaded.add(agentId);
+    final value = await credentialStore.loadQuickCommands(agentId);
+    if (value != null) {
+      _quickCommandsByAgent[agentId] = List<String>.of(value);
+      notifyListeners();
+    }
+  }
 
   /// 5.1：该 Agent 的自定义快捷指令；null=无自定义（UI 显示内置默认）
   List<String>? quickCommandsFor(String agentId) {
@@ -86,13 +110,10 @@ class MobileBridgeClient extends ChangeNotifier {
     return value == null ? null : List<String>.of(value);
   }
 
-  /// 加载自定义（未持久化过则保持 null=默认）
+  /// 显式（重新）加载自定义（测试/设置刷新用）
   Future<void> loadQuickCommandsFor(String agentId) async {
-    final value = await credentialStore.loadQuickCommands(agentId);
-    if (value != null) {
-      _quickCommandsByAgent[agentId] = List<String>.of(value);
-      notifyListeners();
-    }
+    _quickCommandsLoaded.remove(agentId);
+    await ensureQuickCommandsLoaded(agentId);
   }
 
   Future<void> addQuickCommand(String agentId, String command) async {
@@ -709,6 +730,7 @@ class MobileBridgeClient extends ChangeNotifier {
       }
     }
     _timelineBySession[sessionId] = nextTimeline;
+    _bumpTimeline(sessionId); // 5.2：快照安装也是可见内容变化
     _lastSequenceBySession.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
     if (epoch.isNotEmpty) _lastSequenceBySession['$sessionId#$epoch'] = watermark;
     _pendingEventsByEpoch.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
@@ -1182,6 +1204,7 @@ class MobileBridgeClient extends ChangeNotifier {
     // 首条消息后，将会话标题更新为消息内容（对齐 GPT「输入啥就是啥」），
     // 避免全是「新任务」这种无区分度的占位标题。
     _maybeRenameSessionAfterFirstMessage(current, trimmed);
+    _bumpTimeline(current.id); // 5.2：乐观消息也是可见内容变化
     notifyListeners();
 
     Map<String, dynamic> res;
@@ -1286,12 +1309,14 @@ class MobileBridgeClient extends ChangeNotifier {
     if (items == null) return;
     if (specific != null) {
       items.remove(specific);
+      _bumpTimeline(sessionId); // 5.2：占位消失也是可见变化
       return;
     }
     // 未指定时移除末尾的等待占位（回复开始 / 结束）
     while (items.isNotEmpty && items.last is PendingResponseItem) {
       final p = items.removeLast() as PendingResponseItem;
       _pendingTimers.remove(p)?.cancel();
+      _bumpTimeline(sessionId); // 5.2：占位消失也是可见变化
     }
   }
 
@@ -1392,12 +1417,14 @@ class MobileBridgeClient extends ChangeNotifier {
   void _applyInOrder(String epochKey, CanonicalAgentEvent first) {
     var seq = first.sequence;
     _applyCanonicalEvent(first);
+    _bumpTimeline(first.sessionId); // 5.2：内容水位（含同 partId 增量）
     _lastSequenceBySession[epochKey] = seq;
     final pending = _pendingEventsByEpoch[epochKey];
     if (pending == null) return;
     while (pending.containsKey(seq + 1)) {
       final next = pending.remove(seq + 1)!;
       _applyCanonicalEvent(next);
+      _bumpTimeline(next.sessionId);
       seq = next.sequence;
       _lastSequenceBySession[epochKey] = seq;
     }

@@ -8,7 +8,7 @@ const Color _textSecondary = Color(0xFF686C75);
 const Color _chipBg = Color(0xFFF3F4F6);
 
 /// 5.1：快捷指令栏——输入框上方自定义胶囊（按 Agent 定制，点击填充输入框）。
-class QuickCommandsBar extends StatelessWidget {
+class QuickCommandsBar extends StatefulWidget {
   final MobileBridgeClient client;
   final String agentId;
 
@@ -23,9 +23,42 @@ class QuickCommandsBar extends StatelessWidget {
   });
 
   @override
+  State<QuickCommandsBar> createState() => _QuickCommandsBarState();
+}
+
+class _QuickCommandsBarState extends State<QuickCommandsBar> {
+  @override
+  void initState() {
+    super.initState();
+    // P1：生产路径自动加载持久化的自定义指令（幂等，已加载不重复）
+    widget.client.ensureQuickCommandsLoaded(widget.agentId);
+    widget.client.addListener(_onClientChanged);
+  }
+
+  void _onClientChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    widget.client.removeListener(_onClientChanged);
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant QuickCommandsBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.agentId != widget.agentId) {
+      // 切换 Agent：加载目标 Agent 的指令（结果按 scope 隔离，无竞态覆盖）
+      widget.client.ensureQuickCommandsLoaded(widget.agentId);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final strings = client.strings;
-    final commands = client.quickCommandsFor(agentId) ?? strings.defaultQuickCommands;
+    final strings = widget.client.strings;
+    final commands =
+        widget.client.quickCommandsFor(widget.agentId) ?? strings.defaultQuickCommands;
     return SizedBox(
       height: 36,
       child: ListView.separated(
@@ -38,13 +71,13 @@ class QuickCommandsBar extends StatelessWidget {
           if (index == commands.length) {
             return _AddCommandButton(
               strings: strings,
-              onAdd: (value) => client.addQuickCommand(agentId, value),
+              onAdd: (value) => widget.client.addQuickCommand(widget.agentId, value),
             );
           }
           final command = commands[index];
           return GestureDetector(
             key: Key('quick-command-$command'),
-            onTap: () => onUse(command),
+            onTap: () => widget.onUse(command),
             onLongPress: () => _confirmRemove(context, strings, command),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -73,7 +106,7 @@ class QuickCommandsBar extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(command),
-        content: Text(strings.quickCmdDeleted),
+        content: Text(strings.quickCmdDeleteConfirm),
         actions: [
           TextButton(
             key: const Key('quick-command-remove-cancel'),
@@ -84,7 +117,13 @@ class QuickCommandsBar extends StatelessWidget {
             key: const Key('quick-command-remove-ok'),
             onPressed: () {
               Navigator.of(ctx).pop();
-              client.removeQuickCommand(agentId, command);
+              widget.client.removeQuickCommand(widget.agentId, command);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(strings.quickCmdDeleted),
+                  duration: const Duration(seconds: 1),
+                ),
+              );
             },
             child: Text(strings.permConfirmOk),
           ),

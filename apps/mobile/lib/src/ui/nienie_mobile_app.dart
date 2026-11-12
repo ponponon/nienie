@@ -659,6 +659,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           child: active == null
               ? const SizedBox.shrink()
               : SessionTimelineList(
+                  // P2：切换会话强制重建（不继承滚动状态/新回复提示）
+                  key: ValueKey('timeline-${active.id}'),
                   client: client,
                   session: active,
                   // 4.5：引用追问——引用块追加输入框（保留草稿），光标移到末尾
@@ -712,9 +714,13 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     agentId: active?.agentId ?? '',
                     onUse: (command) {
                       setState(() {
-                        final existing = _promptController.text.trim();
-                        final prefix = existing.isEmpty ? '' : ' ';
-                        _promptController.text = '$existing$prefix$command';
+                        // P2：完整保留草稿（含前后空白/多行），仅在末尾无空白时补分隔符
+                        final existing = _promptController.text;
+                        final endsWithSpace = existing.isNotEmpty &&
+                            ' \t\n'.contains(existing[existing.length - 1]);
+                        final separator =
+                            existing.isEmpty || endsWithSpace ? '' : ' ';
+                        _promptController.text = '$existing$separator$command';
                         _promptController.selection = TextSelection.fromPosition(
                           TextPosition(offset: _promptController.text.length),
                         );

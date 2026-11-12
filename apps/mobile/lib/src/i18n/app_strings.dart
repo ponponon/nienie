@@ -569,6 +569,13 @@ class NienieStrings {
         AppLanguage.ko => '명령 내용 입력',
       };
 
+  String get quickCmdDeleteConfirm => switch (lang) {
+        AppLanguage.zh => '确定删除这条快捷指令吗？',
+        AppLanguage.en => 'Delete this quick command?',
+        AppLanguage.ja => 'このクイックコマンドを削除しますか？',
+        AppLanguage.ko => '이 빠른 명령을 삭제할까요?',
+      };
+
   String get quickCmdDeleted => switch (lang) {
         AppLanguage.zh => '已删除',
         AppLanguage.en => 'Deleted',

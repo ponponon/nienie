@@ -105,6 +105,7 @@ class InMemoryCredentialStore implements DeviceCredentialStore {
 
   @override
   Future<void> clear() async {
+    _quickCommands.clear(); // P2：快捷指令随清空一并清理（与 File 实现语义一致）
     _machines.clear();
     _activeMachineId = null;
     _savedLanguage = null;
