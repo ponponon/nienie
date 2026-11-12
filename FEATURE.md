@@ -566,3 +566,10 @@
 - **单引号歧义**：按路径合法字符处理（歧义时整体折叠优先于泄漏前缀）——`private!project's secrets/src/main.py`→`~/main.py`。
 - **fail-closed**：无扩展名目录路径折叠为 `~/<叶名>`（叶名含空格则 `~/…`）；UNC 输出 `\\…\叶名`。
 - 回归（ChatGPT 点名全数）：`private!怀疑目录` Unicode+标点、POSIX/Windows/UNC 无扩展名目录、单引号、Stack Trace 双格式、原有 10 项样例保持。bridge-core 66 测试；全仓 230 vitest 全绿。
+
+### 2026-11-11 路线图#1 Round 5.4 目录名带点不得冒充扩展名（封板）
+
+- **匹配原则修正**（非加特例）：文件扩展名必须是路径**最终文件名**的扩展名且**纯字母**——`project.v1`/`v1.2.3` 等「目录名带点」不做文件锚定（`.v1` 含数字不是扩展名）；basename 白名单同规则（带点名的扩展名必须纯字母，否则 `…`）。
+- 结果：`cd /Users/alice/project.v1`→`cd ~/…`；点号目录在中段时后续文件名正常锚定（`project.v1/src/main.ts`→`~/main.ts`、`file.txt:12` 行号保留）；纯字母扩展名文件名正常显示（`~/main.py`）。
+- 顺带修：Stack Trace `:42: secret` 边界（END_BOUNDARY 补 `:`，扩展名纯字母规则已消除目录误判风险）；fail-closed 语义明确（无扩展名路径向后整体折叠，宁可过度）。
+- 回归：R5.4 三组场景入测试；bridge-core 69 测试、全仓 233 vitest 全绿。

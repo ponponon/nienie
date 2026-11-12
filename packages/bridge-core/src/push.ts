@@ -56,16 +56,17 @@ export function validateWebhookUrl(raw: string): string | undefined {
  *  无法可靠识别时宁可整体折叠，不泄露目录结构/项目名。 */
 const HARD_STOP = '[\\r\\n"<>|\\u3000\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A\\u3001\\u201C\\u201D\\u3010\\u3011]';
 const PATH_ROOT = '(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\\\r\\n]+\\\\|\\/)';
-const FILE_SUFFIX = '\\.[A-Za-z0-9]{1,8}(?::\\d+(?::\\d+)?)?';
-const END_BOUNDARY = `(?=[\\s,;!?()\\[\\]{}'\\u0060:]|$|${HARD_STOP})`;
+/** 文件扩展名必须是纯字母（R5.4）：v1/v2/2024 等「目录名带点」不是扩展名，不做文件锚定。 */
+const FILE_SUFFIX = '\\.[A-Za-z]{1,8}';
+const LINE_SUFFIX = '(?::\\d+(?::\\d+)?)?';
+const END_BOUNDARY = '(?=[\\s,;!?:\\u3000\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A\\"<>|]|$)';
 
-/** 文件锚定主规则（R5.3）：根起点 + 任意中段（含 !、()、单引号、空格、Unicode）+ 文件(.ext[:line[:col]]) + 边界。
- *  单引号按路径合法字符处理（歧义时整体折叠优先于泄漏）；Stack Trace `:42`/`:42:7` 后缀保留在输出中。 */
+/** 文件锚定主规则：根起点 → 任意中段 → 文件名.纯字母扩展名[:行[:列]] → 边界。 */
 const FILE_ANCHORED_RE = new RegExp(
-  `${PATH_ROOT}(?:(?!${HARD_STOP}).)*?${FILE_SUFFIX}${END_BOUNDARY}`,
+  `${PATH_ROOT}(?:(?!${HARD_STOP}).)*?${FILE_SUFFIX}${LINE_SUFFIX}${END_BOUNDARY}`,
   'g',
 );
-/** 兜底：无扩展名的目录/文件路径 → 到硬边界整体折叠（fail-closed，禁止前缀式部分脱敏）。 */
+/** 兜底：无合格扩展名的路径到硬边界整体折叠（fail-closed，禁止前缀式部分脱敏）。 */
 const DIR_FALLBACK_RE = new RegExp(`${PATH_ROOT}(?:(?!${HARD_STOP}).)+`, 'g');
 const TMP_FOLDERS_RE = new RegExp(
   `\\/?(?:private\\/)?var\\/folders\\/.*?\\.[A-Za-z0-9]{1,8}(?=[\\s"'\\u3000\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A\\u3001,;!?()<>]|$)`,
@@ -81,7 +82,9 @@ function redactPathMatch(match: string, style: 'home' | 'ellipsis' | 'unc'): str
     suffix = suffixMatch[0];
     base = base.slice(0, -suffix.length);
   }
-  const label = /^[\w\-.]{1,64}$/.test(base) ? base : '\u2026';
+  // 文件名判定同样遵守「扩展名纯字母」：project.v1 等目录名不冒充文件名
+  const filenameLike = /^[\w-]{1,64}$/.test(base) || /^[\w-]{1,55}\.[A-Za-z]{1,8}$/.test(base);
+  const label = filenameLike ? base : '\u2026';
   if (style === 'home') return `~/${label}${suffix}`;
   if (style === 'unc') return `\\\\\u2026\\${label}${suffix}`;
   return `\u2026/${label}${suffix}`;
@@ -98,7 +101,6 @@ function classifyPath(match: string): string {
 export function sanitizePushBody(text: string, detailed: boolean): string {
   const secrets = redactLogText(text);
   if (detailed) return secrets;
-  // 占位符暂存：规则之间不二次命中；同一绝对路径绝不做前缀式部分脱敏
   const labels: string[] = [];
   const stash = (label: string): string => {
     labels.push(label);

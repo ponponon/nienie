@@ -491,3 +491,20 @@ describe('R5.3 路径脱敏完整性（整体匹配策略）', () => {
     expect(sanitizePushBody('log C:\\proj\\app\\main.py:10:5 boom', false)).toBe('log …/main.py:10:5 boom');
   });
 });
+
+describe('R5.4 目录名带点不得冒充文件扩展名', () => {
+  it('.v1/.v2/.2024 等目录名不按文件锚定，整段折叠', () => {
+    expect(sanitizePushBody('cd /Users/alice/project.v1', false)).toBe('cd ~/…');
+    // fail-closed：无扩展名路径向后整体折叠（逗号后散文一并折叠，宁可过度不可泄漏）
+    expect(sanitizePushBody('moved /Users/alice/project.v1, then', false)).toBe('moved ~/…');
+    expect(sanitizePushBody('cd /Users/alice/v1.2.3', false)).toBe('cd ~/…');
+  });
+  it('点号目录在路径中段时后续文件名正常锚定', () => {
+    expect(sanitizePushBody('cat /Users/alice/project.v1/src/main.ts', false)).toBe('cat ~/main.ts');
+    expect(sanitizePushBody('log /Users/alice/project.v1/deep/dir/file.txt:12 done', false)).toBe('log ~/file.txt:12 done');
+  });
+  it('纯字母扩展名的文件名正常显示', () => {
+    expect(sanitizePushBody('see /home/bob/x.txt', false)).toBe('see ~/x.txt');
+    expect(sanitizePushBody('cat /Users/bob/main.py', false)).toBe('cat ~/main.py');
+  });
+});
