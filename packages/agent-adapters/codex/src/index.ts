@@ -399,6 +399,9 @@ export class CodexAdapter implements AgentAdapter {
     }
   }
 
+  /** 各运行的后台执行 Promise（送达回执语义：sendMessage=接受即返回，执行用 waitForRun 等待） */
+  private readonly runs = new Map<string, Promise<void>>();
+
   async sendMessage(sessionId: string, message: string): Promise<void> {
     let record = this.sessions.get(sessionId);
     if (!record) {
@@ -416,7 +419,9 @@ export class CodexAdapter implements AgentAdapter {
     record.status = 'running';
     record.updatedAt = new Date().toISOString();
 
-    await new Promise<void>((resolve, reject) => {
+    // 送达回执语义（路线图 3.3）：spawn 成功即「已送达电脑」，执行在后台继续；
+    // 完成/失败经事件流上报，sendMessage 不等待整个 Agent 执行
+    const run = new Promise<void>((resolve, reject) => {
       let buffer = '';
 
       proc.stdout.on('data', (chunk: Buffer | string) => {
@@ -451,6 +456,13 @@ export class CodexAdapter implements AgentAdapter {
         resolve();
       });
     });
+    this.runs.set(sessionId, run);
+    void run.catch(() => undefined);
+  }
+
+  /// 等待某会话当前运行完成（测试与诊断用；sendMessage 本身不等待执行）
+  async waitForRun(sessionId: string): Promise<void> {
+    await this.runs.get(sessionId);
   }
 
   async cancel(sessionId: string): Promise<void> {

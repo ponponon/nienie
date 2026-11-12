@@ -772,18 +772,21 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                             key: const Key('btn-send-prompt'),
                             padding: EdgeInsets.zero,
                             style: IconButton.styleFrom(backgroundColor: _textPrimary, foregroundColor: Colors.white, shape: const CircleBorder()),
-                            onPressed: () {
-                              if (_isGenerating(client)) {
-                                _stopGeneration(client);
-                              } else {
-                                final text = _promptController.text;
-                                if (text.trim().isEmpty && _attachments.isEmpty) return;
-                                final msg = _composeMessage(text);
-                                _promptController.clear();
-                                setState(() => _attachments.clear());
-                                client.sendMessage(msg);
-                              }
-                            },
+                            // 断线/重连期间禁用发送（补发语义：重连后自动同步会话消息，不谎称本地排队）
+                            onPressed: client.connectionState == BridgeConnectionState.connected
+                                ? () {
+                                    if (_isGenerating(client)) {
+                                      _stopGeneration(client);
+                                    } else {
+                                      final text = _promptController.text;
+                                      if (text.trim().isEmpty && _attachments.isEmpty) return;
+                                      final msg = _composeMessage(text);
+                                      _promptController.clear();
+                                      setState(() => _attachments.clear());
+                                      client.sendMessage(msg);
+                                    }
+                                  }
+                                : null,
                             icon: Icon(_isGenerating(client) ? LucideIcons.square : LucideIcons.arrowUp, size: 16),
                           ),
                         ),

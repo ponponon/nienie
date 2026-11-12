@@ -11,6 +11,10 @@ class FakeBridgeTransport implements BridgeTransport {
   bool diffUnavailable = false;
   /// 下一次 session.send 返回失败（路线图 3.3 送达回执测试用）
   bool failNextSend = false;
+  /// 下一次 session.send 抛出传输异常（receipt 永久 pending 回归测试用）
+  bool throwNextSend = false;
+  /// 接下来 N 次 hello 失败（模拟重连逐次失败）
+  int failHelloCount = 0;
   /// ok | missing | notOk | missingReplied | missingSessionId | missingPermissionId |
   /// missingDecision | sessionIdMismatch | permissionIdMismatch | decisionMismatch
   String permissionReplyEchoMode = 'ok';
@@ -58,6 +62,15 @@ class FakeBridgeTransport implements BridgeTransport {
           },
         };
       case 'hello':
+        if (failHelloCount > 0) {
+          failHelloCount -= 1;
+          return {
+            'type': 'response',
+            'requestId': requestId,
+            'ok': false,
+            'error': {'code': 'BAD_TOKEN', 'message': 'hello failed'},
+          };
+        }
         return {
           'type': 'response',
           'requestId': requestId,
@@ -145,6 +158,10 @@ class FakeBridgeTransport implements BridgeTransport {
           },
         };
       case 'session.send':
+        if (throwNextSend) {
+          throwNextSend = false;
+          throw Exception('transport broken');
+        }
         if (failNextSend) {
           failNextSend = false;
           return {

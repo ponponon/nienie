@@ -236,10 +236,10 @@ class NienieStrings {
       };
 
   String get reconnectBannerSuffix => switch (lang) {
-        AppLanguage.zh => ' 次）…期间消息自动补发',
-        AppLanguage.en => '）… messages will be resent automatically',
-        AppLanguage.ja => '回目）…メッセージは自動で再送されます',
-        AppLanguage.ko => '회) …메시지는 자동으로 재전송됩니다',
+        AppLanguage.zh => ' 次）…断线期间的会话消息将在重连后自动同步',
+        AppLanguage.en => '）… conversation messages will sync after reconnect',
+        AppLanguage.ja => '回目）…切断中の会話メッセージは再接続後に同期されます',
+        AppLanguage.ko => '회) …끊긴 동안의 대화 메시지는 재연결 후 동기화됩니다',
       };
 
   String get disconnectedBanner => switch (lang) {

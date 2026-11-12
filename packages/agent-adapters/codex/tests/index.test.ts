@@ -193,6 +193,8 @@ describe('CodexAdapter', () => {
     adapter.onEvent((event) => receivedEvents.push(event));
 
     await adapter.sendMessage(session.id, '请运行测试并修复问题');
+    // sendMessage=接受即返回；执行完成后事件与 thread 绑定才就绪
+    await adapter.waitForRun(session.id);
     expect(spawnedCalls[0]).toEqual({
       args: ['exec', '--json', '--skip-git-repo-check', '-C', '/workspace/nienie', '请运行测试并修复问题'],
       cwd: '/workspace/nienie',
@@ -205,6 +207,7 @@ describe('CodexAdapter', () => {
 
     // 4. Subsequent sendMessage() on the same session resumes the bound Codex thread (`exec resume --json <thread_id>`)
     await adapter.sendMessage(session.id, '继续检查覆盖率');
+    await adapter.waitForRun(session.id);
     expect(spawnedCalls[1]).toEqual({
       args: [
         'exec',

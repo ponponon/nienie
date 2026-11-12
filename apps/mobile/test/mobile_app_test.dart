@@ -1833,7 +1833,7 @@ void main() {
     expect(client.connectionState, BridgeConnectionState.reconnecting); // 先验证状态机
     await tester.pump(const Duration(seconds: 1));
     expect(find.byKey(const Key('reconnect-banner')), findsOneWidget);
-    expect(find.textContaining('resent'), findsOneWidget); // en 文案含自动补发语义
+    expect(find.textContaining('sync after reconnect'), findsOneWidget); // 文案=重连后同步会话消息（可保证语义）
     // 推进时间让重连调度链完成，避免悬挂 Timer
     await tester.pump(const Duration(seconds: 8));
     client.dispose();
@@ -1864,6 +1864,87 @@ void main() {
     await client.retrySendPrompt(session, failed);
     expect(failed.receipt, SendReceipt.delivered);
     expect(client.timelineFor('ses_alpha').whereType<UserPromptItem>().length, 2);
+    client.dispose();
+  });
+
+  testWidgets('路线图#3 Round2 重连状态机：重试期间保持 reconnecting，4 次失败后才回配对页，成功清零', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 场景 A：连续 4 次 hello 失败 → 期间会话视图保留、横幅递增；最终回配对页
+    transport.failHelloCount = 4;
+    transport.emitRaw({'type': 'transport.disconnected'});
+    await tester.pump(const Duration(seconds: 2));
+    expect(client.connectionState, BridgeConnectionState.reconnecting);
+    expect(find.byKey(const Key('reconnect-banner')), findsOneWidget); // 会话视图保留
+    // 重试推进中状态不得降级为 connecting/disconnected
+    await tester.pump(const Duration(seconds: 2));
+    expect(client.connectionState, BridgeConnectionState.reconnecting);
+    await tester.pump(const Duration(seconds: 8)); // 4 次重试全部失败
+    expect(client.connectionState, BridgeConnectionState.disconnected);
+    expect(find.byKey(const Key('reconnect-banner')), findsNothing); // 回配对页
+    expect(find.byKey(const Key('btn-connect-pair')), findsOneWidget);
+    client.dispose();
+  });
+
+  testWidgets('路线图#3 Round2 重连成功清零 + 断线禁发 + 计时起点不被历史重置', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 计时起点=事件真实时间：5 分钟前的 running 立即显示 300s+
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'run1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1,
+      'timestamp': DateTime.now().subtract(const Duration(seconds: 300)).toIso8601String(),
+      'type': 'status', 'payload': {'status': 'running'},
+    });
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.textContaining('Thinking'), findsWidgets);
+    expect(find.textContaining('300'), findsWidgets);
+
+    // 重复 running 事件（历史恢复）不重置计时
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'run2', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 2, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'running'},
+    });
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.textContaining('300'), findsWidgets); // 未被重置为 0-2s
+
+    // 断线重连：期间发送禁用（横幅在、发送按钮禁用、sendMessage 不出站）
+    transport.failHelloCount = 1;
+    transport.emitRaw({'type': 'transport.disconnected'});
+    await tester.pump(const Duration(seconds: 2));
+    expect(client.connectionState, BridgeConnectionState.reconnecting);
+    final sendBtn = tester.widget<IconButton>(find.byKey(const Key('btn-send-prompt')));
+    expect(sendBtn.onPressed, isNull); // UI 禁用
+    final before = transport.sentPrompts.length;
+    await client.sendMessage('断线期间的消息');
+    expect(transport.sentPrompts.length, before); // 不出站
+    expect(client.errorMessage, contains('同步'));
+
+    // 1 次失败后成功 → connected + 计数清零 + 横幅消失
+    await tester.pump(const Duration(seconds: 8));
+    expect(client.connectionState, BridgeConnectionState.connected);
+    expect(client.reconnectAttempt, 0);
+    expect(find.byKey(const Key('reconnect-banner')), findsNothing);
+    client.dispose();
+  });
+
+  test('路线图#3 Round2 发送异常回执落定 failed（不永久 pending）', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
+    await client.refreshSessions();
+    client.connectionState = BridgeConnectionState.connected;
+    final session = client.sessions.firstWhere((s) => s.id == 'ses_alpha');
+    client.activeSession = session;
+
+    transport.throwNextSend = true;
+    await client.sendMessage('异常消息');
+    final item = client.timelineFor('ses_alpha').whereType<UserPromptItem>().single;
+    expect(item.receipt, SendReceipt.failed); // 异常也落定，不悬挂 pending
     client.dispose();
   });
 

@@ -673,3 +673,12 @@
 - **送达回执**（3.3，iMessage 心智）：`SendReceipt {pending, delivered, failed}`——发送中时钟图标、已送达电脑绿色双勾（Tooltip「已送达电脑」）、未送达红色警示（Tooltip「未送达，点击重发」+ 点击 `retrySendPrompt` **复用同一条消息重发**不新建）；失败同时保留错误卡。
 - i18n 补 11 组（重连/思考中/运行工具/空闲/等待审批/横幅前后缀/断开/重试/已送达/未送达）4 语言。
 - 测试：状态胶囊四态（Idle/Thinking 计时/重连第 N 次）、断线横幅补发语义、送达回执 pending→delivered→failed→重发达成；mobile 49（+2）、全仓 246 vitest 全绿。
+
+### 2026-11-12 路线图#3 Round 2（状态机/补发语义/回执时机收口）
+
+- **重连状态机修正**：`reconnectWithSavedCredential` 在 reconnecting 态不降级为 connecting/disconnected（重试全程保持 reconnecting + 递增计数），4 次失败后由外层转 disconnected 回配对页，成功清零 `reconnectAttempt`——修掉「一进入重试就掉回配对页」的真实缺陷。
+- **补发语义改为可保证口径**：不做本地出站队列——断线/重连期间**发送按钮禁用**（UI + 客户端双守卫），横幅文案改「…断线期间的会话消息将在重连后自动同步」（历史消息重连后同步是可保证的，不谎称本地排队补发）。
+- **送达回执语义统一**：delivered=「已送达电脑」（接受即确认，不等 Agent 执行完成）——CodexAdapter.sendMessage 改为 **spawn 成功即返回**（执行后台继续、完成/失败经事件流上报），新增 `waitForRun` 供测试/诊断等待；测试适配（sendMessage 后 waitForRun 再断言）。
+- **Thinking 计时起点**：`runningSince` 取事件真实 timestamp（历史恢复不重新起算）、重复 running 事件不重置（`??=`）。
+- **发送异常回执落定**：sendMessage 的 transport 异常捕获 → receipt=failed（不永久 pending）；retrySendPrompt 同守卫。
+- 测试：4 次重试状态机（重试中保持 reconnecting/横幅在/失败后回配对页）、成功清零、断线禁发不出站、计时 300s 不重置、异常落定；mobile 52（+3）、全仓 246 vitest 全绿。

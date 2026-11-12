@@ -227,6 +227,7 @@ class MobileBridgeClient extends ChangeNotifier {
       savedMachines = await credentialStore.listMachines();
 
       connectionState = BridgeConnectionState.connected;
+      reconnectAttempt = 0;
       await refreshAgents();
       await refreshSessions();
       if (activeSession == null && sessions.isNotEmpty) {
@@ -249,7 +250,12 @@ class MobileBridgeClient extends ChangeNotifier {
       throw StateError('No saved device credential found');
     }
 
-    connectionState = BridgeConnectionState.connecting;
+    // Round 2 状态机：重连期间始终保持 reconnecting（不降级 connecting/disconnected），
+    // 只有外层重试全部失败后才由调用方转 disconnected
+    final keepReconnecting = connectionState == BridgeConnectionState.reconnecting;
+    if (!keepReconnecting) {
+      connectionState = BridgeConnectionState.connecting;
+    }
     errorMessage = null;
     notifyListeners();
 
@@ -276,7 +282,9 @@ class MobileBridgeClient extends ChangeNotifier {
       }
     }
     if (connectedUrl == null) {
-      connectionState = BridgeConnectionState.disconnected;
+      if (!keepReconnecting) {
+        connectionState = BridgeConnectionState.disconnected;
+      }
       notifyListeners();
       throw StateError('无法连接电脑：${lastError ?? '所有地址均不可达'}');
     }
@@ -289,7 +297,9 @@ class MobileBridgeClient extends ChangeNotifier {
     });
 
     if (res['ok'] != true) {
-      connectionState = BridgeConnectionState.error;
+      if (!keepReconnecting) {
+        connectionState = BridgeConnectionState.error;
+      }
       final err = res['error'] as Map<String, dynamic>?;
       errorMessage = err?['message'] as String? ?? 'Reconnect failed';
       notifyListeners();
@@ -324,6 +334,7 @@ class MobileBridgeClient extends ChangeNotifier {
     activeMachineId = saved.machineId;
     connectedMachineIds.add(saved.machineId);
     connectionState = BridgeConnectionState.connected;
+    reconnectAttempt = 0;
     await refreshAgents();
     await refreshSessions();
     if (activeSession != null) {
@@ -1080,6 +1091,12 @@ class MobileBridgeClient extends ChangeNotifier {
   Future<void> sendMessage(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
+    // Round 2 补发语义：断线/重连期间禁用发送（历史会话消息重连后自动同步，不谎称本地排队补发）
+    if (connectionState != BridgeConnectionState.connected) {
+      errorMessage = '连接断开中，消息将在重连后自动同步';
+      notifyListeners();
+      return;
+    }
 
     AgentSession? current = activeSession;
     if (current == null) {
@@ -1106,15 +1123,25 @@ class MobileBridgeClient extends ChangeNotifier {
     _maybeRenameSessionAfterFirstMessage(current, trimmed);
     notifyListeners();
 
-    final res = await transport.sendRequest({
-      'type': 'session.send',
-      'requestId': _nextRequestId(),
-      'sessionId': current.id,
-      'agentId': current.agentId,
-      'message': trimmed,
-      'clientMessageId': clientMessageId,
-      if (selectedModelId != null) 'modelId': selectedModelId,
-    });
+    Map<String, dynamic> res;
+    try {
+      res = await transport.sendRequest({
+        'type': 'session.send',
+        'requestId': _nextRequestId(),
+        'sessionId': current.id,
+        'agentId': current.agentId,
+        'message': trimmed,
+        'clientMessageId': clientMessageId,
+        if (selectedModelId != null) 'modelId': selectedModelId,
+      });
+    } catch (_) {
+      // 发送异常也必须落定回执（不永久 pending）
+      _resolvePending(current.id, pending);
+      optimistic.receipt = SendReceipt.failed;
+      errorMessage = '发送失败，请重试';
+      notifyListeners();
+      return;
+    }
 
     if (res['ok'] != true) {
       final err = res['error'] as Map<String, dynamic>?;
@@ -1143,6 +1170,11 @@ class MobileBridgeClient extends ChangeNotifier {
   /// 路线图 3.3：发送失败后显式重发（复用同一条乐观消息，不新建）
   Future<void> retrySendPrompt(AgentSession session, UserPromptItem item) async {
     if (item.receipt == SendReceipt.delivered || item.receipt == SendReceipt.pending) return;
+    if (connectionState != BridgeConnectionState.connected) {
+      errorMessage = '连接断开中，消息将在重连后自动同步';
+      notifyListeners();
+      return;
+    }
     item.receipt = SendReceipt.pending;
     notifyListeners();
     try {
@@ -1334,7 +1366,9 @@ class MobileBridgeClient extends ChangeNotifier {
         final status = event.payload['status'] as String? ?? 'idle';
         _sessionStatusBySession[event.sessionId] = status;
         if (status == 'running') {
-          _runningSinceBySession[event.sessionId] = DateTime.now();
+          // 计时起点=事件真实时间；重复 running 事件（历史恢复）不重置
+          _runningSinceBySession[event.sessionId] ??=
+              DateTime.tryParse(event.timestamp) ?? DateTime.now();
         } else {
           _runningSinceBySession.remove(event.sessionId);
         }
