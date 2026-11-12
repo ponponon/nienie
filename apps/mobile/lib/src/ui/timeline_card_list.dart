@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -21,6 +22,83 @@ class SessionTimelineList extends StatefulWidget {
 }
 
 class _SessionTimelineListState extends State<SessionTimelineList> {
+  Timer? _waitingRefreshTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // 超时提醒刷新（只提示等待时长，不冒充服务端过期）
+    _waitingRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _waitingRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  /// 目标③：批准/拒绝入口——allow_always 与高风险操作先二次确认（说明永久影响），其余直达
+  Future<void> _handlePermissionDecision(PermissionRequestCardItem item, String decision) async {
+    final needsConfirm = decision == 'allow_always' || item.risk == PermissionRiskLevel.high;
+    if (needsConfirm) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          final isAlways = decision == 'allow_always';
+          return AlertDialog(
+            title: Text(
+              isAlways
+                  ? widget.client.strings.permConfirmTitle
+                  : widget.client.strings.permConfirmHighRiskNote,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.client.strings.permConfirmAlwaysLine, style: const TextStyle(fontSize: 12.5)),
+                const SizedBox(height: 4),
+                Text(item.permission,
+                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
+                if (item.patterns.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(widget.client.strings.permConfirmResources, style: const TextStyle(fontSize: 11, color: _textSecondary)),
+                  Text(item.patterns.join('\n'),
+                      style: const TextStyle(fontSize: 11, fontFamily: 'monospace')),
+                ],
+                if (isAlways) ...[
+                  const SizedBox(height: 8),
+                  Text(widget.client.strings.permConfirmFutureNote,
+                      style: const TextStyle(fontSize: 11, color: Color(0xFFD97706))),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                key: const Key('btn-perm-confirm-cancel'),
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: Text(widget.client.strings.permCancelBtn),
+              ),
+              FilledButton(
+                key: const Key('btn-perm-confirm-ok'),
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: Text(widget.client.strings.permConfirmOk),
+              ),
+            ],
+          );
+        },
+      );
+      if (confirmed != true) return;
+    }
+    await widget.client.replyPermission(
+      sessionId: widget.session.id,
+      permissionId: item.permissionId,
+      decision: decision,
+    );
+  }
+
   Widget _permissionRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
@@ -527,106 +605,151 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     ),
                   ],
                   const SizedBox(height: 8),
-                  if (item.resolvedDecision != null)
-                    Text(
-                      switch (item.resolvedDecision!) {
-                        'allow_once' => widget.client.strings.permResultOnce,
-                        'allow_always' => widget.client.strings.permResultAlways,
-                        'reject' => widget.client.strings.permResultReject,
-                        _ => widget.client.strings.permResultUnknown,
-                      },
-                      key: Key('perm-result-${item.permissionId}'),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: item.resolvedDecision == 'reject'
-                            ? const Color(0xFFDC2626)
-                            : item.resolvedDecision == 'unknown'
-                                ? _textSecondary
-                                : _weTypeGreen,
-                      ),
-                    )
-                  else if (item.resolutionUncertain)
-                    Text(
-                      widget.client.strings.permUncertainNote,
-                      key: Key('perm-uncertain-${item.permissionId}'),
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Color(0xFFD97706),
-                      ),
-                    )
-                  else
-                    Row(
-                      children: [
-                        SizedBox(
-                          height: 30,
-                          child: FilledButton(
-                            key: Key('btn-perm-allow-once-${item.permissionId}'),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _textPrimary,
-                              padding: const EdgeInsets.symmetric(horizontal: 10),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
+                  AnimatedSwitcher(
+                    duration: MediaQuery.of(context).disableAnimations
+                        ? Duration.zero
+                        : const Duration(milliseconds: 220),
+                    child: item.resolvedDecision != null
+                        ? KeyedSubtree(
+                            key: ValueKey('resolved-${item.permissionId}-${item.resolvedDecision}'),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  item.resolvedDecision == 'reject'
+                                      ? LucideIcons.circleX
+                                      : item.resolvedDecision == 'unknown'
+                                          ? LucideIcons.circleHelp
+                                          : LucideIcons.circleCheck,
+                                  size: 15,
+                                  color: item.resolvedDecision == 'reject'
+                                      ? const Color(0xFFDC2626)
+                                      : item.resolvedDecision == 'unknown'
+                                          ? _textSecondary
+                                          : _weTypeGreen,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  switch (item.resolvedDecision!) {
+                                    'allow_once' => widget.client.strings.permResultOnce,
+                                    'allow_always' => widget.client.strings.permResultAlways,
+                                    'reject' => widget.client.strings.permResultReject,
+                                    _ => widget.client.strings.permResultUnknown,
+                                  },
+                                  key: Key('perm-result-${item.permissionId}'),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                    color: item.resolvedDecision == 'reject'
+                                        ? const Color(0xFFDC2626)
+                                        : item.resolvedDecision == 'unknown'
+                                            ? _textSecondary
+                                            : _weTypeGreen,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : item.resolutionUncertain
+                            ? KeyedSubtree(
+                                key: ValueKey('uncertain-${item.permissionId}'),
+                                child: Text(
+                                  widget.client.strings.permUncertainNote,
+                                  key: Key('perm-uncertain-${item.permissionId}'),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                    color: Color(0xFFD97706),
+                                  ),
+                                ),
+                              )
+                            : KeyedSubtree(
+                                key: ValueKey('pending-${item.permissionId}-${item.replyPending}'),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        // 拒绝：独立视觉分区（灰/红描边），与批准区拉开距离防误触
+                                        SizedBox(
+                                          height: 44,
+                                          child: OutlinedButton(
+                                            key: Key('btn-perm-reject-${item.permissionId}'),
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: const Color(0xFFDC2626),
+                                              side: const BorderSide(color: Color(0xFFF0B7B7)),
+                                              padding: const EdgeInsets.symmetric(horizontal: 14),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(10),
+                                              ),
+                                            ),
+                                            onPressed: item.replyPending
+                                                ? null
+                                                : () => _handlePermissionDecision(item, 'reject'),
+                                            child: Text(
+                                              widget.client.strings.rejectBtn,
+                                              style: const TextStyle(fontSize: 12),
+                                            ),
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        SizedBox(
+                                          height: 44,
+                                          child: FilledButton.tonal(
+                                            key: Key('btn-perm-allow-once-${item.permissionId}'),
+                                            style: FilledButton.styleFrom(
+                                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(10),
+                                              ),
+                                            ),
+                                            onPressed: item.replyPending
+                                                ? null
+                                                : () => _handlePermissionDecision(item, 'allow_once'),
+                                            child: Text(
+                                              widget.client.strings.allowOnceBtn,
+                                              style: const TextStyle(fontSize: 12),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        SizedBox(
+                                          height: 44,
+                                          child: FilledButton(
+                                            key: Key('btn-perm-allow-always-${item.permissionId}'),
+                                            style: FilledButton.styleFrom(
+                                              backgroundColor: _weTypeGreen,
+                                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(10),
+                                              ),
+                                            ),
+                                            onPressed: item.replyPending
+                                                ? null
+                                                : () => _handlePermissionDecision(item, 'allow_always'),
+                                            child: Text(
+                                              widget.client.strings.allowAlwaysBtn,
+                                              style: const TextStyle(fontSize: 12),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (DateTime.now().difference(item.waitingSince).inMinutes >= 2)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 6),
+                                        child: Text(
+                                          widget.client.strings.permWaitingLong,
+                                          key: Key('perm-waiting-${item.permissionId}'),
+                                          style: const TextStyle(
+                                            fontSize: 10.5,
+                                            color: Color(0xFFD97706),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            onPressed: () => widget.client.replyPermission(
-                              sessionId: widget.session.id,
-                              permissionId: item.permissionId,
-                              decision: 'allow_once',
-                            ),
-                            child: Text(
-                              widget.client.strings.allowOnceBtn,
-                              style: const TextStyle(fontSize: 11.5),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        SizedBox(
-                          height: 30,
-                          child: FilledButton.tonal(
-                            key: Key('btn-perm-allow-always-${item.permissionId}'),
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 10),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            onPressed: () => widget.client.replyPermission(
-                              sessionId: widget.session.id,
-                              permissionId: item.permissionId,
-                              decision: 'allow_always',
-                            ),
-                            child: Text(
-                              widget.client.strings.allowAlwaysBtn,
-                              style: const TextStyle(fontSize: 11.5),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        SizedBox(
-                          height: 30,
-                          child: OutlinedButton(
-                            key: Key('btn-perm-reject-${item.permissionId}'),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 10),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            onPressed: () => widget.client.replyPermission(
-                              sessionId: widget.session.id,
-                              permissionId: item.permissionId,
-                              decision: 'reject',
-                            ),
-                            child: Text(
-                              widget.client.strings.rejectBtn,
-                              style: const TextStyle(fontSize: 11.5),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                  ),
                 ],
               ),
             );

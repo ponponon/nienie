@@ -138,6 +138,8 @@ class PermissionRequestCardItem extends SessionTimelineItem {
   bool replyPending;
   /// 回执不可信（fail-closed）：结果未知，禁止重试按钮，等待权威状态同步
   bool resolutionUncertain;
+  /// 等待起点（目标③：超时提醒只报"等待时长"，绝不冒充服务端过期）
+  DateTime waitingSince;
 
   PermissionRequestCardItem({
     required this.permissionId,
@@ -147,7 +149,8 @@ class PermissionRequestCardItem extends SessionTimelineItem {
     this.resolvedDecision,
     this.replyPending = false,
     this.resolutionUncertain = false,
-  });
+    DateTime? waitingSince,
+  }) : waitingSince = waitingSince ?? DateTime.now();
 
   /// 风险分级（规则推导，展示用）
   PermissionRiskLevel get risk => classifyPermissionRisk(permission, patterns);

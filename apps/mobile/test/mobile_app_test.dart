@@ -254,6 +254,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(allowBtn);
       await tester.pumpAndSettle();
+      // 目标③：高风险操作需二次确认（本例 patterns 含 rm 触发高风险）
+      await tester.tap(find.byKey(const Key('btn-perm-confirm-ok')));
+      await tester.pumpAndSettle();
 
       expect(transport.permissionReplies.single, {
         'sessionId': 'ses_alpha',
@@ -1620,6 +1623,64 @@ void main() {
     await tester.pumpAndSettle();
     expect(client.focusedPermissionId, 'perm_hi');
     expect(find.byKey(const Key('btn-perm-allow-once-perm_hi')), findsOneWidget);
+    client.dispose();
+  });
+
+  testWidgets('路线图#2 目标③ 防误操作：二次确认/44dp/禁用/收起/超时提醒', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+    var seq = 0;
+    void emit(String type, Map<String, dynamic> payload) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'z${++seq}', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': seq, 'timestamp': '2026-11-12T10:00:00Z', 'type': type, 'payload': payload,
+      });
+    }
+
+    // 低风险 allow_once：直达不弹窗
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_low', 'permission': 'read', 'detail': '读文件', 'patterns': ['src/**']});
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -2000));
+    await tester.pumpAndSettle();
+    final lowBtn = find.byKey(const Key('btn-perm-allow-once-perm_low'));
+    expect(tester.getSize(lowBtn).height, greaterThanOrEqualTo(44)); // 44dp 触控目标
+    await tester.tap(lowBtn);
+    await tester.pumpAndSettle();
+    expect(transport.permissionReplies.length, 1); // 无弹窗直达
+
+    // allow_always：必须二次确认（含永久影响说明），取消则不提交
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_alw', 'permission': 'bash', 'detail': '构建', 'patterns': ['*']});
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -2000));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-perm-allow-always-perm_alw')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('btn-perm-confirm-ok')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('btn-perm-confirm-cancel')));
+    await tester.pumpAndSettle();
+    expect(transport.permissionReplies.length, 1); // 取消未提交
+    await tester.tap(find.byKey(const Key('btn-perm-allow-always-perm_alw')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-perm-confirm-ok')));
+    await tester.pumpAndSettle();
+    expect(transport.permissionReplies.length, 2);
+
+    // 已决卡收起：按钮消失、结果定格
+    expect(find.byKey(const Key('btn-perm-allow-once-perm_alw')), findsNothing);
+    expect(find.byKey(const Key('perm-result-perm_alw')), findsOneWidget);
+
+    // 超时提醒：等待≥2 分钟显示（不写"已过期"）
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_wait', 'permission': 'bash', 'detail': 'x'});
+    await tester.pumpAndSettle();
+    final waitingCard = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().singleWhere((c) => c.permissionId == 'perm_wait');
+    waitingCard.waitingSince = DateTime.now().subtract(const Duration(minutes: 5));
+    await tester.pump(const Duration(seconds: 31)); // 周期刷新触发重建
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -2000));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('perm-waiting-perm_wait')), findsOneWidget);
+    expect((find.byKey(const Key('perm-waiting-perm_wait')).evaluate().single.widget as Text).data, contains('computer'));
     client.dispose();
   });
 

@@ -249,6 +249,62 @@ class NienieStrings {
         AppLanguage.ko => '미분류',
       };
 
+  String get permConfirmTitle => switch (lang) {
+        AppLanguage.zh => '确认始终允许',
+        AppLanguage.en => 'Confirm always allow',
+        AppLanguage.ja => '常に許可の確認',
+        AppLanguage.ko => '항상 허용 확인',
+      };
+
+  String get permConfirmAlwaysLine => switch (lang) {
+        AppLanguage.zh => '将永久允许以下操作',
+        AppLanguage.en => 'This will permanently allow',
+        AppLanguage.ja => '以下の操作を永久に許可します',
+        AppLanguage.ko => '다음 작업을 영구히 허용합니다',
+      };
+
+  String get permConfirmResources => switch (lang) {
+        AppLanguage.zh => '生效资源',
+        AppLanguage.en => 'Applies to',
+        AppLanguage.ja => '対象リソース',
+        AppLanguage.ko => '적용 대상',
+      };
+
+  String get permConfirmFutureNote => switch (lang) {
+        AppLanguage.zh => '这会影响后续同类请求，不再每次询问',
+        AppLanguage.en => 'This affects future similar requests and will not ask again',
+        AppLanguage.ja => '今後の同種リクエストに影響し、毎回確認しません',
+        AppLanguage.ko => '이후 유사 요청에 영향을 주며 다시 묻지 않습니다',
+      };
+
+  String get permConfirmHighRiskNote => switch (lang) {
+        AppLanguage.zh => '该操作被标记为高风险，请确认后继续',
+        AppLanguage.en => 'This action is marked high risk, please confirm to continue',
+        AppLanguage.ja => 'この操作は高リスクと判定されています。確認して続行してください',
+        AppLanguage.ko => '이 작업은 고위험으로 분류되었습니다. 확인 후 계속하세요',
+      };
+
+  String get permConfirmOk => switch (lang) {
+        AppLanguage.zh => '确认执行',
+        AppLanguage.en => 'Confirm',
+        AppLanguage.ja => '実行を確認',
+        AppLanguage.ko => '실행 확인',
+      };
+
+  String get permCancelBtn => switch (lang) {
+        AppLanguage.zh => '取消',
+        AppLanguage.en => 'Cancel',
+        AppLanguage.ja => 'キャンセル',
+        AppLanguage.ko => '취소',
+      };
+
+  String get permWaitingLong => switch (lang) {
+        AppLanguage.zh => '已等待较长时间，请在电脑端确认当前状态',
+        AppLanguage.en => 'Waiting for a long time, please check the status on your computer',
+        AppLanguage.ja => '長時間待機しています。PC側で状態を確認してください',
+        AppLanguage.ko => '오래 기다리는 중입니다. PC에서 상태를 확인하세요',
+      };
+
   String get langShortLabel => switch (lang) {
         AppLanguage.zh => '中文',
         AppLanguage.en => 'EN',
