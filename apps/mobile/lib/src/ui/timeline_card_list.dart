@@ -181,13 +181,59 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      item.message,
-                      style: const TextStyle(
-                        color: _textPrimary,
-                        fontSize: 14,
-                        height: 1.45,
-                      ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            item.message,
+                            style: const TextStyle(
+                              color: _textPrimary,
+                              fontSize: 14,
+                              height: 1.45,
+                            ),
+                          ),
+                        ),
+                        // 路线图 3.3：送达回执（iMessage 心智）——发送中/已送达电脑/未送达可重发
+                        const SizedBox(width: 5),
+                        Builder(builder: (context) {
+                          final receipt = item.receipt;
+                          final icon = switch (receipt) {
+                            SendReceipt.pending => const Icon(
+                                LucideIcons.clock,
+                                size: 12,
+                                color: _textSecondary,
+                              ),
+                            SendReceipt.delivered => const Icon(
+                                LucideIcons.checkCheck,
+                                size: 13,
+                                color: _weTypeGreen,
+                              ),
+                            SendReceipt.failed => const Icon(
+                                LucideIcons.circleAlert,
+                                size: 13,
+                                color: Color(0xFFDC2626),
+                              ),
+                          };
+                          if (receipt == SendReceipt.failed) {
+                            return Tooltip(
+                              message: widget.client.strings.notDeliveredLabel,
+                              child: GestureDetector(
+                                key: Key('btn-resend-${item.messageId ?? item.message}'),
+                                onTap: () => widget.client.retrySendPrompt(widget.session, item),
+                                child: icon,
+                              ),
+                            );
+                          }
+                          return receipt == SendReceipt.delivered
+                              ? Tooltip(
+                                  message: widget.client.strings.deliveredReceipt,
+                                  child: icon,
+                                )
+                              : icon;
+                        }),
+                      ],
                     ),
                     // 附件元数据可见（J0.6b-3.2）：文件名 + MIME
                     for (final attachment in item.attachments) ...[

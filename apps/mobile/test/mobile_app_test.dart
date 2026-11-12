@@ -1808,6 +1808,65 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('路线图#3 状态胶囊与断线横幅：重连第 N 次/补发语义/恢复', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 连接态胶囊：在线 + 空闲
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byKey(const Key('status-pill')), findsWidgets);
+    expect(find.textContaining('Idle'), findsWidgets);
+
+    // 运行中 → 思考中计时
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'r1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': '2026-11-12T10:00:00Z', 'type': 'status',
+      'payload': {'status': 'running'},
+    });
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.textContaining('Thinking'), findsWidgets);
+
+    // 断线 → 重连横幅（第 N 次 + 自动补发语义），非静默
+    transport.emitRaw({'type': 'transport.disconnected'});
+    await tester.pump();
+    expect(client.connectionState, BridgeConnectionState.reconnecting); // 先验证状态机
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byKey(const Key('reconnect-banner')), findsOneWidget);
+    expect(find.textContaining('resent'), findsOneWidget); // en 文案含自动补发语义
+    // 推进时间让重连调度链完成，避免悬挂 Timer
+    await tester.pump(const Duration(seconds: 8));
+    client.dispose();
+  });
+
+  test('路线图#3 送达回执：发送中→已送达；失败→未送达可重发', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());
+    await client.refreshSessions();
+    client.connectionState = BridgeConnectionState.connected;
+    final session = client.sessions.firstWhere((s) => s.id == 'ses_alpha');
+    client.activeSession = session;
+
+    // 成功送达
+    await client.sendMessage('第一条');
+    final delivered = client.timelineFor('ses_alpha').whereType<UserPromptItem>().single;
+    expect(delivered.receipt, SendReceipt.delivered);
+
+    // 发送失败 → 未送达
+    transport.failNextSend = true;
+    await client.sendMessage('第二条');
+    final items = client.timelineFor('ses_alpha').whereType<UserPromptItem>().toList();
+    final failed = items.last;
+    expect(failed.receipt, SendReceipt.failed);
+    expect(failed.message, '第二条');
+
+    // 显式重发（复用同一消息，不新建）→ 送达
+    await client.retrySendPrompt(session, failed);
+    expect(failed.receipt, SendReceipt.delivered);
+    expect(client.timelineFor('ses_alpha').whereType<UserPromptItem>().length, 2);
+    client.dispose();
+  });
+
   test('路线图#1 R9 断线时深链保留，重连后自动进入正确会话', () async {
     final transport = FakeBridgeTransport();
     final client = MobileBridgeClient(
@@ -1898,3 +1957,4 @@ void main() {
   });
 
 }
+

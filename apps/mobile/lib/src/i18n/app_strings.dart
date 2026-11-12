@@ -193,6 +193,83 @@ class NienieStrings {
         AppLanguage.ko => '승인 결과를 확인할 수 없습니다. 다시 시도하지 마세요',
       };
 
+  String get statusReconnecting => switch (lang) {
+        AppLanguage.zh => '网络重连中',
+        AppLanguage.en => 'Reconnecting',
+        AppLanguage.ja => '再接続中',
+        AppLanguage.ko => '다시 연결 중',
+      };
+
+  String get agentThinking => switch (lang) {
+        AppLanguage.zh => '思考中',
+        AppLanguage.en => 'Thinking',
+        AppLanguage.ja => '考え中',
+        AppLanguage.ko => '생각 중',
+      };
+
+  String get agentToolRunning => switch (lang) {
+        AppLanguage.zh => '运行工具',
+        AppLanguage.en => 'Running tool',
+        AppLanguage.ja => 'ツール実行中',
+        AppLanguage.ko => '도구 실행 중',
+      };
+
+  String get agentIdle => switch (lang) {
+        AppLanguage.zh => '空闲',
+        AppLanguage.en => 'Idle',
+        AppLanguage.ja => '待機中',
+        AppLanguage.ko => '대기 중',
+      };
+
+  String get agentWaitingApproval => switch (lang) {
+        AppLanguage.zh => '等待审批',
+        AppLanguage.en => 'Waiting approval',
+        AppLanguage.ja => '承認待ち',
+        AppLanguage.ko => '승인 대기',
+      };
+
+  String get reconnectBannerPrefix => switch (lang) {
+        AppLanguage.zh => '连接断开，正在重连（第 ',
+        AppLanguage.en => 'Connection lost, reconnecting (attempt ',
+        AppLanguage.ja => '接続が切れました。再接続中（',
+        AppLanguage.ko => '연결이 끊어졌습니다. 다시 연결 중(시도 ',
+      };
+
+  String get reconnectBannerSuffix => switch (lang) {
+        AppLanguage.zh => ' 次）…期间消息自动补发',
+        AppLanguage.en => '）… messages will be resent automatically',
+        AppLanguage.ja => '回目）…メッセージは自動で再送されます',
+        AppLanguage.ko => '회) …메시지는 자동으로 재전송됩니다',
+      };
+
+  String get disconnectedBanner => switch (lang) {
+        AppLanguage.zh => '连接已断开',
+        AppLanguage.en => 'Disconnected',
+        AppLanguage.ja => '切断されました',
+        AppLanguage.ko => '연결 종료됨',
+      };
+
+  String get retryConnectBtn => switch ((lang)) {
+        AppLanguage.zh => '重试',
+        AppLanguage.en => 'Retry',
+        AppLanguage.ja => '再試行',
+        AppLanguage.ko => '다시 시도',
+      };
+
+  String get deliveredReceipt => switch (lang) {
+        AppLanguage.zh => '已送达电脑',
+        AppLanguage.en => 'Delivered to computer',
+        AppLanguage.ja => 'PCに配信済み',
+        AppLanguage.ko => 'PC로 전달됨',
+      };
+
+  String get notDeliveredLabel => switch (lang) {
+        AppLanguage.zh => '未送达，点击重发',
+        AppLanguage.en => 'Not delivered, tap to resend',
+        AppLanguage.ja => '未配信、タップで再送',
+        AppLanguage.ko => '미전송, 탭하여 재전송',
+      };
+
   String get permRequestHeader => switch (lang) {
         AppLanguage.zh => 'Agent 请求执行',
         AppLanguage.en => 'Agent requests permission',

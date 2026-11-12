@@ -9,6 +9,8 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<String?> sentModelIds = [];
   final List<String?> sentClientMessageIds = [];
   bool diffUnavailable = false;
+  /// 下一次 session.send 返回失败（路线图 3.3 送达回执测试用）
+  bool failNextSend = false;
   /// ok | missing | notOk | missingReplied | missingSessionId | missingPermissionId |
   /// missingDecision | sessionIdMismatch | permissionIdMismatch | decisionMismatch
   String permissionReplyEchoMode = 'ok';
@@ -143,6 +145,15 @@ class FakeBridgeTransport implements BridgeTransport {
           },
         };
       case 'session.send':
+        if (failNextSend) {
+          failNextSend = false;
+          return {
+            'type': 'response',
+            'requestId': requestId,
+            'ok': false,
+            'error': {'code': 'SEND_FAILED', 'message': 'transport error'},
+          };
+        }
         sentPrompts.add(request['message'] as String);
         sentModelIds.add(request['modelId'] as String?);
         sentClientMessageIds.add(request['clientMessageId'] as String?);
@@ -292,6 +303,11 @@ class FakeBridgeTransport implements BridgeTransport {
           'error': {'code': 'UNKNOWN', 'message': 'Unsupported fake command'},
         };
     }
+  }
+
+  /// 注入任意原始帧（如 transport.disconnected），模拟底层连接事件（路线图 3.2 测试用）
+  void emitRaw(Map<String, dynamic> raw) {
+    _incomingController.add(raw);
   }
 
   void emitServerEvent(Map<String, dynamic> canonicalEvent) {

@@ -18,7 +18,11 @@ class AttachmentMeta {
   });
 }
 
+/// 发送回执（路线图 3.3）：iMessage 心智——发送中/已送达电脑/发送失败可重发
+enum SendReceipt { pending, delivered, failed }
+
 class UserPromptItem extends SessionTimelineItem {
+  SendReceipt receipt;
   String message;
   /// 消息携带的附件元数据（文件名/MIME 可见）。
   List<AttachmentMeta> attachments;
@@ -28,7 +32,11 @@ class UserPromptItem extends SessionTimelineItem {
   /// 服务端（或客户端预生成）消息关联 ID（J0.6b-3b）：历史/事件按此认领本地乐观消息，防止重复。
   String? messageId;
   UserPromptItem(this.message,
-      {this.partId, this.revision = 0, this.messageId, this.attachments = const []});
+      {this.partId,
+      this.revision = 0,
+      this.messageId,
+      this.attachments = const [],
+      this.receipt = SendReceipt.delivered});
 }
 
 /// 发送后、回复到达前的「等待中」占位卡片。

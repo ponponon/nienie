@@ -7,7 +7,7 @@ import '../storage/credential_store.dart';
 import '../transport/bridge_transport.dart';
 import '../utils/device_identity.dart';
 
-enum BridgeConnectionState { disconnected, connecting, connected, error }
+enum BridgeConnectionState { disconnected, connecting, connected, error, reconnecting }
 
 class ProjectWorkspaceGroup {
   final String projectName;
@@ -27,6 +27,12 @@ class MobileBridgeClient extends ChangeNotifier {
   AppLanguage language;
 
   BridgeConnectionState connectionState = BridgeConnectionState.disconnected;
+  /// 当前重连尝试序号（路线图 3.2：「正在重连（第 N 次）」），成功后清零
+  int reconnectAttempt = 0;
+  final Map<String, DateTime> _runningSinceBySession = {};
+
+  /// Agent 运行计时起点（路线图 3.1：「思考中 Ns」）
+  DateTime? runningSinceFor(String sessionId) => _runningSinceBySession[sessionId];
   String? errorMessage;
   String? activeMachineId;
   final Set<String> connectedMachineIds = {};
@@ -1089,7 +1095,8 @@ class MobileBridgeClient extends ChangeNotifier {
     final items = _timelineBySession.putIfAbsent(current.id, () => []);
     // 本地乐观消息：发送前即生成 clientMessageId 并打标，历史/事件到达时按 messageId 认领（J0.6b-3b）
     final clientMessageId = 'msg_${DateTime.now().microsecondsSinceEpoch}_${++_requestCounter}';
-    final optimistic = UserPromptItem(trimmed, messageId: clientMessageId);
+    final optimistic = UserPromptItem(trimmed,
+        messageId: clientMessageId, receipt: SendReceipt.pending);
     items.add(optimistic);
     final pending = PendingResponseItem(promptText: trimmed);
     items.add(pending);
@@ -1112,6 +1119,7 @@ class MobileBridgeClient extends ChangeNotifier {
     if (res['ok'] != true) {
       final err = res['error'] as Map<String, dynamic>?;
       _resolvePending(current.id, pending);
+      optimistic.receipt = SendReceipt.failed; // 路线图 3.3：失败显式可重发
       items.add(
         ErrorCardItem(
           code: err?['code'] as String? ?? 'SEND_FAILED',
@@ -1127,6 +1135,32 @@ class MobileBridgeClient extends ChangeNotifier {
     final authoritativeId = data?['messageId'] as String?;
     if (authoritativeId != null && authoritativeId.isNotEmpty) {
       optimistic.messageId = authoritativeId;
+    }
+    optimistic.receipt = SendReceipt.delivered; // 路线图 3.3：已送达电脑
+    notifyListeners();
+  }
+
+  /// 路线图 3.3：发送失败后显式重发（复用同一条乐观消息，不新建）
+  Future<void> retrySendPrompt(AgentSession session, UserPromptItem item) async {
+    if (item.receipt == SendReceipt.delivered || item.receipt == SendReceipt.pending) return;
+    item.receipt = SendReceipt.pending;
+    notifyListeners();
+    try {
+      final res = await transport.sendRequest({
+        'type': 'session.send',
+        'requestId': _nextRequestId(),
+        'sessionId': session.id,
+        'agentId': session.agentId,
+        'message': item.message,
+        if (item.messageId != null) 'clientMessageId': item.messageId,
+        if (selectedModelId != null) 'modelId': selectedModelId,
+      });
+      if (res['ok'] != true) {
+        throw StateError('send failed');
+      }
+      item.receipt = SendReceipt.delivered;
+    } catch (_) {
+      item.receipt = SendReceipt.failed;
     }
     notifyListeners();
   }
@@ -1176,8 +1210,14 @@ class MobileBridgeClient extends ChangeNotifier {
     if (raw['type'] == 'transport.disconnected') {
       if (connectionState == BridgeConnectionState.connected) {
         final targetMachine = activeMachineId;
+        // 路线图 3.2：断线重连语言——显式进入 reconnecting 并计数，期间消息自动补发
+        connectionState = BridgeConnectionState.reconnecting;
+        reconnectAttempt = 0;
+        notifyListeners();
         Future<void>.delayed(const Duration(milliseconds: 1200), () async {
           for (int attempt = 0; attempt < 4; attempt++) {
+            reconnectAttempt = attempt + 1;
+            notifyListeners();
             try {
               await reconnectWithSavedCredential(targetMachine);
               return;
@@ -1185,6 +1225,8 @@ class MobileBridgeClient extends ChangeNotifier {
               await Future<void>.delayed(const Duration(milliseconds: 1500));
             }
           }
+          connectionState = BridgeConnectionState.disconnected;
+          notifyListeners();
         });
       }
       return;
@@ -1291,6 +1333,11 @@ class MobileBridgeClient extends ChangeNotifier {
       case 'status':
         final status = event.payload['status'] as String? ?? 'idle';
         _sessionStatusBySession[event.sessionId] = status;
+        if (status == 'running') {
+          _runningSinceBySession[event.sessionId] = DateTime.now();
+        } else {
+          _runningSinceBySession.remove(event.sessionId);
+        }
         if (status == 'idle') {
           // 回复结束：收起「等待中」占位，并把思考过程折叠（不占屏幕空间）
           _resolvePending(event.sessionId);

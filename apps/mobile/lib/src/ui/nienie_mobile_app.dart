@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
@@ -99,7 +101,9 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                 ? _buildKelivoConnectedAppBar(context, client)
                 : _buildDisconnectedAppBar(context, client),
             body: SafeArea(
-              child: !isConnected
+              // 重连中保留会话视图（非静默上下文），横幅提示补发；完全断开才回配对页
+              child: !(isConnected ||
+                      client.connectionState == BridgeConnectionState.reconnecting)
                   ? PairingPanel(
                       client: client,
                       wsUrlController: _wsUrlController,
@@ -236,6 +240,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  const SizedBox(width: 6),
+                  _StatusPill(client: client, sessionId: active?.id),
                   const SizedBox(width: 2),
                   const Icon(
                     LucideIcons.chevronDown,
@@ -330,41 +336,30 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   }
 
   Widget _buildConnectionBadge(MobileBridgeClient client) {
-    final state = client.connectionState;
+    return _StatusPill(client: client);
+  }
+
+  /// 路线图 3.2：断线重连横幅（非静默，含补发语义）
+  Widget _buildReconnectBanner(MobileBridgeClient client) {
     final s = client.strings;
-    final label = switch (state) {
-      BridgeConnectionState.connected => s.statusConnected,
-      BridgeConnectionState.connecting => s.statusConnecting,
-      BridgeConnectionState.error => s.statusError,
-      BridgeConnectionState.disconnected => s.statusDisconnected,
-    };
-    final color = switch (state) {
-      BridgeConnectionState.connected => _weTypeGreen,
-      BridgeConnectionState.connecting => const Color(0xFFF59E0B),
-      BridgeConnectionState.error => const Color(0xFFEF4444),
-      BridgeConnectionState.disconnected => const Color(0xFF8E929B),
-    };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      key: const Key('reconnect-banner'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
+          const Icon(LucideIcons.wifiOff, size: 15, color: Color(0xFFD97706)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '${s.reconnectBannerPrefix}${client.reconnectAttempt}${s.reconnectBannerSuffix}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFFB45309), height: 1.4),
             ),
           ),
         ],
@@ -654,6 +649,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
 
     return Column(
       children: [
+        // 路线图 3.2：断线/重连横幅（非静默）
+        if (client.connectionState == BridgeConnectionState.reconnecting ||
+            client.connectionState == BridgeConnectionState.disconnected)
+          _buildReconnectBanner(client),
         // Pure Kelivo Chat Canvas (100% clean white space when no messages yet)
         Expanded(
           child: active == null
@@ -804,4 +803,94 @@ class _Attachment {
   final String name;
   final String path;
   const _Attachment({required this.name, required this.path});
+}
+
+/// 路线图 3.1：顶栏状态胶囊——电脑在线/离线/重连中(第 N 次) + Agent 思考中(计时)/运行工具/等待审批/空闲
+class _StatusPill extends StatefulWidget {
+  const _StatusPill({required this.client, this.sessionId});
+  final MobileBridgeClient client;
+  final String? sessionId;
+
+  @override
+  State<_StatusPill> createState() => _StatusPillState();
+}
+
+class _StatusPillState extends State<_StatusPill> {
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final client = widget.client;
+    final s = client.strings;
+    final state = client.connectionState;
+    final (String label, Color color) = switch (state) {
+      BridgeConnectionState.connected => (s.statusConnected, const Color(0xFF17B378)),
+      BridgeConnectionState.connecting => (s.statusConnecting, const Color(0xFFF59E0B)),
+      BridgeConnectionState.reconnecting =>
+        ('${s.statusReconnecting}（${client.reconnectAttempt}）', const Color(0xFFF59E0B)),
+      BridgeConnectionState.error => (s.statusError, const Color(0xFFEF4444)),
+      BridgeConnectionState.disconnected => (s.statusDisconnected, const Color(0xFF8E929B)),
+    };
+    String activity = '';
+    if (state == BridgeConnectionState.connected && widget.sessionId != null) {
+      final sessionId = widget.sessionId!;
+      final sessionStatus = client.statusFor(sessionId);
+      final hasRunningTool = client
+          .timelineFor(sessionId)
+          .whereType<ToolCallCardItem>()
+          .any((t) => t.status == ToolCallStatus.pending || t.status == ToolCallStatus.running);
+      if (sessionStatus == 'waiting') {
+        activity = s.agentWaitingApproval;
+      } else if (hasRunningTool) {
+        activity = s.agentToolRunning;
+      } else if (sessionStatus == 'running') {
+        final since = client.runningSinceFor(sessionId);
+        final elapsed = since == null ? 0 : DateTime.now().difference(since).inSeconds;
+        activity = '${s.agentThinking} ${elapsed}s';
+      } else {
+        activity = s.agentIdle;
+      }
+    }
+    return Container(
+      key: const Key('status-pill'),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            activity.isEmpty ? label : '$label · $activity',
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
