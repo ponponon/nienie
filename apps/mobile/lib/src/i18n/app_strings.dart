@@ -263,6 +263,13 @@ class NienieStrings {
         AppLanguage.ko => '다음 작업을 영구히 허용합니다',
       };
 
+  String get permConfirmOnceLine => switch (lang) {
+        AppLanguage.zh => '仅本次允许以下操作',
+        AppLanguage.en => 'Allow the following only once',
+        AppLanguage.ja => '以下の操作を今回のみ許可します',
+        AppLanguage.ko => '다음 작업을 한 번만 허용합니다',
+      };
+
   String get permConfirmResources => switch (lang) {
         AppLanguage.zh => '生效资源',
         AppLanguage.en => 'Applies to',

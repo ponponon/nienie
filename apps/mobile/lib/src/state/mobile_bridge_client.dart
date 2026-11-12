@@ -602,6 +602,7 @@ class MobileBridgeClient extends ChangeNotifier {
           detail: p['detail'] as String? ?? '',
           patterns: (p['patterns'] as List<dynamic>? ?? const []).cast<String>(),
           resolvedDecision: p['decision'] as String?,
+          waitingSince: DateTime.tryParse(p['createdAt'] as String? ?? '') ?? DateTime.now(),
         ));
       } else if (kind == 'file_change') {
         nextTimeline.add(FileDiffCardItem(
@@ -1321,12 +1322,14 @@ class MobileBridgeClient extends ChangeNotifier {
               existing.patterns = rawPatterns.map((e) => e.toString()).toList();
             }
           } else {
+            // 计时起点=请求真实产生时间（event.timestamp），历史恢复不重新起算（Round 4）
             items.add(
               PermissionRequestCardItem(
                 permissionId: permissionId,
                 permission: permission,
                 detail: detail,
                 patterns: rawPatterns.map((e) => e.toString()).toList(),
+                waitingSince: DateTime.tryParse(event.timestamp) ?? DateTime.now(),
               ),
             );
           }

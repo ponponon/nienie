@@ -1593,6 +1593,64 @@ void main() {
     expect(classifyPermissionRisk('bash', ['rm -rf /tmp/x']), PermissionRiskLevel.high); // 破坏性 resource 规则优先
     expect(classifyPermissionRisk('frobnicate', []), PermissionRiskLevel.unknown); // 未识别绝不判低
     expect(classifyPermissionRisk('', []), PermissionRiskLevel.unknown);
+    // 词边界与大小写（Round 4 P2）：引号/逗号/反斜杠包裹与大写变体均命中
+    expect(classifyPermissionRisk('bash', ['"rm -rf /tmp"']), PermissionRiskLevel.high);
+    expect(classifyPermissionRisk('bash', ['C:\\tools\\del.exe']), PermissionRiskLevel.high);
+    expect(classifyPermissionRisk('bash', ['foo,rm -rf']), PermissionRiskLevel.high);
+    expect(classifyPermissionRisk('bash', ['DEL something']), PermissionRiskLevel.high);
+    // 词边界反例：model/payload 等包含子串不误判
+    expect(classifyPermissionRisk('bash', ['model/data.json']), PermissionRiskLevel.medium);
+    expect(classifyPermissionRisk('bash', ['skill/killer.md']), PermissionRiskLevel.medium);
+    // detail 契约：描述性标题不参与分级（即使像命令）
+    expect(classifyPermissionRisk('bash', []), PermissionRiskLevel.medium);
+  });
+
+  testWidgets('路线图#2 目标③ Snapshot 恢复按 createdAt 计时 + 聚焦蓝色描边', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+    final oldTs = DateTime.now().subtract(const Duration(minutes: 5)).toIso8601String();
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_perm',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep_snap',
+      'watermark': 1,
+      'capturedAt': '2026-11-10T00:00:00Z',
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 2,
+      'parts': [
+        {'kind': 'permission', 'partId': 'pp1', 'ordinal': 0, 'revision': 1, 'createdAt': oldTs, 'updatedAt': oldTs,
+          'permissionId': 'perm_old', 'permission': 'bash', 'detail': '早已发起', 'patterns': ['*']},
+        {'kind': 'permission', 'partId': 'pp2', 'ordinal': 1, 'revision': 1,
+          'createdAt': DateTime.now().toIso8601String(), 'updatedAt': DateTime.now().toIso8601String(),
+          'permissionId': 'perm_new', 'permission': 'bash', 'detail': '刚发起', 'patterns': ['*']},
+      ],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    // 旧请求（createdAt 5 分钟前）恢复即显示超时提醒；新请求不显示
+    expect(find.byKey(const Key('perm-waiting-perm_old')), findsOneWidget);
+    expect(find.byKey(const Key('perm-waiting-perm_new')), findsNothing);
+
+    // 聚焦描边为独立蓝色 2px
+    client.handleDeepLink(Uri.parse('nienie://session/ses_alpha?permission=perm_new'));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    expect(client.focusedPermissionId, 'perm_new');
+    // 装饰断言：聚焦卡 Container 边框为蓝色（0xFF2563EB）
+    final containers = find.byType(Container).evaluate().map((e) => e.widget as Container);
+    final focusedBorder = containers
+        .map((c) => c.decoration is BoxDecoration ? (c.decoration as BoxDecoration).border : null)
+        .whereType<Border>()
+        .where((b) => b.top.color == const Color(0xFF2563EB) && b.top.width == 2);
+    expect(focusedBorder.isNotEmpty, isTrue);
+    client.dispose();
   });
 
   testWidgets('路线图#2 目标② 审批卡：风险徽章 + 结构化行 + 深链聚焦高亮', (WidgetTester tester) async {
@@ -1604,18 +1662,18 @@ void main() {
       'status': 'waiting',
       'permissionId': 'perm_hi',
       'permission': 'bash',
-      'detail': 'rm -rf ./dist && pnpm build',
+      'detail': '构建并清理项目产物',
       'patterns': ['./packages/*', './apps/mobile/*'],
     }));
     await tester.pumpAndSettle();
-    await tester.drag(find.byType(Scrollable).first, const Offset(0, -1200));
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -2000));
     await tester.pumpAndSettle();
     // 结构化行：操作/请求详情/资源对象均按 payload 原样展示（默认语言 en）
-    expect(find.text('rm -rf ./dist && pnpm build'), findsWidgets);
+    expect(find.text('构建并清理项目产物'), findsWidgets);
     expect(find.text('./packages/*\n./apps/mobile/*'), findsOneWidget);
-    // 风险徽章：bash=中风险（resources 无破坏性 token，不误判高风险）
+    // 风险契约：detail 是描述性标题（props.title 映射），不参与风险分级——
+    // bash + 无破坏性 resources = medium，即使 detail 文本像命令
     expect(find.text('Medium risk'), findsOneWidget);
-    // 操作行展示 action 原文
     expect(find.text('bash'), findsWidgets);
 
     // 深链聚焦：高亮目标卡（蓝底描边容器存在）
@@ -1670,17 +1728,78 @@ void main() {
     expect(find.byKey(const Key('btn-perm-allow-once-perm_alw')), findsNothing);
     expect(find.byKey(const Key('perm-result-perm_alw')), findsOneWidget);
 
-    // 超时提醒：等待≥2 分钟显示（不写"已过期"）
+    // 超时提醒：计时起点=request 真实产生时间（event.timestamp），历史恢复不重新起算
+    final oldTs = DateTime.now().subtract(const Duration(minutes: 5)).toIso8601String();
     emit('status', {'status': 'waiting', 'permissionId': 'perm_wait', 'permission': 'bash', 'detail': 'x'});
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'zold', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': ++seq, 'timestamp': oldTs, 'type': 'status',
+      'payload': {'status': 'waiting', 'permissionId': 'perm_old', 'permission': 'bash', 'detail': '早已发起'},
+    });
     await tester.pumpAndSettle();
-    final waitingCard = client.timelineFor('ses_alpha').whereType<PermissionRequestCardItem>().singleWhere((c) => c.permissionId == 'perm_wait');
-    waitingCard.waitingSince = DateTime.now().subtract(const Duration(minutes: 5));
-    await tester.pump(const Duration(seconds: 31)); // 周期刷新触发重建
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -3000));
     await tester.pumpAndSettle();
-    await tester.drag(find.byType(Scrollable).first, const Offset(0, -2000));
+    // 旧请求（5 分钟前）立即显示提醒
+    expect(find.byKey(const Key('perm-waiting-perm_old')), findsOneWidget);
+    // 新请求不显示
+    expect(find.byKey(const Key('perm-waiting-perm_wait')), findsNothing);
+    client.dispose();
+  });
+
+  testWidgets('路线图#2 目标③ 二次确认矩阵与文案分支', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+    var seq = 0;
+    void emit(String type, Map<String, dynamic> payload) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'm${++seq}', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': seq, 'timestamp': '2026-11-12T10:00:00Z', 'type': type, 'payload': payload,
+      });
+    }
+
+    // 高风险 reject：直达不弹窗（拒绝是安全操作）
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_hr', 'permission': 'bash', 'detail': 'x', 'patterns': ['rm -rf /']});
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('perm-waiting-perm_wait')), findsOneWidget);
-    expect((find.byKey(const Key('perm-waiting-perm_wait')).evaluate().single.widget as Text).data, contains('computer'));
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-perm-reject-perm_hr')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('btn-perm-confirm-ok')), findsNothing);
+    expect(transport.permissionReplies.single['decision'], 'reject');
+
+    // 高风险 allow_once：确认框文案为「仅本次」（不是永久允许）
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_ha', 'permission': 'bash', 'detail': 'x', 'patterns': ['rm -rf /']});
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-perm-allow-once-perm_ha')));
+    await tester.pumpAndSettle();
+    expect(find.text('Allow the following only once'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('btn-perm-confirm-cancel')));
+    await tester.pumpAndSettle();
+    expect(transport.permissionReplies.length, 1); // 取消不提交
+
+    // allow_always：确认框含永久影响说明
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_aa', 'permission': 'bash', 'detail': 'x', 'patterns': ['*']});
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-perm-allow-always-perm_aa')));
+    await tester.pumpAndSettle();
+    expect(find.text('This will permanently allow'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('btn-perm-confirm-ok')));
+    await tester.pumpAndSettle();
+    expect(transport.permissionReplies.length, 2);
+
+    // 未分类（unknown）allow_once：同样需要确认（不给未知操作普通误触保护级别）
+    emit('status', {'status': 'waiting', 'permissionId': 'perm_un', 'permission': 'frobnicate', 'detail': 'x'});
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-perm-allow-once-perm_un')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('btn-perm-confirm-ok')), findsOneWidget);
     client.dispose();
   });
 

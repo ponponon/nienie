@@ -171,6 +171,25 @@ describe('PushNotificationRouter（路线图 1.2-1.5）', () => {
     expect(sent).toHaveLength(1);
   });
 
+  it('待审批通知降级：有 action 无 detail 时不编造命令内容', async () => {
+    const sent: PushNotificationMessage[] = [];
+    const router = new PushNotificationRouter({
+      webhookSender: async (m) => {
+        sent.push(m);
+      },
+    });
+    await router.notifyEvent(
+      event({ type: 'status', payload: { status: 'waiting', permissionId: 'p1', permission: 'bash' } }),
+      { now, sessionTitle: '修 GC' },
+    );
+    await router.notifyEvent(
+      event({ type: 'status', payload: { status: 'waiting', permissionId: 'p2', detail: '执行构建' } }),
+      { now, sessionTitle: '修 GC' },
+    );
+    expect(sent[0]!.body).toBe('修 GC：Agent 正在等待审批'); // 无 detail 降级，不带 action 碎片
+    expect(sent[1]!.body).toBe('修 GC：执行构建'); // 无 action 时不拼接空「请求 —」
+  });
+
   it('isWithinQuietHours 边界：start 含 end 不含', () => {
     const quiet = { start: '22:00', end: '08:00' };
     expect(isWithinQuietHours(quiet, new Date('2026-11-11T22:00:00'))).toBe(true);

@@ -41,7 +41,11 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
 
   /// 目标③：批准/拒绝入口——allow_always 与高风险操作先二次确认（说明永久影响），其余直达
   Future<void> _handlePermissionDecision(PermissionRequestCardItem item, String decision) async {
-    final needsConfirm = decision == 'allow_always' || item.risk == PermissionRiskLevel.high;
+    // 交互矩阵（Round 4）：reject 永远直达（拒绝是安全操作）；
+    // allow_always 必须确认；allow_once 仅高风险/未分类需要确认；低/中风险直达防审批疲劳
+    final needsConfirm = decision == 'allow_always' ||
+        (decision == 'allow_once' &&
+            (item.risk == PermissionRiskLevel.high || item.risk == PermissionRiskLevel.unknown));
     if (needsConfirm) {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -58,7 +62,12 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(widget.client.strings.permConfirmAlwaysLine, style: const TextStyle(fontSize: 12.5)),
+                Text(
+                  isAlways
+                      ? widget.client.strings.permConfirmAlwaysLine
+                      : widget.client.strings.permConfirmOnceLine,
+                  style: const TextStyle(fontSize: 12.5),
+                ),
                 const SizedBox(height: 4),
                 Text(item.permission,
                     style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
@@ -545,7 +554,8 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
               decoration: BoxDecoration(
                 color: focused ? const Color(0xFFEFF6FF) : const Color(0xFFFFFDF7),
                 border: Border.all(
-                  color: focused ? riskColor : riskColor.withValues(alpha: 0.32),
+                  // 聚焦用独立蓝色描边（与风险色解耦）
+                  color: focused ? const Color(0xFF2563EB) : riskColor.withValues(alpha: 0.32),
                   width: focused ? 2 : 1,
                 ),
                 borderRadius: BorderRadius.circular(14),

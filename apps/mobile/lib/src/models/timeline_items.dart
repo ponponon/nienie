@@ -117,7 +117,11 @@ PermissionRiskLevel classifyPermissionRisk(String action, List<String> resources
   const destructiveActions = {'delete', 'remove', 'move', 'write', 'edit', 'patch', 'kill', 'exec'};
   const commandActions = {'bash', 'shell', 'run', 'terminal', 'process'};
   const readOnlyActions = {'read', 'grep', 'glob', 'list', 'search', 'webfetch', 'websearch', 'fetch'};
-  final destructiveResource = RegExp(r'(^|[\s/;|&])(rm|del|rmdir|unlink|mkfs|shutdown|reboot|kill)([\s/;|&]|$)');
+  // 词边界=非字母数字（覆盖引号/逗号/反斜杠等包裹），大小写归一（DEL/Rm 均命中）
+  final destructiveResource = RegExp(
+    r'(^|[^A-Za-z0-9])(delete|deltree|unlink|mkfs|shutdown|reboot|kill|rm|rmdir|del)([^A-Za-z0-9]|$)',
+    caseSensitive: false,
+  );
   final a = action.trim().toLowerCase();
   // 高风险优先级最高：明确命中破坏性 action 或破坏性 resource 规则
   if (destructiveActions.contains(a) || resources.any((r) => destructiveResource.hasMatch(r))) {

@@ -645,3 +645,12 @@
 - **超时提醒**：未决卡等待≥2 分钟显示橙色「已等待较长时间，请在电脑端确认当前状态」——**只报等待时长、绝不写"已过期"**（无服务端过期依据）；30s 周期刷新重建。
 - i18n 补 8 组（确认标题/永久允许/生效资源/后续影响/高风险警示/确认/取消/等待提醒）4 语言。
 - 测试：目标③整场景（低风险直达/allow_always 确认与取消/高风险确认/44dp 尺寸断言/已决收起/超时提醒文案）+ 大流程测试适配高风险二次确认；mobile 45、全仓 245 vitest 全绿。
+
+### 2026-11-12 路线图#2 Round 4（目标②③边界收口）
+
+- **二次确认交互矩阵**（P1）：reject 永远直达（拒绝是安全操作，不再被高风险误伤弹窗）；allow_always 必确认（弹窗含「将永久允许」+影响后续说明）；allow_once 仅高风险/未分类确认（弹窗文案独立为「仅本次允许以下操作」，不再复用永久允许文案）；低/中风险 allow_once 直达防审批疲劳。
+- **detail 命令歧义契约**（P1）：detail 是 props.title 映射的描述性标题，**不参与风险分级**（不把自然语言当命令解析）；测试样例改为描述性文本并断言 bash=medium；未来若 Agent 提供结构化 command 字段再纳入规则。
+- **风险词边界**（P2）：token 正则改「非字母数字边界 + caseSensitive:false」——`"rm -rf"`、`C:\tools\del.exe`、`foo,rm -rf`、`DEL something` 全命中，`model/`、`skill/` 不误判；token 集补 delete/deltree（最长匹配优先）。
+- **超时计时起点**（P2）：waitingSince 改用请求真实产生时间——实时事件 `event.timestamp`、Snapshot `createdAt`（无效才 fallback now），历史恢复不重新起算、重复 waiting upsert 保留原起点。测试改为真实旧时间戳事件/快照断言（不再直接篡改字段）。
+- P3：聚焦描边改独立蓝色 2px（与风险色解耦）+ decoration 断言；通知降级测试（有 action 无 detail 不编造命令、无 action 不拼空前缀）。
+- 测试：mobile 47（+2）、bridge-core 77（+1）；全仓 246 vitest 全绿。
