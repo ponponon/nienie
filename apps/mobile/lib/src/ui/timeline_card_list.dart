@@ -39,6 +39,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
   @override
   void initState() {
     super.initState();
+    // Round3 P2-4：先建立当前 Session 的水位基线（ValueKey 重建走 initState）——
+    // 否则历史内容被误判为新回复
+    _lastContentVersion = widget.client.timelineVersionFor(widget.session.id);
+    _lastItemCount = widget.client.timelineFor(widget.session.id).length;
     widget.client.addListener(_onClientChanged);
     _scrollController.addListener(_onScroll);
     // 5.2：聊天语义——初始停在底部（最新消息）
@@ -258,7 +262,11 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
       _lastContentVersion = version;
       if (_atBottom) {
         // 在底部：静默跟随新内容（流式增量持续跟随）
-        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottomImmediate());
+        // Round3 P2-5：回调执行时重查——注册后用户已翻历史则放弃跟随（不强制跳底）
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_atBottom) return;
+          _scrollToBottomImmediate();
+        });
       } else {
         // 5.2：翻历史时新内容到达 → 浮出按钮，不强制跳底（持续可见）
         setState(() => _showJumpToBottom = true);

@@ -2944,8 +2944,13 @@ void main() {
         },
       });
       await tester.pump(const Duration(milliseconds: 50));
-      // 在底部：同 partId 多段增量持续跟随——每段到来时该段最新内容保持可见
+      // 在底部：同 partId 多段增量持续跟随——真实滚动位置贴底 + 最新内容可见
       await tester.pumpAndSettle();
+      final pos = tester
+          .widget<ListView>(find.byKey(const Key('session-timeline-list')))
+          .controller!
+          .position;
+      expect(pos.pixels, greaterThanOrEqualTo(pos.maxScrollExtent - 60));
       expect(
         find.textContaining('增量行 $i', findRichText: true).hitTestable(),
         findsWidgets,
@@ -3024,6 +3029,93 @@ void main() {
     final lv = tester.widget<ListView>(find.byKey(const Key('session-timeline-list')));
     final pos = lv.controller!.position;
     expect(pos.pixels, greaterThanOrEqualTo(pos.maxScrollExtent - 60));
+    client.dispose();
+  });
+
+  test('Round3 File→Client→QuickCommandsBar 全链路恢复 + 加载竞态不覆盖新修改', () async {
+    final dir = Directory.systemTemp.createTempSync('nie_qc2');
+    final file = File('${dir.path}/state.json');
+    // 首次运行：写入自定义
+    final store1 = FileCredentialStore(file);
+    await store1.saveQuickCommands('codex', ['旧指令']);
+
+    // 模拟重启：新 store + 新 client
+    final store2 = FileCredentialStore(file);
+    final client = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: store2,
+    );
+    // 生产路径自动加载
+    await client.ensureQuickCommandsLoaded('codex');
+    expect(client.quickCommandsFor('codex'), ['旧指令']);
+    // 加载完成后再 add → 基于最新数据修改
+    await client.addQuickCommand('codex', '新指令');
+    expect(client.quickCommandsFor('codex'), ['旧指令', '新指令']);
+
+    // 竞态：加载挂起期间 add，完成后不被旧数据覆盖
+    final gate = Completer<void>();
+    final slowStore = _GatedCredentialStore(store2, gate);
+    final client2 = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: slowStore,
+    );
+    final loadFuture = client2.ensureQuickCommandsLoaded('codex'); // 挂起
+    final addFuture = client2.addQuickCommand('codex', '加载中的新指令'); // 等待加载
+    gate.complete(); // 加载完成（返回 ['旧指令','新指令']）
+    await loadFuture;
+    await addFuture;
+    // 新修改未被旧数据覆盖
+    expect(client2.quickCommandsFor('codex'),
+        containsAll(['旧指令', '新指令', '加载中的新指令']));
+    client.dispose();
+    client2.dispose();
+    dir.deleteSync(recursive: true);
+  });
+
+  testWidgets('Round3 普通状态通知/running 事件不误报「有新回复」（水位精确）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 构造历史内容（版本 > 0）后翻到历史位置
+    for (var i = 1; i <= 8; i++) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'h$i', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': i, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'text_delta',
+        'payload': {
+          'delta': '历史内容 $i\n\n${List.filled(12, '行').join('\n\n')}',
+          'partId': 'p$i', 'partRevision': 1,
+        },
+      });
+    }
+    await tester.pumpAndSettle();
+    await tester.drag(find.byKey(const Key('session-timeline-list')), const Offset(0, 3000));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // 普通 running 状态事件（无可见变化）→ 不浮出
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'nr1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 9, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'running'},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
+
+    // 普通 client 通知（errorMessage 等非内容变化）→ 不浮出
+    client.errorMessage = '普通通知';
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
+
+    // 真正的新内容 → 浮出
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'nr2', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 10, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {'delta': '真正的新内容', 'partId': 'p_new', 'partRevision': 1},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsOneWidget);
     client.dispose();
   });
 
@@ -3160,3 +3252,34 @@ void main() {
 
 }
 
+/// 测试辅助：可控延迟的 CredentialStore（竞态测试用）
+class _GatedCredentialStore implements DeviceCredentialStore {
+  final DeviceCredentialStore inner;
+  final Completer<void> gate;
+  _GatedCredentialStore(this.inner, this.gate);
+
+  @override
+  Future<List<String>?> loadQuickCommands(String scope) async {
+    await gate.future;
+    return inner.loadQuickCommands(scope);
+  }
+
+  @override
+  Future<void> saveQuickCommands(String scope, List<String> commands) =>
+      inner.saveQuickCommands(scope, commands);
+
+  @override
+  Future<void> save(SavedDeviceCredential credential) => inner.save(credential);
+  @override
+  Future<SavedDeviceCredential?> load([String? machineId]) => inner.load(machineId);
+  @override
+  Future<List<SavedDeviceCredential>> listMachines() => inner.listMachines();
+  @override
+  Future<void> removeMachine(String machineId) => inner.removeMachine(machineId);
+  @override
+  Future<void> saveLanguage(AppLanguage language) => inner.saveLanguage(language);
+  @override
+  Future<AppLanguage?> loadLanguage() => inner.loadLanguage();
+  @override
+  Future<void> clear() => inner.clear();
+}

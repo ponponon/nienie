@@ -91,17 +91,23 @@ class MobileBridgeClient extends ChangeNotifier {
 
   // ===== 5.1 快捷指令（按 Agent 定制，scope=agentId）=====
   final Map<String, List<String>> _quickCommandsByAgent = {};
-  final Set<String> _quickCommandsLoaded = {};
+  final Map<String, Future<void>> _quickCommandLoads = {};
 
-  /// P1：生产路径自动加载（感知 agentId 变化的组件调用）；已加载不重复、异步结果按 scope 隔离无竞态
-  Future<void> ensureQuickCommandsLoaded(String agentId) async {
-    if (agentId.isEmpty || _quickCommandsLoaded.contains(agentId)) return;
-    _quickCommandsLoaded.add(agentId);
-    final value = await credentialStore.loadQuickCommands(agentId);
-    if (value != null) {
-      _quickCommandsByAgent[agentId] = List<String>.of(value);
-      notifyListeners();
-    }
+  /// P1/Round3：同 Agent 加载共享同一 Future——add/remove 等待加载完成再修改（旧数据不覆盖新修改）；
+  /// 失败清理 in-flight 允许重试，异常不外泄（默认指令降级）
+  Future<void> ensureQuickCommandsLoaded(String agentId) {
+    if (agentId.isEmpty) return Future<void>.value();
+    return _quickCommandLoads.putIfAbsent(agentId, () async {
+      try {
+        final value = await credentialStore.loadQuickCommands(agentId);
+        if (value != null) {
+          _quickCommandsByAgent[agentId] = List<String>.of(value);
+          notifyListeners();
+        }
+      } catch (_) {
+        _quickCommandLoads.remove(agentId); // 失败：清理状态允许重试，保留默认降级
+      }
+    });
   }
 
   /// 5.1：该 Agent 的自定义快捷指令；null=无自定义（UI 显示内置默认）
@@ -112,13 +118,14 @@ class MobileBridgeClient extends ChangeNotifier {
 
   /// 显式（重新）加载自定义（测试/设置刷新用）
   Future<void> loadQuickCommandsFor(String agentId) async {
-    _quickCommandsLoaded.remove(agentId);
+    _quickCommandLoads.remove(agentId);
     await ensureQuickCommandsLoaded(agentId);
   }
 
   Future<void> addQuickCommand(String agentId, String command) async {
     final trimmed = command.trim();
     if (trimmed.isEmpty) return;
+    await ensureQuickCommandsLoaded(agentId); // Round3：等加载完成再改，防旧数据覆盖
     final current = _quickCommandsByAgent[agentId] ??
         List<String>.of(strings.defaultQuickCommands);
     if (current.contains(trimmed)) return;
@@ -129,6 +136,7 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   Future<void> removeQuickCommand(String agentId, String command) async {
+    await ensureQuickCommandsLoaded(agentId); // Round3：等加载完成再改，防旧数据覆盖
     final current = _quickCommandsByAgent[agentId] ??
         List<String>.of(strings.defaultQuickCommands);
     current.remove(command);
@@ -1416,15 +1424,14 @@ class MobileBridgeClient extends ChangeNotifier {
   /// 应用一个连续事件，并排空乱序缓冲里可连续应用的后续事件。
   void _applyInOrder(String epochKey, CanonicalAgentEvent first) {
     var seq = first.sequence;
-    _applyCanonicalEvent(first);
-    _bumpTimeline(first.sessionId); // 5.2：内容水位（含同 partId 增量）
+    // Round3 P2-3：内容水位只在实际可见变化时递增（重复 revision/空增量/普通 running 不触发）
+    if (_applyCanonicalEvent(first)) _bumpTimeline(first.sessionId);
     _lastSequenceBySession[epochKey] = seq;
     final pending = _pendingEventsByEpoch[epochKey];
     if (pending == null) return;
     while (pending.containsKey(seq + 1)) {
       final next = pending.remove(seq + 1)!;
-      _applyCanonicalEvent(next);
-      _bumpTimeline(next.sessionId);
+      if (_applyCanonicalEvent(next)) _bumpTimeline(next.sessionId);
       seq = next.sequence;
       _lastSequenceBySession[epochKey] = seq;
     }
@@ -1432,7 +1439,9 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   /// 将事件写入时间线（状态归约）；事件必须已按 sequence 有序调用。
-  void _applyCanonicalEvent(CanonicalAgentEvent event) {
+  /// Round3 P2-3：返回是否产生**实际可见变化**（内容水位只在可见变化时递增）。
+  bool _applyCanonicalEvent(CanonicalAgentEvent event) {
+    var changed = false;
     final items = _timelineBySession.putIfAbsent(event.sessionId, () => []);
     // 4.3：时间戳取事件真实时间（历史恢复不显示为「刚刚」）
     final eventTime = DateTime.tryParse(event.timestamp) ?? DateTime.now();
@@ -1444,7 +1453,7 @@ class MobileBridgeClient extends ChangeNotifier {
     final revisions = _partRevisionBySession.putIfAbsent(event.sessionId, () => {});
     if (partId != null && partRevision != null) {
       final applied = revisions[partId] ?? 0;
-      if (partRevision <= applied) return;
+      if (partRevision <= applied) return false; // 重复 revision：无可见变化
     }
     void markApplied() {
       if (partId != null && partRevision != null) {
@@ -1460,6 +1469,7 @@ class MobileBridgeClient extends ChangeNotifier {
           // 计时起点=事件真实时间；重复 running 事件（历史恢复）不重置
           _runningSinceBySession[event.sessionId] ??=
               DateTime.tryParse(event.timestamp) ?? DateTime.now();
+          // Round3：普通 running 状态更新不产生时间线可见变化（不递增内容水位）
         } else {
           _runningSinceBySession.remove(event.sessionId);
         }
@@ -1471,6 +1481,7 @@ class MobileBridgeClient extends ChangeNotifier {
               item.collapsed = true;
             }
           }
+          changed = true; // 可见变化（占位消失/思考折叠）
         }
         final permissionId = event.payload['permissionId'] as String?;
         if (status == 'waiting' && permissionId != null) {
@@ -1492,6 +1503,7 @@ class MobileBridgeClient extends ChangeNotifier {
               existing.permission = permission;
               existing.detail = detail;
               existing.patterns = rawPatterns.map((e) => e.toString()).toList();
+              changed = true;
             }
           } else {
             // 计时起点=请求真实产生时间（event.timestamp），历史恢复不重新起算（Round 4）
@@ -1504,6 +1516,7 @@ class MobileBridgeClient extends ChangeNotifier {
                 waitingSince: DateTime.tryParse(event.timestamp) ?? DateTime.now(),
               ),
             );
+            changed = true;
           }
         } else if (status == 'resolved' && permissionId != null) {
           // 目标①（fail-closed）：permission.replied 归位——只接受明确决策值；
@@ -1520,6 +1533,7 @@ class MobileBridgeClient extends ChangeNotifier {
               _applyResolution(item, decision);
               item.replyPending = false;
               item.resolutionUncertain = false;
+              changed = true;
             }
           }
         }
@@ -1554,6 +1568,7 @@ class MobileBridgeClient extends ChangeNotifier {
                 target.revision = partRevision;
               }
               if (attachments.isNotEmpty) target.attachments = attachments; // 已有消息的更新分支同样保存附件
+              changed = true;
             } else {
               // 首次认领（J0.6b-3b）：同 messageId 的本地乐观消息只绑定归属、以权威文本对账，不重复追加
               UserPromptItem? claimed;
@@ -1577,11 +1592,13 @@ class MobileBridgeClient extends ChangeNotifier {
                     messageId: messageId,
                     attachments: attachments,
                     createdAt: eventTime));
+                changed = true;
               }
             }
           } else {
             items.add(UserPromptItem(delta,
                 messageId: messageId, attachments: attachments, createdAt: eventTime));
+            changed = true;
           }
           markApplied();
           break;
@@ -1606,6 +1623,7 @@ class MobileBridgeClient extends ChangeNotifier {
             if (partRevision != null && partRevision > target.revision) {
               target.revision = partRevision;
             }
+            changed = true;
           } else {
             items.add(StreamingTextItem(
               text: delta,
@@ -1614,6 +1632,7 @@ class MobileBridgeClient extends ChangeNotifier {
               revision: partRevision ?? 0,
               createdAt: eventTime,
             ));
+            changed = true;
           }
         } else if (items.isNotEmpty &&
             items.last is StreamingTextItem &&
@@ -1623,8 +1642,10 @@ class MobileBridgeClient extends ChangeNotifier {
           } else {
             (items.last as StreamingTextItem).text += delta;
           }
+          changed = true;
         } else {
           items.add(StreamingTextItem(text: delta, isThinking: false, createdAt: eventTime));
+          changed = true;
         }
         markApplied();
         break;
@@ -1653,6 +1674,7 @@ class MobileBridgeClient extends ChangeNotifier {
             if (partRevision != null && partRevision > target.revision) {
               target.revision = partRevision;
             }
+            changed = true;
           } else {
             items.add(StreamingTextItem(
               text: delta,
@@ -1661,13 +1683,16 @@ class MobileBridgeClient extends ChangeNotifier {
               revision: partRevision ?? 0,
               createdAt: eventTime,
             ));
+            changed = true;
           }
         } else if (items.isNotEmpty &&
             items.last is StreamingTextItem &&
             (items.last as StreamingTextItem).isThinking) {
           (items.last as StreamingTextItem).text += delta;
+          changed = true;
         } else {
           items.add(StreamingTextItem(text: delta, isThinking: true, createdAt: eventTime));
+          changed = true;
         }
         markApplied();
         break;
@@ -1706,6 +1731,7 @@ class MobileBridgeClient extends ChangeNotifier {
           if (partRevision != null && partRevision > card.revision) {
             card.revision = partRevision;
           }
+          changed = true;
         } else {
           items.add(
             ToolCallCardItem(
@@ -1719,6 +1745,7 @@ class MobileBridgeClient extends ChangeNotifier {
               startedAt: event.payload['timingKnown'] == false ? null : eventTime,
             ),
           );
+          changed = true;
         }
         markApplied();
         break;
@@ -1756,6 +1783,7 @@ class MobileBridgeClient extends ChangeNotifier {
           if (partRevision != null && partRevision > existing.revision) {
             existing.revision = partRevision;
           }
+          changed = true;
         } else {
           items.add(
             ToolCallCardItem(
@@ -1772,6 +1800,7 @@ class MobileBridgeClient extends ChangeNotifier {
               exitCode: exitCode,
             ),
           );
+          changed = true;
         }
         markApplied();
         break;
@@ -1788,12 +1817,14 @@ class MobileBridgeClient extends ChangeNotifier {
             retryable: event.payload['retryable'] as bool? ?? false,
           ),
         );
+        changed = true;
         break;
 
       case 'usage':
         final inputTokens = (event.payload['inputTokens'] as num?)?.toInt() ?? 0;
         final outputTokens = (event.payload['outputTokens'] as num?)?.toInt() ?? 0;
         final costUsd = (event.payload['costUsd'] as num?)?.toDouble() ?? 0.0;
+        changed = true;
         items.add(
           UsageSummaryItem(
             inputTokens: inputTokens,
@@ -1803,6 +1834,7 @@ class MobileBridgeClient extends ChangeNotifier {
         );
         break;
     }
+    return changed;
   }
 
   String _nextRequestId() => 'mreq_${++_requestCounter}';
