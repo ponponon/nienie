@@ -28,11 +28,20 @@ class SessionTimelineList extends StatefulWidget {
 }
 
 class _SessionTimelineListState extends State<SessionTimelineList> {
+  // ===== 5.2 回到底部：翻历史时新回复浮出，不强制跳底 =====
+  final ScrollController _scrollController = ScrollController();
+  bool _atBottom = true;
+  bool _showJumpToBottom = false;
+  int _lastItemCount = 0;
   Timer? _waitingRefreshTimer;
 
   @override
   void initState() {
     super.initState();
+    widget.client.addListener(_onClientChanged);
+    _scrollController.addListener(_onScroll);
+    // 5.2：聊天语义——初始停在底部（最新消息）
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottomImmediate());
     // 超时提醒刷新（只提示等待时长，不冒充服务端过期）
     _waitingRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted) setState(() {});
@@ -41,6 +50,8 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
 
   @override
   void dispose() {
+    widget.client.removeListener(_onClientChanged);
+    _scrollController.dispose();
     _waitingRefreshTimer?.cancel();
     super.dispose();
   }
@@ -220,6 +231,48 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
     );
   }
 
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final atBottom = _scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 60;
+    if (atBottom != _atBottom) {
+      setState(() {
+        _atBottom = atBottom;
+        if (atBottom) _showJumpToBottom = false; // 用户自己滚回底部 → 收起
+      });
+    }
+  }
+
+  void _scrollToBottomImmediate() {
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    }
+  }
+
+  void _onClientChanged() {
+    if (!mounted) return;
+    final count = widget.client.timelineFor(widget.session.id).length;
+    if (count > _lastItemCount) {
+      if (_atBottom) {
+        // 在底部：静默跟随新内容
+        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottomImmediate());
+      } else {
+        // 5.2：翻历史时新内容到达 → 浮出按钮，不强制跳底
+        setState(() => _showJumpToBottom = true);
+      }
+    }
+    _lastItemCount = count;
+  }
+
+  void _jumpToBottom() {
+    _scrollController.animateTo(
+      _scrollController.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+    setState(() => _showJumpToBottom = false);
+  }
+
   static const Color _weTypeGreen = Color(0xFF17B378);
   static const Color _textPrimary = Color(0xFF141416);
   static const Color _textSecondary = Color(0xFF686C75);
@@ -228,7 +281,14 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
   @override
   Widget build(BuildContext context) {
     final items = widget.client.timelineFor(widget.session.id);
-    return ListView.separated(
+    if (items.length != _lastItemCount) {
+      _lastItemCount = items.length;
+    }
+    return Stack(
+      children: [
+    ListView.separated(
+      key: const Key('session-timeline-list'),
+      controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       itemCount: items.length,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -1118,6 +1178,42 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             ),
         };
       },
+    ),
+        // 5.2：翻历史时新回复浮出「↓ 有新回复」，不强制跳底
+        Positioned(
+          right: 16,
+          bottom: 12,
+          child: Offstage(
+            offstage: !_showJumpToBottom,
+            child: AnimatedSlide(
+            duration: const Duration(milliseconds: 180),
+            offset: _showJumpToBottom ? Offset.zero : const Offset(0, 1.2),
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 180),
+              opacity: _showJumpToBottom ? 1 : 0,
+              child: IgnorePointer(
+                ignoring: !_showJumpToBottom,
+                child: FilledButton.tonalIcon(
+                  key: const Key('btn-jump-to-latest'),
+                  onPressed: _jumpToBottom,
+                  icon: const Icon(LucideIcons.arrowDown, size: 14),
+                  label: Text(
+                    widget.client.strings.newRepliesBelow,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

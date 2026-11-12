@@ -271,7 +271,10 @@ void main() {
       // 9. Tap toolbar buttons to load session file diffs and capture desktop screen
       await tester.tap(find.byKey(const Key('btn-load-diffs')));
       await tester.pumpAndSettle();
-      await tester.drag(find.byType(ListView).last, const Offset(0, -300));
+      await tester.drag(
+        find.byKey(const Key('session-timeline-list')),
+        const Offset(0, -300),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('src/index.ts'), findsOneWidget);
@@ -296,7 +299,10 @@ void main() {
       // 截屏按钮已从 composer 移除（冗余），直接调用 client
       await client.captureScreen('main');
       await tester.pumpAndSettle();
-      await tester.drag(find.byType(ListView).last, const Offset(0, -300));
+      await tester.drag(
+        find.byKey(const Key('session-timeline-list')),
+        const Offset(0, -300),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Screen Capture (main)'), findsOneWidget);
@@ -2758,6 +2764,106 @@ void main() {
     expect(find.byKey(const Key('menu-copy-text')), findsOneWidget);
     expect(find.byKey(const Key('menu-quote-reply')), findsOneWidget);
     expect(find.byKey(const Key('menu-resend-from-here')), findsNothing);
+  });
+
+  testWidgets('5.1 快捷指令栏：默认胶囊/点击填充保留草稿/长按删除/添加自定义', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+
+    // 默认四条（EN）
+    expect(find.byKey(const Key('quick-commands-bar')), findsOneWidget);
+    expect(find.byKey(const Key('quick-command-Continue')), findsOneWidget);
+    expect(find.byKey(const Key('quick-command-Run tests')), findsOneWidget);
+
+    // 已有草稿 → 点击追加（保留草稿）
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '先看这个');
+    await tester.tap(find.byKey(const Key('quick-command-Continue')));
+    await tester.pumpAndSettle();
+    final field = tester.widget<TextField>(find.byKey(const Key('input-session-prompt')));
+    expect(field.controller!.text, '先看这个 Continue');
+
+    // 添加自定义
+    await tester.tap(find.byKey(const Key('btn-add-quick-command')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('input-quick-command')), '修这个 bug');
+    await tester.tap(find.byKey(const Key('btn-quick-command-confirm')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('quick-command-修这个 bug')), findsOneWidget);
+
+    // 长按删除（确认后消失）
+    await tester.longPress(find.byKey(const Key('quick-command-Run tests')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('quick-command-remove-ok')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('quick-command-Run tests')), findsNothing);
+    client.dispose();
+  });
+
+  test('5.1 快捷指令按 Agent 隔离 + 持久化', () async {
+    final store = InMemoryCredentialStore();
+    final client = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: store,
+    );
+    await client.addQuickCommand('codex', 'codex 专属');
+    await client.addQuickCommand('opencode', 'opencode 专属');
+    expect(client.quickCommandsFor('codex'), contains('codex 专属'));
+    expect(client.quickCommandsFor('codex'), isNot(contains('opencode 专属')));
+
+    // 持久化：新 client 从 store 恢复
+    final client2 = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: store,
+    );
+    await client2.loadQuickCommandsFor('codex');
+    expect(client2.quickCommandsFor('codex'), contains('codex 专属'));
+    // 无自定义的 scope 保持 null=内置默认
+    expect(client2.quickCommandsFor('claude-code'), isNull);
+    client.dispose();
+  });
+
+  testWidgets('5.2 翻历史时新回复浮出「有新回复」，点击跳底；在底部不浮出', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    // 制造足够内容可滚动 + 向上翻历史
+    for (var i = 0; i < 10; i++) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'fill$i', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': i + 1, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'text_delta',
+        'payload': {
+          'delta': '第 $i 段内容\n${List.filled(12, '填充行').join('\n')}',
+          'partId': 'p$i', 'partRevision': 1,
+        },
+      });
+    }
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.drag(
+      find.byKey(const Key('session-timeline-list')),
+      const Offset(0, 3000),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing); // 无新内容不浮出
+
+    // 翻历史中来新回复 → 浮出（不强制跳底：旧内容仍可见）
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'late', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 11, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {'delta': '迟到的新回复', 'partId': 'p_late', 'partRevision': 1},
+    });
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsOneWidget);
+
+    // 点击 → 跳底 + 隐藏
+    await tester.tap(find.byKey(const Key('btn-jump-to-latest')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
+    expect(find.textContaining('迟到的新回复'), findsOneWidget);
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {

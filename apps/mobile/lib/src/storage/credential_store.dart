@@ -44,6 +44,10 @@ abstract class DeviceCredentialStore {
   Future<void> removeMachine(String machineId);
   Future<void> saveLanguage(AppLanguage language);
   Future<AppLanguage?> loadLanguage();
+
+  /// 5.1：快捷指令自定义（scope=agentId）；null=该 scope 无自定义（用内置默认）
+  Future<void> saveQuickCommands(String scope, List<String> commands);
+  Future<List<String>?> loadQuickCommands(String scope);
   Future<void> clear();
 }
 
@@ -85,6 +89,19 @@ class InMemoryCredentialStore implements DeviceCredentialStore {
 
   @override
   Future<AppLanguage?> loadLanguage() async => _savedLanguage;
+
+  final Map<String, List<String>> _quickCommands = {};
+
+  @override
+  Future<void> saveQuickCommands(String scope, List<String> commands) async {
+    _quickCommands[scope] = List<String>.of(commands);
+  }
+
+  @override
+  Future<List<String>?> loadQuickCommands(String scope) async {
+    final value = _quickCommands[scope];
+    return value == null ? null : List<String>.of(value);
+  }
 
   @override
   Future<void> clear() async {
@@ -181,6 +198,25 @@ class FileCredentialStore implements DeviceCredentialStore {
       if (lang.name == raw) return lang;
     }
     return null;
+  }
+
+  @override
+  Future<void> saveQuickCommands(String scope, List<String> commands) async {
+    final state = await _readState();
+    final all = Map<String, dynamic>.from(
+      state['quickCommands'] as Map? ?? const {},
+    );
+    all[scope] = commands;
+    state['quickCommands'] = all;
+    await _writeState(state);
+  }
+
+  @override
+  Future<List<String>?> loadQuickCommands(String scope) async {
+    final state = await _readState();
+    final all = state['quickCommands'] as Map?;
+    if (all == null || all[scope] == null) return null;
+    return (all[scope] as List).cast<String>();
   }
 
   @override

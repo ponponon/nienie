@@ -783,3 +783,9 @@
 - **通用 createdAt/updatedAt 语义恢复**：message-restore tool part 通用字段=created / completed??ran??created（与专用 toolStartedAt/toolFinishedAt 两套独立，不再出现 updatedAt < createdAt）。
 - **新时间字段严格校验**：`_allPartsWellFormed` 对 toolStartedAt/toolFinishedAt 做类型+可解析校验，非法（数字/坏日期）快照原子拒绝并提示。
 - 测试：历史回放同时间戳→durationLabel null、非法类型/非法日期快照拒绝、通用字段语义断言、StateStore timingKnown；mobile 76（+2）、agent-events 25（+1）、全仓 275 vitest 全绿。
+
+### 2026-11-12 路线图#5（输入场景：快捷指令栏 + 回到底部按钮）
+
+- **5.1 快捷指令栏**：输入框上方横向胶囊（`QuickCommandsBar`）——默认四条（继续/跑测试/看报错/总结改动，四语言）；点击**追加填充输入框保留草稿**（光标末尾）；长按删除（确认弹窗）；`+` 添加自定义（弹窗输入）；**按 Agent 定制**（scope=agentId，`DeviceCredentialStore.saveQuickCommands/loadQuickCommands` 持久化，InMemory/File 双实现；无自定义=null=内置默认）。
+- **5.2 回到底部按钮**：时间线初始停在底部（聊天语义）；在底部时新内容**静默跟随**；翻历史时新回复到达 → 浮出「↓ 有新回复」（不强制跳底），点击跳底+隐藏，用户滚回底部自动收起；`session-timeline-list` key 供测试/滚动定位。
+- 测试：默认胶囊/点击追加保留草稿/长按删除/添加自定义、Agent 隔离+持久化恢复、翻历史浮出/点击跳底/底部不浮出；mobile 79（+3）、全仓 275 vitest 全绿。

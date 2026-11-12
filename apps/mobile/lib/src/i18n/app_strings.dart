@@ -545,4 +545,43 @@ class NienieStrings {
         AppLanguage.ja => 'ここから再試行',
         AppLanguage.ko => '여기부터 재시도',
       };
+
+  // ===== 5.1 快捷指令栏 =====
+
+  List<String> get defaultQuickCommands => switch (lang) {
+        AppLanguage.zh => const ['继续', '跑测试', '看报错', '总结改动'],
+        AppLanguage.en => const ['Continue', 'Run tests', 'Check errors', 'Summarize changes'],
+        AppLanguage.ja => const ['続けて', 'テスト実行', 'エラー確認', '変更を要約'],
+        AppLanguage.ko => const ['계속', '테스트 실행', '오류 확인', '변경 요약'],
+      };
+
+  String get quickCmdAddLabel => switch (lang) {
+        AppLanguage.zh => '添加快捷指令',
+        AppLanguage.en => 'Add quick command',
+        AppLanguage.ja => 'クイックコマンドを追加',
+        AppLanguage.ko => '빠른 명령 추가',
+      };
+
+  String get quickCmdHint => switch (lang) {
+        AppLanguage.zh => '输入指令内容',
+        AppLanguage.en => 'Command text',
+        AppLanguage.ja => 'コマンド内容を入力',
+        AppLanguage.ko => '명령 내용 입력',
+      };
+
+  String get quickCmdDeleted => switch (lang) {
+        AppLanguage.zh => '已删除',
+        AppLanguage.en => 'Deleted',
+        AppLanguage.ja => '削除しました',
+        AppLanguage.ko => '삭제됨',
+      };
+
+  // ===== 5.2 回到底部 =====
+
+  String get newRepliesBelow => switch (lang) {
+        AppLanguage.zh => '有新回复',
+        AppLanguage.en => 'New replies',
+        AppLanguage.ja => '新しい返信',
+        AppLanguage.ko => '새 답변',
+      };
 }

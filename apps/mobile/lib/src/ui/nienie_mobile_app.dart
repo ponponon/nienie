@@ -13,6 +13,7 @@ import '../state/mobile_bridge_client.dart';
 import 'kelivo_workspace_drawer.dart';
 import 'pairing_panel.dart';
 import 'timeline_card_list.dart';
+import 'quick_commands_bar.dart';
 
 class NienieMobileApp extends StatefulWidget {
   final MobileBridgeClient client;
@@ -705,6 +706,22 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                         ],
                       ),
                     ),
+                  // 5.1：快捷指令栏（按 Agent 定制，点击填充输入框保留草稿）
+                  QuickCommandsBar(
+                    client: client,
+                    agentId: active?.agentId ?? '',
+                    onUse: (command) {
+                      setState(() {
+                        final existing = _promptController.text.trim();
+                        final prefix = existing.isEmpty ? '' : ' ';
+                        _promptController.text = '$existing$prefix$command';
+                        _promptController.selection = TextSelection.fromPosition(
+                          TextPosition(offset: _promptController.text.length),
+                        );
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 4),
                   // Upper Deck: Full-width borderless input field
                   TextField(
                     key: const Key('input-session-prompt'),

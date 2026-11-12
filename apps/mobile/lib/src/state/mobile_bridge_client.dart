@@ -77,6 +77,45 @@ class MobileBridgeClient extends ChangeNotifier {
 
   NienieStrings get strings => NienieStrings(language);
 
+  // ===== 5.1 快捷指令（按 Agent 定制，scope=agentId）=====
+  final Map<String, List<String>> _quickCommandsByAgent = {};
+
+  /// 5.1：该 Agent 的自定义快捷指令；null=无自定义（UI 显示内置默认）
+  List<String>? quickCommandsFor(String agentId) {
+    final value = _quickCommandsByAgent[agentId];
+    return value == null ? null : List<String>.of(value);
+  }
+
+  /// 加载自定义（未持久化过则保持 null=默认）
+  Future<void> loadQuickCommandsFor(String agentId) async {
+    final value = await credentialStore.loadQuickCommands(agentId);
+    if (value != null) {
+      _quickCommandsByAgent[agentId] = List<String>.of(value);
+      notifyListeners();
+    }
+  }
+
+  Future<void> addQuickCommand(String agentId, String command) async {
+    final trimmed = command.trim();
+    if (trimmed.isEmpty) return;
+    final current = _quickCommandsByAgent[agentId] ??
+        List<String>.of(strings.defaultQuickCommands);
+    if (current.contains(trimmed)) return;
+    current.add(trimmed);
+    _quickCommandsByAgent[agentId] = current;
+    await credentialStore.saveQuickCommands(agentId, current);
+    notifyListeners();
+  }
+
+  Future<void> removeQuickCommand(String agentId, String command) async {
+    final current = _quickCommandsByAgent[agentId] ??
+        List<String>.of(strings.defaultQuickCommands);
+    current.remove(command);
+    _quickCommandsByAgent[agentId] = current;
+    await credentialStore.saveQuickCommands(agentId, current);
+    notifyListeners();
+  }
+
   Future<void> setLanguage(AppLanguage nextLanguage) async {
     language = nextLanguage;
     notifyListeners();
