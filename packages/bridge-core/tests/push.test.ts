@@ -398,3 +398,21 @@ describe('R3 第三轮：可靠性与脱敏', () => {
     expect(createPushSender({ type: 'auto', url: 'https://ntfy.example.com/t' })).toBeInstanceOf(NtfyPushSender);
   });
 });
+
+describe('R3-4 路径脱敏补充样例（带空格 / Unicode / UNC）', () => {
+  it('带空格的 macOS 路径不泄漏目录', () => {
+    expect(sanitizePushBody('cat /Users/alice/My Documents/private project/src/main.ts', false))
+      .toBe('cat ~/main.ts');
+  });
+  it('带空格的 Windows 路径不泄漏目录', () => {
+    expect(sanitizePushBody('type C:\\Users\\bob\\My Documents\\secret project\\main.py', false))
+      .toBe('type ~/main.py');
+  });
+  it('带空格的 UNC 路径不泄漏目录', () => {
+    expect(sanitizePushBody('open \\\\host\\share\\private folder\\main.py', false))
+      .toBe('open \\\\…\\main.py');
+  });
+  it('Unicode 目录名不泄漏', () => {
+    expect(sanitizePushBody('cat /Users/张三/私密项目/源码/main.ts', false)).toBe('cat ~/main.ts');
+  });
+});
