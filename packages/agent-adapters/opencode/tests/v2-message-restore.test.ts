@@ -330,6 +330,9 @@ describe('buildSnapshotParts tool time', () => {
     expect(tool).toBeDefined();
     expect(tool!.toolStartedAt).toBe(new Date(ran).toISOString()); // 不是 created
     expect(tool!.toolFinishedAt).toBe(new Date(completed).toISOString());
+    // Round 4：通用字段恢复自身语义（与专用字段两套独立）
+    expect(tool!.createdAt).toBe(new Date(created).toISOString());
+    expect(tool!.updatedAt).toBe(new Date(completed).toISOString());
   });
 
   it('Round 3：terminal + ran 存在 + completed 缺失 → 不伪造耗时（toolFinishedAt 缺失）', () => {
@@ -358,6 +361,9 @@ describe('buildSnapshotParts tool time', () => {
     const tool = parts.find((p) => p.kind === 'tool_call');
     expect(tool!.toolStartedAt).toBe(new Date(1760000002000).toISOString());
     expect(tool!.toolFinishedAt).toBeUndefined(); // 宁可无耗时，不显示语义错误的耗时
+    // Round 4：通用 updatedAt 回落 ran（自身语义），但专用字段不伪造
+    expect(tool!.createdAt).toBe(new Date(1760000001000).toISOString());
+    expect(tool!.updatedAt).toBe(new Date(1760000002000).toISOString());
   });
 
   it('Round 3：ran 缺失 → toolStartedAt 缺失（不假装知道开始时间）', () => {

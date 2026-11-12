@@ -323,7 +323,13 @@ export class CodexAdapter implements AgentAdapter {
                     sequence: this.normalizer.nextSequence(sessionId),
                     timestamp: ts,
                     type: 'tool_use',
-                    payload: { toolCallId: callId, name: 'bash', input: { command: item.command } },
+                    payload: {
+                      toolCallId: callId,
+                      name: 'bash',
+                      input: { command: item.command },
+                      // Round 4：历史库只有 created_at_ms——不是真实执行时间，禁止伪造耗时
+                      timingKnown: false,
+                    },
                   }),
                 );
               }
@@ -350,6 +356,8 @@ export class CodexAdapter implements AgentAdapter {
                       ...(typeof item.exit_code === 'number'
                         ? { exitCode: item.exit_code }
                         : {}),
+                      // Round 4：同上——历史时间不是执行起止时间
+                      timingKnown: false,
                       truncated: result.truncated,
                     },
                   }),

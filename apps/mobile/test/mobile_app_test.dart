@@ -2446,6 +2446,92 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('Round 4 历史回放（timingKnown:false）不伪造耗时：同时间戳 tool 事件 durationLabel 为 null', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+    // Codex 历史回放形态：tool_use/tool_result 同一 created_at_ms + timingKnown:false
+    final ts = '2026-11-12T09:30:00.000Z';
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'hu1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': ts, 'type': 'tool_use',
+      'payload': {
+        'toolCallId': 'tc_hist', 'name': 'bash', 'input': {'command': 'sleep'},
+        'timingKnown': false,
+      },
+    });
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'hr1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 2, 'timestamp': ts, 'type': 'tool_result',
+      'payload': {
+        'toolCallId': 'tc_hist', 'content': 'done', 'isError': false, 'exitCode': 0,
+        'timingKnown': false,
+      },
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final tool = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .timelineFor('ses_alpha')
+        .whereType<ToolCallCardItem>()
+        .single;
+    expect(tool.startedAt, isNull);
+    expect(tool.finishedAt, isNull);
+    expect(tool.durationLabel, isNull); // 不显示 0ms 伪耗时
+  });
+
+  test('Round 4 快照新时间字段严格校验：非法类型/非法日期原子拒绝', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions();
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_bad',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep1',
+      'watermark': 1,
+      'capturedAt': DateTime.now().toIso8601String(),
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {
+          'kind': 'tool_call', 'ordinal': 0, 'partId': 't_bad', 'revision': 2,
+          'createdAt': '2026-11-01T00:00:00Z', 'updatedAt': '2026-11-01T00:00:01Z',
+          'toolCallId': 'tc_bad', 'name': 'bash', 'input': {}, 'status': 'completed',
+          'toolStartedAt': 12345, // 非法类型（数字）
+        },
+      ],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    expect(client.timelineFor('ses_alpha'), isEmpty); // 校验拒绝 → 不安装（原子）
+    expect(client.errorMessage, contains('快照')); // 明确失败提示
+
+    // 非法日期字符串同样拒绝
+    transport.snapshotResponse = {
+      ...transport.snapshotResponse!,
+      'snapshotId': 'snap_bad2',
+      'parts': [
+        {
+          'kind': 'tool_call', 'ordinal': 0, 'partId': 't_bad2', 'revision': 2,
+          'createdAt': '2026-11-01T00:00:00Z', 'updatedAt': '2026-11-01T00:00:01Z',
+          'toolCallId': 'tc_bad2', 'name': 'bash', 'input': {}, 'status': 'completed',
+          'toolFinishedAt': 'not-a-date',
+        },
+      ],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    expect(client.timelineFor('ses_alpha'), isEmpty);
+    client.dispose();
+  });
+
   test('durationLabel 舍入边界：59.6s/60s/119.6s 不出 1m60s', () {
     String labelOf(int ms) {
       final start = DateTime(2026, 11, 1);

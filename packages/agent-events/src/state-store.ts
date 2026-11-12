@@ -125,10 +125,12 @@ export class InMemorySessionStateStore implements SessionStateStore {
         name: (p.name as string) ?? 'tool',
         input: (p.input as Record<string, unknown>) ?? {},
         status: 'running',
-        // Round 3：tool_use=进入执行 → 真实开始时间
-        ...(existing?.kind === 'tool_call' && existing.toolStartedAt
+        // Round 3：tool_use=进入执行 → 真实开始时间（Round 4：timingKnown=false 历史回放不伪造）
+        ...(p.timingKnown === false
           ? {}
-          : { toolStartedAt: ts }),
+          : existing?.kind === 'tool_call' && existing.toolStartedAt
+            ? {}
+            : { toolStartedAt: ts }),
         _seq: event.sequence,
       });
     } else if (event.type === 'tool_result') {
@@ -152,7 +154,7 @@ export class InMemorySessionStateStore implements SessionStateStore {
         ...(prev?.kind === 'tool_call' && prev.toolStartedAt
           ? { toolStartedAt: prev.toolStartedAt }
           : {}),
-        toolFinishedAt: ts,
+        ...(p.timingKnown === false ? {} : { toolFinishedAt: ts }),
         _seq: event.sequence,
       });
     }

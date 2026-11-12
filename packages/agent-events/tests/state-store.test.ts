@@ -76,4 +76,29 @@ describe('Codex 真实事件归并（无 partId）', () => {
     expect(tool.toolStartedAt).toBeDefined(); // tool_use 时刻=真实开始
     expect(tool.toolFinishedAt).toBeDefined(); // tool_result 时刻=真实完成
   });
+
+  it('Round 4：timingKnown=false（历史回放）不写入执行时间字段', () => {
+    const store = new InMemorySessionStateStore({ agentId: 'codex', streamEpoch: 'ep1' });
+    store.applyEvent(
+      evt(1, 'tool_use', {
+        toolCallId: 'cmd_h',
+        name: 'bash',
+        input: {},
+        timingKnown: false,
+      }),
+    );
+    store.applyEvent(
+      evt(2, 'tool_result', {
+        toolCallId: 'cmd_h',
+        content: 'x',
+        isError: false,
+        timingKnown: false,
+      }),
+    );
+    const snap = store.createSnapshot('ses_1');
+    const tool = snap.parts.find((p) => p.kind === 'tool_call')!;
+    if (tool.kind !== 'tool_call') throw new Error('unreachable');
+    expect(tool.toolStartedAt).toBeUndefined();
+    expect(tool.toolFinishedAt).toBeUndefined(); // 不伪造耗时
+  });
 });

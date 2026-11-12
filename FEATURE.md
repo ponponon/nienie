@@ -776,3 +776,10 @@
 - **pending 隐藏重试菜单**：发送中长按不再显示「从这里重试」（点击无效误导用户），菜单分派 pending 分支双保险。
 - 修复 message-restore `base()` 双调用 ordinal 跳号（快照校验拒绝的隐性炸弹）。
 - 测试：opencode 125（ran/completed 语义三分支）、agent-events 24（无 partId Codex 事件→单 Part+exitCode 2+时间戳）、mobile 74（snapshot 独立字段恢复/无 completed 无耗时/pending 菜单隐藏）；全仓 274 vitest 全绿。
+
+### 2026-11-12 路线图#4.4~4.5 Round 4（终轮：时间可信度标记/通用时间语义/严格校验）
+
+- **timingKnown 标记（防伪造耗时）**：Codex 历史回放 tool_use/tool_result 带 `timingKnown: false`（历史库仅 created_at_ms，不是执行起止时间）——mobile 与 StateStore 统一：timingKnown=false 不写 startedAt/finishedAt（不显示 0ms 伪耗时，也不靠"时间相等"猜测）；实时事件继续用真实事件时间、Snapshot 继续用 ran/completed。
+- **通用 createdAt/updatedAt 语义恢复**：message-restore tool part 通用字段=created / completed??ran??created（与专用 toolStartedAt/toolFinishedAt 两套独立，不再出现 updatedAt < createdAt）。
+- **新时间字段严格校验**：`_allPartsWellFormed` 对 toolStartedAt/toolFinishedAt 做类型+可解析校验，非法（数字/坏日期）快照原子拒绝并提示。
+- 测试：历史回放同时间戳→durationLabel null、非法类型/非法日期快照拒绝、通用字段语义断言、StateStore timingKnown；mobile 76（+2）、agent-events 25（+1）、全仓 275 vitest 全绿。

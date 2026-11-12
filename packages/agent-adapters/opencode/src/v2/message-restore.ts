@@ -274,11 +274,17 @@ export function buildSnapshotParts(messages: OpenCodeV2SessionMessageInfo[]): Se
           part.time.completed != null
             ? new Date(part.time.completed).toISOString()
             : undefined;
+        // Round 4：通用 createdAt/updatedAt 恢复自身语义（created / completed??ran??created），
+        // 与专用 toolStartedAt/toolFinishedAt 两套时间真正独立（不出现 updatedAt < createdAt）
+        const toolCreatedAt = new Date(part.time.created).toISOString();
+        const toolUpdatedAt = new Date(
+          part.time.completed ?? part.time.ran ?? part.time.created,
+        ).toISOString();
         const toolBase = base(); // 只调用一次（stamp 每次递增 ordinal，重复调用会跳号）
         parts.push({
           ...toolBase,
-          createdAt: toolStartedAt ?? toolBase.createdAt,
-          updatedAt: toolFinishedAt ?? toolBase.updatedAt,
+          createdAt: toolCreatedAt,
+          updatedAt: toolUpdatedAt,
           kind: 'tool_call',
           ...(toolStartedAt ? { toolStartedAt } : {}),
           ...(toolFinishedAt ? { toolFinishedAt } : {}),

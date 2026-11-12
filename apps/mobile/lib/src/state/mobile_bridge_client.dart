@@ -471,6 +471,11 @@ class MobileBridgeClient extends ChangeNotifier {
               raw['status'] != 'completed' && raw['status'] != 'failed') return false;
           if (raw['output'] != null && raw['output'] is! String) return false;
           if (raw['isError'] != null && raw['isError'] is! bool) return false;
+          // Round 4：新时间字段严格校验（类型+可解析），非法类型原子拒绝而非运行时炸
+          for (final key in ['toolStartedAt', 'toolFinishedAt']) {
+            final v = raw[key];
+            if (v != null && (v is! String || DateTime.tryParse(v) == null)) return false;
+          }
           break;
         case 'permission':
           if (raw['permissionId'] is! String || raw['permission'] is! String) return false;
@@ -1620,7 +1625,10 @@ class MobileBridgeClient extends ChangeNotifier {
         }
         if (existing != null) {
           final card = existing;
-          card.startedAt ??= eventTime; // 4.4：开始时间（首次 tool_use，重复事件不重置）
+          // Round 4：timingKnown=false（历史回放）不伪造执行时间
+          if (event.payload['timingKnown'] != false) {
+            card.startedAt ??= eventTime; // 4.4：开始时间（首次 tool_use，重复事件不重置）
+          }
           // 状态机：pending→running 允许升级；running→pending 禁止降级；终态吸收
           if (card.status == ToolCallStatus.pending || card.status == ToolCallStatus.running) {
             if (requested == ToolCallStatus.running) card.status = ToolCallStatus.running;
@@ -1641,7 +1649,8 @@ class MobileBridgeClient extends ChangeNotifier {
               status: requested,
               partId: partId,
               revision: partRevision ?? 0,
-              startedAt: eventTime,
+              // Round 4：timingKnown=false（历史回放）不伪造执行时间
+              startedAt: event.payload['timingKnown'] == false ? null : eventTime,
             ),
           );
         }
@@ -1672,7 +1681,10 @@ class MobileBridgeClient extends ChangeNotifier {
           existing.resultContent = content;
           existing.isError = isError;
           existing.status = nextStatus;
-          existing.finishedAt = eventTime; // 4.4：结束时间（耗时=finishedAt-startedAt）
+          // Round 4：timingKnown=false（历史回放）不伪造执行时间
+          if (event.payload['timingKnown'] != false) {
+            existing.finishedAt = eventTime; // 4.4：结束时间（耗时=finishedAt-startedAt）
+          }
           existing.exitCode = exitCode;
           if (partId != null) existing.partId = partId;
           if (partRevision != null && partRevision > existing.revision) {
@@ -1689,7 +1701,8 @@ class MobileBridgeClient extends ChangeNotifier {
               status: isError ? ToolCallStatus.failed : ToolCallStatus.completed,
               partId: partId,
               revision: partRevision ?? 0,
-              finishedAt: eventTime,
+              // Round 4：timingKnown=false（历史回放）不伪造执行时间
+              finishedAt: event.payload['timingKnown'] == false ? null : eventTime,
               exitCode: exitCode,
             ),
           );
