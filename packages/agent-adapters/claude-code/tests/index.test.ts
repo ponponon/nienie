@@ -100,19 +100,22 @@ describe('ClaudeCodeAdapter & ClaudeCodeEventNormalizer', () => {
         const stdout = new PassThrough();
         const stderr = new PassThrough();
         const emitter = new EventEmitter();
-        queueMicrotask(() => {
+        // 模拟 Node spawn 事件时序：spawn 先于数据/退出
+        setTimeout(() => emitter.emit('spawn'), 0);
+        setTimeout(() => {
           for (const item of CLAUDE_STREAM_FIXTURE) {
             stdout.write(`${JSON.stringify(item)}\n`);
           }
           stdout.end();
           emitter.emit('exit', 0);
-        });
+        }, 0);
         return {
           stdout,
           stderr,
           kill() {},
           onExit: (cb) => emitter.on('exit', cb),
           onError: (cb) => emitter.on('error', cb),
+          onSpawn: (cb) => emitter.on('spawn', cb),
         };
       },
     });
@@ -123,7 +126,9 @@ describe('ClaudeCodeAdapter & ClaudeCodeEventNormalizer', () => {
 
     const session = await adapter.createSession({ title: 'Claude Test' });
     await adapter.sendMessage(session.id, 'first prompt');
+    await adapter.waitForRun(session.id); // sendMessage=接受即返回；执行完成（thread 绑定）后才续发
     await adapter.sendMessage(session.id, 'second prompt');
+    await adapter.waitForRun(session.id);
 
     expect(spawnedArgs[0]).toEqual(['-p', '--output-format', 'stream-json', '--verbose', 'first prompt']);
     expect(spawnedArgs[1]).toEqual([

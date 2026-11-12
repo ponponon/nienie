@@ -1933,6 +1933,48 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('路线图#3 R3-2 断线期间键盘发送不丢失输入（确认接受后才清空）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    transport.failHelloCount = 4;
+    transport.emitRaw({'type': 'transport.disconnected'});
+    await tester.pump(const Duration(seconds: 2));
+    expect(client.connectionState, BridgeConnectionState.reconnecting);
+
+    // 键盘发送（TextInputAction.send）：客户端拒绝接受 → 输入框不清空、不出站、不进时间线
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '断线中的重要消息');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pump(const Duration(seconds: 1));
+
+    final field = tester.widget<TextField>(find.byKey(const Key('input-session-prompt')));
+    expect(field.controller!.text, '断线中的重要消息'); // 输入保留
+    expect(transport.sentPrompts, isEmpty); // 不出站
+    expect(client.timelineFor('ses_alpha').whereType<UserPromptItem>(), isEmpty); // 不伪造已发
+    await tester.pump(const Duration(seconds: 10)); // 排空重试定时器
+    client.dispose();
+  });
+
+  testWidgets('路线图#3 R3-1 重连中身份校验失败不掉出会话视图，4 次重试后才回配对页', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 每次 hello 都返回错误 machineId（模拟旧 IP 被占连错 Bridge）
+    transport.helloMachineId = 'machine_other';
+    transport.emitRaw({'type': 'transport.disconnected'});
+    await tester.pump(const Duration(seconds: 2));
+    // 身份失败发生后仍保持 reconnecting（不降级 error/disconnected），会话视图保留
+    expect(client.connectionState, BridgeConnectionState.reconnecting);
+    expect(find.byKey(const Key('reconnect-banner')), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 8)); // 4 次重试全部失败
+    expect(client.connectionState, BridgeConnectionState.disconnected);
+    expect(find.byKey(const Key('btn-connect-pair')), findsOneWidget);
+    client.dispose();
+  });
+
   test('路线图#3 Round2 发送异常回执落定 failed（不永久 pending）', () async {
     final transport = FakeBridgeTransport();
     final client = MobileBridgeClient(transport: transport, credentialStore: InMemoryCredentialStore());

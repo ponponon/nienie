@@ -144,13 +144,15 @@ describe('CodexAdapter', () => {
         const stderr = new PassThrough();
         const emitter = new EventEmitter();
 
-        queueMicrotask(() => {
+        // 模拟 Node spawn 事件时序：spawn 先于数据/退出（两个独立宏任务）
+        setTimeout(() => emitter.emit('spawn'), 0);
+        setTimeout(() => {
           for (const frame of CODEX_JSONL_LIFECYCLE_FIXTURE) {
             stdout.write(`${JSON.stringify(frame)}\n`);
           }
           stdout.end();
           emitter.emit('exit', 0);
-        });
+        }, 0);
 
         return {
           stdout,
@@ -164,6 +166,9 @@ describe('CodexAdapter', () => {
           },
           onError(listener) {
             emitter.on('error', listener);
+          },
+          onSpawn(listener) {
+            emitter.on('spawn', listener);
           },
         };
       },
@@ -227,5 +232,91 @@ describe('CodexAdapter', () => {
     // 6. cancel() terminates running execution
     await adapter.cancel(session.id);
     expect(activeKillCount).toBeGreaterThanOrEqual(0);
+  });
+
+  it('R3-3 spawn 失败必须拒绝 sendMessage 并上报规范化错误事件（假送达防护）', async () => {
+    const adapter = new CodexAdapter({
+      machineId: 'mac_codex',
+      detectVersion: async () => 'codex-cli 0.166.0',
+      spawnProcess: (): CodexProcessHandle => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const emitter = new EventEmitter();
+        // spawn 从未确认，异步报错（模拟二进制不存在）
+        setTimeout(() => emitter.emit('error', new Error('spawn ENOENT')), 0);
+        return {
+          stdout,
+          stderr,
+          kill() {},
+          onExit(listener) {
+            emitter.on('exit', listener);
+          },
+          onError(listener) {
+            emitter.on('error', listener);
+          },
+          onSpawn() {
+            // 永不触发
+          },
+        };
+      },
+    });
+
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((e) => events.push(e));
+    const session = await adapter.createSession({
+      title: 'spawn fail',
+      projectPath: '/workspace/nienie',
+    });
+
+    await expect(adapter.sendMessage(session.id, 'hi')).rejects.toThrow(/ENOENT/);
+    // 失败必须反馈：规范化 error 事件（手机可见）
+    const errEvent = events.find((e) => e.type === 'error');
+    expect(errEvent).toBeDefined();
+    expect(String(errEvent!.payload?.message)).toContain('启动失败');
+    expect((await adapter.listSessions())[0]!.status).toBe('failed');
+  });
+
+  it('R3-3 非零退出码按失败处理并上报事件（不能无条件 resolve）', async () => {
+    const adapter = new CodexAdapter({
+      machineId: 'mac_codex',
+      detectVersion: async () => 'codex-cli 0.166.0',
+      spawnProcess: (): CodexProcessHandle => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const emitter = new EventEmitter();
+        setTimeout(() => emitter.emit('spawn'), 0);
+        setTimeout(() => emitter.emit('exit', 2), 0);
+        return {
+          stdout,
+          stderr,
+          kill() {
+            emitter.emit('exit', 130);
+          },
+          onExit(listener) {
+            emitter.on('exit', listener);
+          },
+          onError(listener) {
+            emitter.on('error', listener);
+          },
+          onSpawn(listener) {
+            emitter.on('spawn', listener);
+          },
+        };
+      },
+    });
+
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((e) => events.push(e));
+    const session = await adapter.createSession({
+      title: 'exit code',
+      projectPath: '/workspace/nienie',
+    });
+
+    await adapter.sendMessage(session.id, 'hi');
+    await adapter.waitForRun(session.id);
+    const errEvent = events.find((e) => e.type === 'error');
+    expect(errEvent).toBeDefined();
+    expect(String(errEvent!.payload?.message)).toContain('2');
+    expect((await adapter.listSessions())[0]!.status).toBe('failed');
   });
 });

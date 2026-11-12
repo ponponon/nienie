@@ -682,3 +682,11 @@
 - **Thinking 计时起点**：`runningSince` 取事件真实 timestamp（历史恢复不重新起算）、重复 running 事件不重置（`??=`）。
 - **发送异常回执落定**：sendMessage 的 transport 异常捕获 → receipt=failed（不永久 pending）；retrySendPrompt 同守卫。
 - 测试：4 次重试状态机（重试中保持 reconnecting/横幅在/失败后回配对页）、成功清零、断线禁发不出站、计时 300s 不重置、异常落定；mobile 52（+3）、全仓 246 vitest 全绿。
+
+### 2026-11-12 路线图#3 Round 3（R3-1..R3-4 收口：重连恢复原子性/发送幂等/spawn 真确认/Adapter 语义统一）
+
+- **R3-1 重连恢复原子性**：`connectionState=connected`+`reconnectAttempt` 清零推迟到 refreshAgents/refreshSessions/replayMissedEvents **全部成功之后**（hello 成功但恢复阶段失败保持 reconnecting，外层重试不被假 connected 重置）；身份校验失败路径同样尊重 `keepReconnecting`（自动重连失败≠手动配对失败，不再中途掉会话视图）。
+- **R3-2 发送可靠性**：①`sendMessage` 改返回 `Future<bool>`（true=已接受）——所有发送入口（按钮/键盘 onSubmitted）**确认接受后才清空输入框和附件**（断线瞬间发送不丢消息）；②`BridgeRouter.sendMessage` 增加 `(sessionId, clientMessageId)` **幂等接受记录**：重复请求返回首次接受结果、进行中的复用同一 Promise、失败不缓存（允许真重试）、无 clientMessageId 不去重、LRU 512 上限——同一条 Prompt 重试不再双重执行。
+- **R3-3 Codex spawn 真确认**：`CodexProcessHandle` 增加 `onSpawn`（Node 'spawn' 事件）——**确认进程真正启动成功才返回「已送达电脑」**（spawn 是异步确认，二进制不存在等在 error 事件才暴露，此前会假送达）；spawn 失败 reject + 规范化 error 事件（手机可见）；运行期异步失败同样发 error 事件（不再 `catch(()=>{})` 吞掉）；**非零退出码按失败处理并上报**（cancel 先置 cancelled 再 kill 不误报）。
+- **R3-4 Adapter 送达语义统一**：claude-code/pi 从「等进程退出」改为与 codex 相同的**接受即返回**（spawn 确认 + 后台执行 + `waitForRun`）；同样具备 spawn 失败拒绝/错误事件/非零退出上报/cancel 判定；pi normalizer 暴露 `nextSequence`（runerr 事件与常规事件同一单调序号空间，防重复 sequence 被客户端误判重）；`AgentAdapter.sendMessage` 接口注释固化送达语义契约（spawn 型/RPC 型 acp/stdin 型 pty 全覆盖说明）。
+- 测试：bridge-core 幂等 2（重复/并发/失败不缓存/无 ID 不去重）、codex spawn 失败假送达防护 + 非零退出 2、claude/pi mock 按 Node spawn 时序重构（setTimeout 分帧）+ waitForRun 断言、mobile 断线键盘发送不丢输入 + 重连中身份失败保会话视图 2（mobile 54）；全仓 251 vitest 全绿。

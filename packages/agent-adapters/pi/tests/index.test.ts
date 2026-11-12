@@ -78,19 +78,22 @@ describe('PiAdapter & PiEventNormalizer', () => {
         const stdout = new PassThrough();
         const stderr = new PassThrough();
         const emitter = new EventEmitter();
-        queueMicrotask(() => {
+        // 模拟 Node spawn 事件时序：spawn 先于数据/退出
+        setTimeout(() => emitter.emit('spawn'), 0);
+        setTimeout(() => {
           for (const item of PI_JSON_FIXTURE) {
             stdout.write(`${JSON.stringify(item)}\n`);
           }
           stdout.end();
           emitter.emit('exit', 0);
-        });
+        }, 0);
         return {
           stdout,
           stderr,
           kill() {},
           onExit: (cb) => emitter.on('exit', cb),
           onError: (cb) => emitter.on('error', cb),
+          onSpawn: (cb) => emitter.on('spawn', cb),
         };
       },
     });
@@ -103,6 +106,7 @@ describe('PiAdapter & PiEventNormalizer', () => {
     const received: CanonicalAgentEvent[] = [];
     adapter.onEvent((e) => received.push(e));
     await adapter.sendMessage(session.id, 'check files');
+    await adapter.waitForRun(session.id); // sendMessage=接受即返回；事件在执行完成后齐备
 
     expect(spawnedArgs[0]).toEqual(['--mode', 'json', '--session', session.id, '-p', 'check files']);
     expect(received).toHaveLength(7);

@@ -122,6 +122,14 @@ export class SessionRouter {
     return adapter.getSessionDiff(session.id);
   }
 
+  /**
+   * (sessionId, clientMessageId) → 首次接受结果（R3-2 幂等）：
+   * 网络中断后手机重试同一条消息可能触发 Bridge 重复执行——首次正常分发，
+   * 重复请求返回第一次的接受结果（进行中的复用同一 Promise），不再启动第二次执行。
+   * clientMessageId 为空（旧客户端）不去重。
+   */
+  private readonly sendDedup = new Map<string, Promise<{ messageId?: string | undefined } | void>>();
+
   async sendMessage(
     session: AgentSession,
     message: string,
@@ -132,13 +140,32 @@ export class SessionRouter {
     if (!adapter) {
       throw new Error(`No adapter registered for agent: ${session.agentId}`);
     }
-    return await adapter.sendMessage(
-      session.id,
-      message,
-      modelId || clientMessageId
-        ? { ...(modelId ? { modelId } : {}), ...(clientMessageId ? { clientMessageId } : {}) }
-        : undefined,
-    ) ?? undefined;
+    const key = clientMessageId ? `${session.id}::${clientMessageId}` : null;
+    if (key) {
+      const existing = this.sendDedup.get(key);
+      if (existing) {
+        return await existing;
+      }
+    }
+    const run = (async () =>
+      await adapter.sendMessage(
+        session.id,
+        message,
+        modelId || clientMessageId
+          ? { ...(modelId ? { modelId } : {}), ...(clientMessageId ? { clientMessageId } : {}) }
+          : undefined,
+      ) ?? undefined)();
+    if (key) {
+      this.sendDedup.set(key, run);
+      // 失败不缓存（允许真正重试）；成功结果保留供重复请求回放
+      run.catch(() => this.sendDedup.delete(key!));
+      // LRU 上限防无界增长
+      if (this.sendDedup.size > 512) {
+        const oldest = this.sendDedup.keys().next();
+        if (!oldest.done) this.sendDedup.delete(oldest.value);
+      }
+    }
+    return await run;
   }
 
   async cancel(session: AgentSession): Promise<void> {

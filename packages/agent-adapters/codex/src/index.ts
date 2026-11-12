@@ -40,6 +40,8 @@ export type CodexProcessHandle = {
   kill(): void;
   onExit(listener: (code: number | null) => void): void;
   onError(listener: (error: Error) => void): void;
+  /** R3-3：确认进程真正启动成功（Node 'spawn' 事件）。spawn 是异步确认，error 事件才暴露启动失败。 */
+  onSpawn(listener: () => void): void;
 };
 
 export type CodexSpawnOptions = {
@@ -122,6 +124,9 @@ export class CodexAdapter implements AgentAdapter {
           },
           onError(listener) {
             child.once('error', (err) => listener(err));
+          },
+          onSpawn(listener) {
+            child.once('spawn', () => listener());
           },
         };
       });
@@ -416,6 +421,36 @@ export class CodexAdapter implements AgentAdapter {
 
     const proc = this.spawnProcessImpl(args, { cwd: record.projectPath });
     this.activeProcesses.set(sessionId, proc);
+
+    // R3-3：真正确认 spawn 成功才「已送达电脑」——spawn() 是异步确认，
+    // 二进制不存在等失败在 error 事件才暴露，必须拒绝（假送达）而非静默成功
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        proc.onSpawn(() => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        });
+        proc.onError((error) => {
+          if (!settled) {
+            settled = true;
+            reject(error);
+          }
+        });
+      });
+    } catch (error) {
+      this.activeProcesses.delete(sessionId);
+      record.status = 'failed';
+      record.updatedAt = new Date().toISOString();
+      this.emitRunError(
+        sessionId,
+        `Codex 启动失败: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
+
     record.status = 'running';
     record.updatedAt = new Date().toISOString();
 
@@ -435,17 +470,31 @@ export class CodexAdapter implements AgentAdapter {
       });
 
       proc.onError((error) => {
+        // R3-3：运行期异步失败必须产生规范化错误事件（手机可见），不能只改本地状态被吞
         this.activeProcesses.delete(sessionId);
         record!.status = 'failed';
+        record!.updatedAt = new Date().toISOString();
+        this.emitRunError(
+          sessionId,
+          `Codex 运行失败: ${error instanceof Error ? error.message : String(error)}`,
+        );
         reject(error);
       });
 
-      proc.onExit(() => {
+      proc.onExit((code) => {
         if (buffer.trim().length > 0) {
           this.processJsonLine(sessionId, record!, buffer);
           buffer = '';
         }
         this.activeProcesses.delete(sessionId);
+        // R3-3：非零退出码按失败处理并上报（取消路径已显式标记 cancelled 不覆盖）
+        if (record!.status !== 'cancelled' && typeof code === 'number' && code !== 0) {
+          record!.status = 'failed';
+          record!.updatedAt = new Date().toISOString();
+          this.emitRunError(sessionId, `Codex 异常退出（退出码 ${code}）`);
+          resolve();
+          return;
+        }
         const normStatus = this.normalizer.getSessionStatus(sessionId);
         if (normStatus) {
           record!.status = normStatus;
@@ -457,7 +506,23 @@ export class CodexAdapter implements AgentAdapter {
       });
     });
     this.runs.set(sessionId, run);
-    void run.catch(() => undefined);
+    void run.catch(() => undefined); // 错误已经由 emitRunError 事件上报
+  }
+
+  /** R3-3：运行失败的规范化错误事件（失败必须反馈到手机）。 */
+  private emitRunError(sessionId: string, message: string): void {
+    this.emitEvent(
+      createCanonicalEvent({
+        eventId: `runerr:${sessionId}:${Date.now()}`,
+        streamEpoch: this.normalizer.streamEpoch,
+        agentId: 'codex',
+        sessionId,
+        sequence: this.normalizer.nextSequence(sessionId),
+        timestamp: new Date().toISOString(),
+        type: 'error',
+        payload: { code: 'RUN_FAILED', message, retryable: true },
+      }),
+    );
   }
 
   /// 等待某会话当前运行完成（测试与诊断用；sendMessage 本身不等待执行）
@@ -466,15 +531,16 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async cancel(sessionId: string): Promise<void> {
-    const proc = this.activeProcesses.get(sessionId);
-    if (proc) {
-      proc.kill();
-      this.activeProcesses.delete(sessionId);
-    }
+    // R3-3：先标记 cancelled 再 kill——否则 kill 同步触发的 onExit 会把取消误判为非零退出失败
     const record = this.sessions.get(sessionId);
     if (record) {
       record.status = 'cancelled';
       record.updatedAt = new Date().toISOString();
+    }
+    const proc = this.activeProcesses.get(sessionId);
+    if (proc) {
+      proc.kill();
+      this.activeProcesses.delete(sessionId);
     }
   }
 

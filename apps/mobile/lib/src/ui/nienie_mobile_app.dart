@@ -697,12 +697,16 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     controller: _promptController,
                     textInputAction: TextInputAction.send,
                     onSubmitted: (value) {
+                      // R3-2：统一发送入口——确认客户端接受后才清空输入（断线/失败时保留输入不丢失）
                       final text = value.trim();
                       if (text.isEmpty && _attachments.isEmpty) return;
                       final msg = _composeMessage(text);
-                      _promptController.clear();
-                      setState(() => _attachments.clear());
-                      client.sendMessage(msg);
+                      client.sendMessage(msg).then((accepted) {
+                        if (accepted) {
+                          _promptController.clear();
+                          setState(() => _attachments.clear());
+                        }
+                      });
                     },
                     style: const TextStyle(
                       fontSize: 15,
@@ -774,16 +778,19 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                             style: IconButton.styleFrom(backgroundColor: _textPrimary, foregroundColor: Colors.white, shape: const CircleBorder()),
                             // 断线/重连期间禁用发送（补发语义：重连后自动同步会话消息，不谎称本地排队）
                             onPressed: client.connectionState == BridgeConnectionState.connected
-                                ? () {
+                                ? () async {
                                     if (_isGenerating(client)) {
                                       _stopGeneration(client);
-                                    } else {
-                                      final text = _promptController.text;
-                                      if (text.trim().isEmpty && _attachments.isEmpty) return;
-                                      final msg = _composeMessage(text);
+                                      return;
+                                    }
+                                    // R3-2：确认接受后才清空输入（点击瞬间状态变化也不丢消息）
+                                    final text = _promptController.text;
+                                    if (text.trim().isEmpty && _attachments.isEmpty) return;
+                                    final msg = _composeMessage(text);
+                                    final accepted = await client.sendMessage(msg);
+                                    if (accepted) {
                                       _promptController.clear();
                                       setState(() => _attachments.clear());
-                                      client.sendMessage(msg);
                                     }
                                   }
                                 : null,

@@ -310,7 +310,11 @@ class MobileBridgeClient extends ChangeNotifier {
     final peerMachineId = helloData?['machineId'] as String?;
     if (peerMachineId == null || peerMachineId.isEmpty || peerMachineId != saved.machineId) {
       await transport.close();
-      connectionState = BridgeConnectionState.error;
+      // R3-1：自动重连中的身份错误不降级状态（保持 reconnecting 让外层重试），
+      // 仅手动连接路径才转 error（区分自动重连失败与手动配对失败）
+      if (!keepReconnecting) {
+        connectionState = BridgeConnectionState.error;
+      }
       errorMessage = '电脑身份验证失败（${peerMachineId ?? '未返回 machineId'} ≠ ${saved.machineId}）';
       notifyListeners();
       throw StateError(errorMessage!);
@@ -333,8 +337,9 @@ class MobileBridgeClient extends ChangeNotifier {
 
     activeMachineId = saved.machineId;
     connectedMachineIds.add(saved.machineId);
-    connectionState = BridgeConnectionState.connected;
-    reconnectAttempt = 0;
+    // R3-1：connected/计数清零推迟到整个恢复流程成功之后——
+    // hello 成功但 refreshAgents/refreshSessions/replay 失败时保持 reconnecting，
+    // 外层重试的 keepReconnecting 判断才不会被假 connected 重置
     await refreshAgents();
     await refreshSessions();
     if (activeSession != null) {
@@ -344,6 +349,8 @@ class MobileBridgeClient extends ChangeNotifier {
       selectedAgentId = activeSession!.agentId;
       await loadModels(selectedAgentId);
     }
+    connectionState = BridgeConnectionState.connected;
+    reconnectAttempt = 0;
     notifyListeners();
   }
 
@@ -1088,14 +1095,16 @@ class MobileBridgeClient extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sendMessage(String text) async {
+  /// 返回 true=已被客户端接受（UI 方可清空输入），false=未接受（保留输入供重试）。
+  /// R3-2：发送入口统一守卫 + 不在确认接受前清空输入。
+  Future<bool> sendMessage(String text) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty) return false;
     // Round 2 补发语义：断线/重连期间禁用发送（历史会话消息重连后自动同步，不谎称本地排队补发）
     if (connectionState != BridgeConnectionState.connected) {
       errorMessage = '连接断开中，消息将在重连后自动同步';
       notifyListeners();
-      return;
+      return false;
     }
 
     AgentSession? current = activeSession;
@@ -1140,7 +1149,7 @@ class MobileBridgeClient extends ChangeNotifier {
       optimistic.receipt = SendReceipt.failed;
       errorMessage = '发送失败，请重试';
       notifyListeners();
-      return;
+      return false;
     }
 
     if (res['ok'] != true) {
@@ -1155,7 +1164,7 @@ class MobileBridgeClient extends ChangeNotifier {
         ),
       );
       notifyListeners();
-      return;
+      return false;
     }
     // 服务端权威 Message ID（可选）：与 clientMessageId 不同则以服务端为准，供后续认领
     final data = res['data'] as Map<String, dynamic>?;
@@ -1165,6 +1174,7 @@ class MobileBridgeClient extends ChangeNotifier {
     }
     optimistic.receipt = SendReceipt.delivered; // 路线图 3.3：已送达电脑
     notifyListeners();
+    return true;
   }
 
   /// 路线图 3.3：发送失败后显式重发（复用同一条乐观消息，不新建）

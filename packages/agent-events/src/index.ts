@@ -29,6 +29,15 @@ export type AgentAdapter = {
   getSessionDiff?(sessionId: string): Promise<SessionFileDiff[]>;
   /** 获取会话完整快照（Part 状态），供 resetRequired 时原子重建。 */
   getSessionSnapshot?(sessionId: string): Promise<SessionSnapshot>;
+  /**
+   * 送达语义契约（路线图 3.3 / R3-4）：resolve = 「消息已被 Agent 运行时接受」（delivered=已送达电脑），
+   * 不等待整个 Agent 执行完成；执行在后台继续，完成/失败经事件流上报。
+   * - spawn 型 Adapter（codex/claude-code/pi）：确认进程真正启动成功（spawn 事件）才 resolve；
+   *   spawn 失败必须 reject 并发规范化 error 事件（防假送达），非零退出码同样发 error 事件。
+   * - RPC 型（acp）：session/prompt RPC 返回即接受。
+   * - stdin 型（pty）：写入成功即接受。
+   * 失败（reject）不缓存于 Bridge 幂等层，允许真正重试；成功结果按 clientMessageId 幂等回放。
+   */
   sendMessage(
     sessionId: string,
     message: string,

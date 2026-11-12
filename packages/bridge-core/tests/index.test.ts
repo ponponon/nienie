@@ -116,6 +116,59 @@ describe('bridge core', () => {
     expect(routed).toEqual(['run tests']);
   });
 
+  it('R3-2 (sessionId, clientMessageId) 幂等：重复发送不重复执行，复用首次接受结果', async () => {
+    const registry = new AgentRegistry();
+    let calls = 0;
+    const opencode = adapter('opencode');
+    opencode.sendMessage = async (_sessionId, message, options) => {
+      calls++;
+      return { messageId: `srv_${(options as { clientMessageId?: string } | undefined)?.clientMessageId ?? calls}` };
+    };
+    registry.register(opencode);
+    const router = new SessionRouter(registry);
+    const session: AgentSession = {
+      id: 'session-idem', agentId: 'opencode', title: 'Idem', projectPath: '/tmp/p',
+      status: 'idle', createdAt: '2026-11-03T00:00:00Z', updatedAt: '2026-11-03T00:00:00Z',
+    };
+
+    const first = await router.sendMessage(session, 'run tests', undefined, 'msg_abc');
+    const dup = await router.sendMessage(session, 'run tests', undefined, 'msg_abc');
+    // 进行中的重复请求复用同一结果（并发场景）
+    const [inflightA, inflightB] = await Promise.all([
+      router.sendMessage(session, 'other', undefined, 'msg_def'),
+      router.sendMessage(session, 'other', undefined, 'msg_def'),
+    ]);
+
+    expect(calls).toBe(2); // msg_abc/msg_def 各只执行一次
+    expect(dup).toEqual(first); // 重复请求返回首次接受结果
+    expect(inflightB).toEqual(inflightA);
+  });
+
+  it('R3-2 失败不缓存（允许真正重试）；无 clientMessageId 不去重', async () => {
+    const registry = new AgentRegistry();
+    let calls = 0;
+    const opencode = adapter('opencode');
+    opencode.sendMessage = async () => {
+      calls++;
+      if (calls === 1) throw new Error('adapter boom');
+      return undefined;
+    };
+    registry.register(opencode);
+    const router = new SessionRouter(registry);
+    const session: AgentSession = {
+      id: 'session-idem2', agentId: 'opencode', title: 'Idem2', projectPath: '/tmp/p',
+      status: 'idle', createdAt: '2026-11-03T00:00:00Z', updatedAt: '2026-11-03T00:00:00Z',
+    };
+
+    await expect(router.sendMessage(session, 'x', undefined, 'msg_g')).rejects.toThrow('adapter boom');
+    await router.sendMessage(session, 'x', undefined, 'msg_g'); // 失败后允许重试
+    expect(calls).toBe(2);
+
+    await router.sendMessage(session, 'y');
+    await router.sendMessage(session, 'y');
+    expect(calls).toBe(4); // 无 clientMessageId 不去重
+  });
+
   it('creates and loads sessions through SessionRouter and forwards canonical events', async () => {
     const registry = new AgentRegistry();
     const opencode = adapter('opencode');

@@ -153,13 +153,19 @@ export class PiEventNormalizer {
     }
   }
 
+  /** R3-4：会话单调序号（供 Adapter 直接构造的事件复用同一序号空间，避免重复 sequence 被客户端误判重）。 */
+  nextSequence(sessionId: string): number {
+    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
+    this.sequences.set(sessionId, nextSeq);
+    return nextSeq;
+  }
+
   private buildEvent(
     sessionId: string,
     type: CanonicalAgentEventType,
     payload: Record<string, unknown>,
   ): CanonicalAgentEvent {
-    const nextSeq = (this.sequences.get(sessionId) ?? 0) + 1;
-    this.sequences.set(sessionId, nextSeq);
+    const nextSeq = this.nextSequence(sessionId);
 
     return createCanonicalEvent({
       streamEpoch: this.streamEpoch,
@@ -181,6 +187,8 @@ export type PiProcessHandle = {
   kill(): void;
   onExit(listener: (code: number | null) => void): void;
   onError(listener: (error: Error) => void): void;
+  /** R3-4：确认进程真正启动成功（Node 'spawn' 事件）。spawn 是异步确认，error 事件才暴露启动失败。 */
+  onSpawn(listener: () => void): void;
 };
 
 export type PiAdapterOptions = PiNormalizerOptions & {
@@ -242,6 +250,9 @@ export class PiAdapter implements AgentAdapter {
           onError(listener) {
             child.once('error', (err) => listener(err));
           },
+          onSpawn(listener) {
+            child.once('spawn', () => listener());
+          },
         };
       });
   }
@@ -294,6 +305,9 @@ export class PiAdapter implements AgentAdapter {
     return session;
   }
 
+  /** 各运行的后台执行 Promise（R3-4 统一送达语义：sendMessage=接受即返回，执行用 waitForRun 等待）。 */
+  private readonly runs = new Map<string, Promise<void>>();
+
   async sendMessage(sessionId: string, message: string): Promise<void> {
     let session = this.sessions.get(sessionId);
     if (!session) {
@@ -304,7 +318,34 @@ export class PiAdapter implements AgentAdapter {
     const proc = this.spawnProcessImpl(args, { cwd: session.projectPath });
     this.activeProcesses.set(sessionId, proc);
 
-    await new Promise<void>((resolve, reject) => {
+    // R3-4：真正确认 spawn 成功才「已送达电脑」（spawn 是异步确认，失败必须拒绝而非假送达）
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        proc.onSpawn(() => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        });
+        proc.onError((error) => {
+          if (!settled) {
+            settled = true;
+            reject(error);
+          }
+        });
+      });
+    } catch (error) {
+      this.activeProcesses.delete(sessionId);
+      this.emitRunError(
+        sessionId,
+        `Pi 启动失败: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
+
+    // 执行在后台继续；完成/失败经事件流上报，sendMessage 不等待整个 Agent 执行
+    const run = new Promise<void>((resolve, reject) => {
       let buffer = '';
       proc.stdout.on('data', (chunk: Buffer | string) => {
         buffer += chunk.toString();
@@ -316,23 +357,55 @@ export class PiAdapter implements AgentAdapter {
       });
       proc.onError((err) => {
         this.activeProcesses.delete(sessionId);
+        this.emitRunError(
+          sessionId,
+          `Pi 运行失败: ${err instanceof Error ? err.message : String(err)}`,
+        );
         reject(err);
       });
-      proc.onExit(() => {
+      proc.onExit((code) => {
+        const cancelled = !this.activeProcesses.has(sessionId);
         if (buffer.trim()) {
           this.processLine(sessionId, buffer);
         }
         this.activeProcesses.delete(sessionId);
+        // R3-4：非零退出码按失败处理并上报（取消路径不覆盖）
+        if (!cancelled && typeof code === 'number' && code !== 0) {
+          this.emitRunError(sessionId, `Pi 异常退出（退出码 ${code}）`);
+        }
         resolve();
       });
     });
+    this.runs.set(sessionId, run);
+    void run.catch(() => undefined); // 错误已由 emitRunError 事件上报
+  }
+
+  /// 等待某会话当前运行完成（测试与诊断用；sendMessage 本身不等待执行）
+  async waitForRun(sessionId: string): Promise<void> {
+    await this.runs.get(sessionId);
+  }
+
+  /** R3-4：运行失败的规范化错误事件（失败必须反馈到手机）。 */
+  private emitRunError(sessionId: string, message: string): void {
+    const event = createCanonicalEvent({
+      eventId: `runerr:${sessionId}:${Date.now()}`,
+      streamEpoch: this.normalizer.streamEpoch,
+      agentId: 'pi',
+      sessionId,
+      sequence: this.normalizer.nextSequence(sessionId),
+      timestamp: new Date().toISOString(),
+      type: 'error',
+      payload: { code: 'RUN_FAILED', message, retryable: true },
+    });
+    for (const listener of this.listeners) listener(event);
   }
 
   async cancel(sessionId: string): Promise<void> {
     const proc = this.activeProcesses.get(sessionId);
     if (proc) {
-      proc.kill();
+      // R3-4：先摘除再 kill，onExit 依据 activeProcesses 判定取消，不误报非零退出失败
       this.activeProcesses.delete(sessionId);
+      proc.kill();
     }
   }
 
