@@ -62,33 +62,47 @@ const TMP_FOLDERS_RE = new RegExp(
   `\\/?(?:private\\/)?var\\/folders\\/.*?\\.[A-Za-z0-9]{1,8}(?=[\\s"'\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u3001,;!?()<>]|$)`,
   'g',
 );
+/** 文件扩展名锚定（R5.2）：路径中段允许 !、()、逗号等合法标点与空格/Unicode，
+ *  以「根起点 …… 文件名.扩展名 + 终止边界」识别完整路径，避免只匹配前缀泄漏剩余目录。 */
+const FILE_ANCHORED_RE = new RegExp(
+  `(?:[A-Za-z]:[\\\\/]|\\\\\\\\${PATH_SEGMENT}+\\\\|\\/)(?:(?!\\r|\\n|"|\'|\u6000).)*?\\.[A-Za-z0-9]{1,8}(?=[\\s"'\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u3001,;!?()<>\\[\\]{}]|$)`,
+  'g',
+);
 
 function redactPathMatch(match: string, style: 'home' | 'ellipsis' | 'unc'): string {
   const parts = match.split(/[\\\\/]/).filter((part) => part.length > 0);
   const base = parts[parts.length - 1] ?? '';
-  const label = /^[\w\-. ]{1,64}$/.test(base) ? base : '\u2026';
+  const label = /^[\w\-.]{1,64}$/.test(base) ? base : '\u2026';
   if (style === 'home') return `~/${label}`;
   if (style === 'unc') return `\\\\\u2026\\${label}`;
   return `\u2026/${label}`;
 }
 
+function classifyPath(match: string): string {
+  if (match.startsWith('\\\\')) return redactPathMatch(match, 'unc');
+  if (/^[A-Za-z]:[\\\\/]/.test(match)) {
+    return redactPathMatch(match, /^[A-Za-z]:[\\\\/]Users[\\\\/]/.test(match) ? 'home' : 'ellipsis');
+  }
+  return redactPathMatch(match, /^\/(?:Users|home)\//.test(match) ? 'home' : 'ellipsis');
+}
+
 export function sanitizePushBody(text: string, detailed: boolean): string {
   const secrets = redactLogText(text);
   if (detailed) return secrets;
-  // 单遍归一化替换：避免「先改写出的 ~/x 又被后续规则二次命中」的串扰
-  const combined = new RegExp(
-    `${UNC_PATH_RE.source}|${WIN_PATH_RE.source}|${POSIX_PATH_RE.source}`,
-    'g',
-  );
-  return secrets
-    .replace(TMP_FOLDERS_RE, '\u2026')
-    .replace(combined, (match) => {
-      if (match.startsWith('\\\\')) return redactPathMatch(match, 'unc');
-      if (/^[A-Za-z]:[\\\\/]/.test(match)) {
-        return redactPathMatch(match, /^[A-Za-z]:[\\\\/]Users[\\\\/]/.test(match) ? 'home' : 'ellipsis');
-      }
-      return redactPathMatch(match, /^\/(?:Users|home)\//.test(match) ? 'home' : 'ellipsis');
-    });
+  // 占位符暂存：多遍规则之间不互相二次命中（改写产物不再被后续规则吃掉）
+  const labels: string[] = [];
+  const stash = (label: string): string => {
+    labels.push(label);
+    return `\u0000${labels.length - 1}\u0000`;
+  };
+  const restored = secrets
+    .replace(TMP_FOLDERS_RE, () => stash('\u2026'))
+    .replace(FILE_ANCHORED_RE, (match) => stash(classifyPath(match)))
+    .replace(
+      new RegExp(`${UNC_PATH_RE.source}|${WIN_PATH_RE.source}|${POSIX_PATH_RE.source}`, 'g'),
+      (match) => stash(classifyPath(match)),
+    );
+  return restored.replace(/\u0000(\d+)\u0000/g, (_all, index: string) => labels[Number(index)] ?? '\u2026');
 }
 
 function encodeHeaderUtf8(value: string): string {

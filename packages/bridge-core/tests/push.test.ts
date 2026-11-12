@@ -454,3 +454,21 @@ describe('R5 Round 5：多目标结算语义与路径边界', () => {
     expect(sanitizePushBody('read /secret.txt now', false)).toBe('read …/secret.txt now');
   });
 });
+
+describe('R5.2 路径标点边界脱敏', () => {
+  it('路径含 ! 等合法标点时不泄漏剩余目录', () => {
+    expect(sanitizePushBody('type C:\\Users\\alice\\private!project\\src\\main.py', false))
+      .toBe('type ~/main.py');
+    expect(sanitizePushBody('cat /Users/alice/private(project)/src/main.ts', false))
+      .toBe('cat ~/main.ts');
+  });
+  it('路径含逗号/分号相邻时完整折叠', () => {
+    expect(sanitizePushBody('see /home/bob/a,b;c/deep/dir/x.txt, done', false))
+      .toBe('see ~/x.txt, done');
+  });
+  it('无法可靠判断边界时整体折叠剩余可疑路径（fail-closed）', () => {
+    // 尾段含空格、无法确认是文件名 → 整体折叠，不泄漏「secret stuff」
+    expect(sanitizePushBody('run /Users/alice/secret stuff now', false))
+      .toBe('run ~/\u2026');
+  });
+});

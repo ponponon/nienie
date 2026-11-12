@@ -551,3 +551,10 @@
 - **多目标 delivered 语义修正**：settleJob 改为 per-key `{pending, allSucceeded}` 结算——**全部目标成功才 markDelivered**，任一终态失败不记 delivered（同事件后续副本可重触发）；双设备回归测试（A 成功/B 终态失败→可重触发；B 恢复后全成功→delivered 去重）。
 - **路径脱敏边界**：`/var/folders` 带空格路径按「扩展名+边界」惰性收尾（不再 `\S+` 截断泄漏 `id…/file.txt`，也不吞句尾）；POSIX 根目录文件 `/secret.txt` 支持折叠 `…/secret.txt`；**单遍归一化替换**修掉「WIN 改写产物 `~/main.py` 又被 POSIX 规则二次命中成 `~…/main.py`」的串扰；补充样例测试（带空格 macOS/Windows/UNC、Unicode 目录、var/folders、根目录文件）。
 - 测试：bridge-core 59（+6）；全仓 223 vitest + 34 mobile 全绿。
+
+### 2026-11-11 路线图#1 Round 5.2 路径标点边界脱敏（封板前最后一处）
+
+- **文件扩展名锚定**（FILE_ANCHORED_RE）：路径中段允许 `!`、`()`、逗号等 POSIX/Windows 合法标点与空格/Unicode，以「根起点…文件名.扩展名+终止边界」识别完整路径——`C:\Users\alice\private!project\src\main.py`→`~/main.py`、`/Users/alice/private(project)/src/main.ts`→`~/main.ts`，不再只匹配前缀泄漏剩余目录。
+- **占位符暂存**（`\u0000N\u0000`）：TMP/文件锚定/兜底三类规则之间互不二次命中，最后统一还原。
+- **fail-closed 收紧**：尾段含空格无法确认是文件名时整体折叠 `~/…`（不泄漏「secret stuff」）；basename 白名单改为无空格单 token。
+- 测试：bridge-core 62（+3：`!`/`()` 标点、逗号分号相邻、fail-closed 折叠）；全仓 226 vitest 全绿。
