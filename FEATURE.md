@@ -544,3 +544,10 @@
 - **空配置语义**：webhookSender 闭包空 URL 抛错按投递失败处理（绝不静默记 delivered），重复事件可重触发。
 - 并发相同事件 in-flight 去重测试（gate 拦截验证只派发一次）；凭据存储定位修正为「文件权限保护（0600）」，不宣称加密（safeStorage/Keychain 留后续）。
 - 测试：bridge-core 53（+3：重试恢复/终态/并发/空配置）+ desktop 6（+Host/Origin 拒绝）；全仓 217 vitest + 11 typecheck 零 error 全绿。
+
+### 2026-11-11 路线图#1 Round 5（封板前最后三项边界）
+
+- **CI 环境确定性**：subosito/flutter-action 钉 `flutter-version: 3.47.9` + `cache: true`（channel:stable 漂移导致 3.48 的 material 弃用 INFO 刷屏挂掉 CI；SDK 升级另安排，不与本修复混做）。
+- **多目标 delivered 语义修正**：settleJob 改为 per-key `{pending, allSucceeded}` 结算——**全部目标成功才 markDelivered**，任一终态失败不记 delivered（同事件后续副本可重触发）；双设备回归测试（A 成功/B 终态失败→可重触发；B 恢复后全成功→delivered 去重）。
+- **路径脱敏边界**：`/var/folders` 带空格路径按「扩展名+边界」惰性收尾（不再 `\S+` 截断泄漏 `id…/file.txt`，也不吞句尾）；POSIX 根目录文件 `/secret.txt` 支持折叠 `…/secret.txt`；**单遍归一化替换**修掉「WIN 改写产物 `~/main.py` 又被 POSIX 规则二次命中成 `~…/main.py`」的串扰；补充样例测试（带空格 macOS/Windows/UNC、Unicode 目录、var/folders、根目录文件）。
+- 测试：bridge-core 59（+6）；全仓 223 vitest + 34 mobile 全绿。

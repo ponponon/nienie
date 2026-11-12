@@ -416,3 +416,41 @@ describe('R3-4 路径脱敏补充样例（带空格 / Unicode / UNC）', () => {
     expect(sanitizePushBody('cat /Users/张三/私密项目/源码/main.ts', false)).toBe('cat ~/main.ts');
   });
 });
+
+describe('R5 Round 5：多目标结算语义与路径边界', () => {
+  const now = new Date('2026-11-11T12:00:00');
+
+  it('双目标一成功一终态失败：不记 delivered，同事件再次触发可重新投递', async () => {
+    const deviceSent: PushNotificationMessage[] = [];
+    let bFails = true;
+    const router = new PushNotificationRouter({
+      deviceSender: async (message) => {
+        if (message.deviceId === 'dev_b' && bFails) throw new Error('apns down');
+        deviceSent.push(message);
+      },
+      retryDelaysMs: [],
+      onDeliveryError: () => undefined,
+    });
+    router.registerDevice({ deviceId: 'dev_a', platform: 'ios', provider: 'apns', pushToken: 'tok_a' });
+    router.registerDevice({ deviceId: 'dev_b', platform: 'android', provider: 'fcm', pushToken: 'tok_b' });
+    const same = event({ type: 'status', payload: { status: 'idle' } });
+    await router.notifyEvent(same, { now });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(deviceSent).toHaveLength(1); // A 成功，B 终态失败
+    await router.notifyEvent(same, { now }); // 未 delivered → 允许重触发
+    await new Promise((r) => setTimeout(r, 5));
+    expect(deviceSent).toHaveLength(2); // A 再次收到（B 仍失败）
+    bFails = false;
+    await router.notifyEvent(same, { now });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(deviceSent).toHaveLength(4); // A+B 都成功
+    await router.notifyEvent(same, { now }); // 全部成功 → delivered 去重
+    await new Promise((r) => setTimeout(r, 5));
+    expect(deviceSent).toHaveLength(4);
+  });
+
+  it('路径边界：/var/folders 带空格与根目录文件不泄漏', () => {
+    expect(sanitizePushBody('x /var/folders/user id/tmp dir/file.txt y', false)).toBe('x … y');
+    expect(sanitizePushBody('read /secret.txt now', false)).toBe('read …/secret.txt now');
+  });
+});

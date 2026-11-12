@@ -57,7 +57,11 @@ export function validateWebhookUrl(raw: string): string | undefined {
 const PATH_SEGMENT = '[^\\\\/:*?"<>|,;!?()\\[\\]{}\\n\\r\\t\'`\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u3001\u201C\u201D\u3010\u3011]';
 const WIN_PATH_RE = new RegExp(`[A-Za-z]:[\\\\/](?:${PATH_SEGMENT}+[\\\\/])*${PATH_SEGMENT}+`, 'g');
 const UNC_PATH_RE = new RegExp(`\\\\\\\\${PATH_SEGMENT}+\\\\(?:${PATH_SEGMENT}+\\\\)*${PATH_SEGMENT}+`, 'g');
-const POSIX_PATH_RE = new RegExp(`/(?:${PATH_SEGMENT}+/)+${PATH_SEGMENT}+`, 'g');
+const POSIX_PATH_RE = new RegExp(`/(?:${PATH_SEGMENT}+/)+${PATH_SEGMENT}+|/${PATH_SEGMENT}+\\.[A-Za-z0-9]{1,8}`, 'g');
+const TMP_FOLDERS_RE = new RegExp(
+  `\\/?(?:private\\/)?var\\/folders\\/.*?\\.[A-Za-z0-9]{1,8}(?=[\\s"'\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u3001,;!?()<>]|$)`,
+  'g',
+);
 
 function redactPathMatch(match: string, style: 'home' | 'ellipsis' | 'unc'): string {
   const parts = match.split(/[\\\\/]/).filter((part) => part.length > 0);
@@ -71,15 +75,20 @@ function redactPathMatch(match: string, style: 'home' | 'ellipsis' | 'unc'): str
 export function sanitizePushBody(text: string, detailed: boolean): string {
   const secrets = redactLogText(text);
   if (detailed) return secrets;
+  // 单遍归一化替换：避免「先改写出的 ~/x 又被后续规则二次命中」的串扰
+  const combined = new RegExp(
+    `${UNC_PATH_RE.source}|${WIN_PATH_RE.source}|${POSIX_PATH_RE.source}`,
+    'g',
+  );
   return secrets
-    .replace(/\/?(?:private\/)?var\/folders\/\S+/g, '\u2026')
-    .replace(UNC_PATH_RE, (match) => redactPathMatch(match, 'unc'))
-    .replace(WIN_PATH_RE, (match) =>
-      redactPathMatch(match, /^[A-Za-z]:[\\\\/]Users[\\\\/]/.test(match) ? 'home' : 'ellipsis'),
-    )
-    .replace(POSIX_PATH_RE, (match) =>
-      redactPathMatch(match, /^\/(?:Users|home)\//.test(match) ? 'home' : 'ellipsis'),
-    );
+    .replace(TMP_FOLDERS_RE, '\u2026')
+    .replace(combined, (match) => {
+      if (match.startsWith('\\\\')) return redactPathMatch(match, 'unc');
+      if (/^[A-Za-z]:[\\\\/]/.test(match)) {
+        return redactPathMatch(match, /^[A-Za-z]:[\\\\/]Users[\\\\/]/.test(match) ? 'home' : 'ellipsis');
+      }
+      return redactPathMatch(match, /^\/(?:Users|home)\//.test(match) ? 'home' : 'ellipsis');
+    });
 }
 
 function encodeHeaderUtf8(value: string): string {
@@ -281,7 +290,7 @@ export class PushNotificationRouter {
   private readonly scheduleRetry: (fn: () => void, ms: number) => void;
   private readonly deliveredEventIds = new Set<string>();
   private readonly inFlightEventIds = new Set<string>();
-  private readonly pendingByKey = new Map<string, number>();
+  private readonly settleState = new Map<string, { pending: number; allSucceeded: boolean }>();
   private preferences: PushNotificationPreferences = { ...DEFAULT_PUSH_PREFERENCES };
 
   constructor(options: PushNotificationRouterOptions = {}) {
@@ -382,7 +391,7 @@ export class PushNotificationRouter {
       }
       if (jobs.length === 0) return;
       this.inFlightEventIds.add(dedupeKey);
-      this.pendingByKey.set(dedupeKey, jobs.length);
+      this.settleState.set(dedupeKey, { pending: jobs.length, allSucceeded: true });
       for (const job of jobs) {
         void this.runJob(job);
       }
@@ -409,16 +418,18 @@ export class PushNotificationRouter {
     }
   }
 
+  /** 结算语义（R5-2）：全部目标成功才 markDelivered；任一目标终态失败则不记 delivered（同事件后续副本可重触发）。 */
   private settleJob(key: string, succeeded: boolean): void {
-    const remaining = (this.pendingByKey.get(key) ?? 1) - 1;
-    if (remaining > 0) {
-      this.pendingByKey.set(key, remaining);
-      if (succeeded) this.markDelivered(key);
+    const state = this.settleState.get(key) ?? { pending: 1, allSucceeded: true };
+    if (!succeeded) state.allSucceeded = false;
+    state.pending -= 1;
+    if (state.pending > 0) {
+      this.settleState.set(key, state);
       return;
     }
-    this.pendingByKey.delete(key);
+    this.settleState.delete(key);
     this.inFlightEventIds.delete(key);
-    if (succeeded) this.markDelivered(key);
+    if (state.allSucceeded) this.markDelivered(key);
   }
 
   private markDelivered(key: string): void {
