@@ -54,34 +54,43 @@ export function validateWebhookUrl(raw: string): string | undefined {
 
 /** 路径脱敏（R3-4）：识别 POSIX/Windows 盘符/UNC 绝对路径（允许空格与 Unicode），整条折叠为 ~/或…/ + 文件名。
  *  无法可靠识别时宁可整体折叠，不泄露目录结构/项目名。 */
-const PATH_SEGMENT = '[^\\\\/:*?"<>|,;!?()\\[\\]{}\\n\\r\\t\'`\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u3001\u201C\u201D\u3010\u3011]';
-const WIN_PATH_RE = new RegExp(`[A-Za-z]:[\\\\/](?:${PATH_SEGMENT}+[\\\\/])*${PATH_SEGMENT}+`, 'g');
-const UNC_PATH_RE = new RegExp(`\\\\\\\\${PATH_SEGMENT}+\\\\(?:${PATH_SEGMENT}+\\\\)*${PATH_SEGMENT}+`, 'g');
-const POSIX_PATH_RE = new RegExp(`/(?:${PATH_SEGMENT}+/)+${PATH_SEGMENT}+|/${PATH_SEGMENT}+\\.[A-Za-z0-9]{1,8}`, 'g');
-const TMP_FOLDERS_RE = new RegExp(
-  `\\/?(?:private\\/)?var\\/folders\\/.*?\\.[A-Za-z0-9]{1,8}(?=[\\s"'\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u3001,;!?()<>]|$)`,
+const HARD_STOP = '[\\r\\n"<>|\\u3000\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A\\u3001\\u201C\\u201D\\u3010\\u3011]';
+const PATH_ROOT = '(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\\\r\\n]+\\\\|\\/)';
+const FILE_SUFFIX = '\\.[A-Za-z0-9]{1,8}(?::\\d+(?::\\d+)?)?';
+const END_BOUNDARY = `(?=[\\s,;!?()\\[\\]{}'\\u0060:]|$|${HARD_STOP})`;
+
+/** 文件锚定主规则（R5.3）：根起点 + 任意中段（含 !、()、单引号、空格、Unicode）+ 文件(.ext[:line[:col]]) + 边界。
+ *  单引号按路径合法字符处理（歧义时整体折叠优先于泄漏）；Stack Trace `:42`/`:42:7` 后缀保留在输出中。 */
+const FILE_ANCHORED_RE = new RegExp(
+  `${PATH_ROOT}(?:(?!${HARD_STOP}).)*?${FILE_SUFFIX}${END_BOUNDARY}`,
   'g',
 );
-/** 文件扩展名锚定（R5.2）：路径中段允许 !、()、逗号等合法标点与空格/Unicode，
- *  以「根起点 …… 文件名.扩展名 + 终止边界」识别完整路径，避免只匹配前缀泄漏剩余目录。 */
-const FILE_ANCHORED_RE = new RegExp(
-  `(?:[A-Za-z]:[\\\\/]|\\\\\\\\${PATH_SEGMENT}+\\\\|\\/)(?:(?!\\r|\\n|"|\'|\u6000).)*?\\.[A-Za-z0-9]{1,8}(?=[\\s"'\u3000\uFF0C\u3002\uFF01\uFF1F\uFF1B\uFF1A\u3001,;!?()<>\\[\\]{}]|$)`,
+/** 兜底：无扩展名的目录/文件路径 → 到硬边界整体折叠（fail-closed，禁止前缀式部分脱敏）。 */
+const DIR_FALLBACK_RE = new RegExp(`${PATH_ROOT}(?:(?!${HARD_STOP}).)+`, 'g');
+const TMP_FOLDERS_RE = new RegExp(
+  `\\/?(?:private\\/)?var\\/folders\\/.*?\\.[A-Za-z0-9]{1,8}(?=[\\s"'\\u3000\\uFF0C\\u3002\\uFF01\\uFF1F\\uFF1B\\uFF1A\\u3001,;!?()<>]|$)`,
   'g',
 );
 
 function redactPathMatch(match: string, style: 'home' | 'ellipsis' | 'unc'): string {
-  const parts = match.split(/[\\\\/]/).filter((part) => part.length > 0);
-  const base = parts[parts.length - 1] ?? '';
+  const parts = match.split(/[\\/]/).filter((part) => part.length > 0);
+  let base = parts[parts.length - 1] ?? '';
+  let suffix = '';
+  const suffixMatch = /(?::\d+(?::\d+)?)$/.exec(base);
+  if (suffixMatch) {
+    suffix = suffixMatch[0];
+    base = base.slice(0, -suffix.length);
+  }
   const label = /^[\w\-.]{1,64}$/.test(base) ? base : '\u2026';
-  if (style === 'home') return `~/${label}`;
-  if (style === 'unc') return `\\\\\u2026\\${label}`;
-  return `\u2026/${label}`;
+  if (style === 'home') return `~/${label}${suffix}`;
+  if (style === 'unc') return `\\\\\u2026\\${label}${suffix}`;
+  return `\u2026/${label}${suffix}`;
 }
 
 function classifyPath(match: string): string {
   if (match.startsWith('\\\\')) return redactPathMatch(match, 'unc');
-  if (/^[A-Za-z]:[\\\\/]/.test(match)) {
-    return redactPathMatch(match, /^[A-Za-z]:[\\\\/]Users[\\\\/]/.test(match) ? 'home' : 'ellipsis');
+  if (/^[A-Za-z]:[\\/]/.test(match)) {
+    return redactPathMatch(match, /^[A-Za-z]:[\\/]Users[\\/]/.test(match) ? 'home' : 'ellipsis');
   }
   return redactPathMatch(match, /^\/(?:Users|home)\//.test(match) ? 'home' : 'ellipsis');
 }
@@ -89,7 +98,7 @@ function classifyPath(match: string): string {
 export function sanitizePushBody(text: string, detailed: boolean): string {
   const secrets = redactLogText(text);
   if (detailed) return secrets;
-  // 占位符暂存：多遍规则之间不互相二次命中（改写产物不再被后续规则吃掉）
+  // 占位符暂存：规则之间不二次命中；同一绝对路径绝不做前缀式部分脱敏
   const labels: string[] = [];
   const stash = (label: string): string => {
     labels.push(label);
@@ -98,10 +107,7 @@ export function sanitizePushBody(text: string, detailed: boolean): string {
   const restored = secrets
     .replace(TMP_FOLDERS_RE, () => stash('\u2026'))
     .replace(FILE_ANCHORED_RE, (match) => stash(classifyPath(match)))
-    .replace(
-      new RegExp(`${UNC_PATH_RE.source}|${WIN_PATH_RE.source}|${POSIX_PATH_RE.source}`, 'g'),
-      (match) => stash(classifyPath(match)),
-    );
+    .replace(DIR_FALLBACK_RE, (match) => stash(classifyPath(match)));
   return restored.replace(/\u0000(\d+)\u0000/g, (_all, index: string) => labels[Number(index)] ?? '\u2026');
 }
 

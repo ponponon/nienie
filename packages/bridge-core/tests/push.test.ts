@@ -472,3 +472,22 @@ describe('R5.2 路径标点边界脱敏', () => {
       .toBe('run ~/\u2026');
   });
 });
+
+describe('R5.3 路径脱敏完整性（整体匹配策略）', () => {
+  it('Unicode 与标点混合目录的文件路径完整脱敏（无 \\u6000 类误终止）', () => {
+    expect(sanitizePushBody('cat /Users/alice/private!怀疑目录/src/main.py', false)).toBe('cat ~/main.py');
+  });
+  it('无扩展名目录路径不泄漏（POSIX / Windows / UNC）', () => {
+    expect(sanitizePushBody('cd /Users/alice/private!project/src', false)).toBe('cd ~/src');
+    expect(sanitizePushBody('cd C:\\Users\\alice\\private!project\\src', false)).toBe('cd ~/src');
+    expect(sanitizePushBody('open \\\\host\\share\\private!dir\\src', false)).toBe('open \\\\…\\src');
+  });
+  it('单引号歧义不泄漏路径前缀', () => {
+    expect(sanitizePushBody("cat /Users/alice/private!project's secrets/src/main.py", false)).toBe('cat ~/main.py');
+  });
+  it('Stack Trace :line[:column] 后缀保留', () => {
+    expect(sanitizePushBody('log /Users/alice/private!project/src/main.py:42: secret', false))
+      .toBe('log ~/main.py:42: secret');
+    expect(sanitizePushBody('log C:\\proj\\app\\main.py:10:5 boom', false)).toBe('log …/main.py:10:5 boom');
+  });
+});

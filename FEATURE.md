@@ -558,3 +558,11 @@
 - **占位符暂存**（`\u0000N\u0000`）：TMP/文件锚定/兜底三类规则之间互不二次命中，最后统一还原。
 - **fail-closed 收紧**：尾段含空格无法确认是文件名时整体折叠 `~/…`（不泄漏「secret stuff」）；basename 白名单改为无空格单 token。
 - 测试：bridge-core 62（+3：`!`/`()` 标点、逗号分号相邻、fail-closed 折叠）；全仓 226 vitest 全绿。
+
+### 2026-11-11 路线图#1 Round 5.3 路径脱敏完整性（整体匹配策略，封板前最后一步）
+
+- **匹配策略重写**（不堆特例）：FILE_ANCHORED_RE = 根起点（POSIX/Windows/UNC）→ 任意中段（含 `!`、`()`、单引号、空格、Unicode，不再有 `\u6000` 类误终止）→ 文件 `.ext[:line[:column]]` + 终止边界；失败则 DIR_FALLBACK_RE 到硬边界**整体折叠**（禁止同一绝对路径的前缀式部分脱敏）。
+- **Stack Trace 后缀**：`:42`/`:42:7` 归入路径锚定并保留输出（`~/main.py:42: secret`）；basename 剥离行号后缀再走白名单。
+- **单引号歧义**：按路径合法字符处理（歧义时整体折叠优先于泄漏前缀）——`private!project's secrets/src/main.py`→`~/main.py`。
+- **fail-closed**：无扩展名目录路径折叠为 `~/<叶名>`（叶名含空格则 `~/…`）；UNC 输出 `\\…\叶名`。
+- 回归（ChatGPT 点名全数）：`private!怀疑目录` Unicode+标点、POSIX/Windows/UNC 无扩展名目录、单引号、Stack Trace 双格式、原有 10 项样例保持。bridge-core 66 测试；全仓 230 vitest 全绿。
