@@ -219,7 +219,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         color: line.startsWith('+')
                             ? _weTypeGreen
                             : line.startsWith('-')
-                                ? const Color(0xFFDC2626)
+                                ? dangerTextColor(context)
                                 : line.startsWith('@@')
                                     ? const Color(0xFF2563EB)
                                     : secondaryTextColor(context),
@@ -259,7 +259,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             style: TextStyle(
               fontSize: 10.5,
               fontWeight: FontWeight.w600,
-              color: isAfter ? _weTypeGreen : const Color(0xFFDC2626),
+              color: isAfter ? _weTypeGreen : dangerTextColor(context),
             ),
           ),
           const SizedBox(height: 4),
@@ -452,6 +452,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   userItem: item,
                 ),
                 child: Container(
+                  key: const Key('user-bubble'),
                 constraints: BoxConstraints(
                   maxWidth: MediaQuery.sizeOf(context).width * 0.8,
                 ),
@@ -795,7 +796,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         },
                         size: 14,
                         color: switch (item.status) {
-                          ToolCallStatus.failed => const Color(0xFFDC2626),
+                          ToolCallStatus.failed => dangerTextColor(context),
                           ToolCallStatus.completed => _weTypeGreen,
                           ToolCallStatus.running => _weTypeGreen,
                           ToolCallStatus.pending => secondaryTextColor(context),
@@ -836,7 +837,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                           fontSize: 10.5,
                           fontWeight: FontWeight.w600,
                           color: switch (item.status) {
-                            ToolCallStatus.failed => const Color(0xFFDC2626),
+                            ToolCallStatus.failed => dangerTextColor(context),
                             ToolCallStatus.completed => _weTypeGreen,
                             ToolCallStatus.running => _weTypeGreen,
                             ToolCallStatus.pending => secondaryTextColor(context),
@@ -874,7 +875,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                               fontFamily: 'monospace',
                               color: item.exitCode == 0
                                   ? _weTypeGreen
-                                  : const Color(0xFFDC2626),
+                                  : dangerTextColor(context),
                             ),
                           ),
                         ),
@@ -925,7 +926,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                             fontSize: 11.5,
                             fontFamily: 'monospace',
                             color: item.status == ToolCallStatus.failed
-                                ? const Color(0xFFDC2626)
+                                ? dangerTextColor(context)
                                 : secondaryTextColor(context),
                           ),
                         ),
@@ -938,6 +939,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
 
           // Structured Error Card
           ErrorCardItem() => Container(
+              key: const Key('error-card'),
               padding: const EdgeInsets.all(11),
               decoration: BoxDecoration(
                 color: dangerBgColor(context),
@@ -982,8 +984,8 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
               final risk = item.risk;
               final riskColor = switch (risk) {
                 PermissionRiskLevel.low => _weTypeGreen,
-                PermissionRiskLevel.medium => const Color(0xFFD97706),
-                PermissionRiskLevel.high => const Color(0xFFDC2626),
+                PermissionRiskLevel.medium => warnTextColor(context),
+                PermissionRiskLevel.high => dangerTextColor(context),
                 PermissionRiskLevel.unknown => secondaryTextColor(context),
               };
               final riskLabel = switch (risk) {
@@ -1085,7 +1087,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                           : LucideIcons.circleCheck,
                                   size: 15,
                                   color: item.resolvedDecision == 'reject'
-                                      ? const Color(0xFFDC2626)
+                                      ? dangerTextColor(context)
                                       : item.resolvedDecision == 'unknown'
                                           ? secondaryTextColor(context)
                                           : _weTypeGreen,
@@ -1103,7 +1105,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                     fontSize: 12,
                                     fontWeight: FontWeight.w500,
                                     color: item.resolvedDecision == 'reject'
-                                        ? const Color(0xFFDC2626)
+                                        ? dangerTextColor(context)
                                         : item.resolvedDecision == 'unknown'
                                             ? secondaryTextColor(context)
                                             : _weTypeGreen,
@@ -1138,7 +1140,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                           child: OutlinedButton(
                                             key: Key('btn-perm-reject-${item.permissionId}'),
                                             style: OutlinedButton.styleFrom(
-                                              foregroundColor: const Color(0xFFDC2626),
+                                              foregroundColor: dangerTextColor(context),
                                               side: BorderSide(color: Color(0xFFF0B7B7)),
                                               padding: const EdgeInsets.symmetric(horizontal: 14),
                                               shape: RoundedRectangleBorder(
@@ -1439,11 +1441,32 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   Icon(LucideIcons.activity, size: 13.5, color: _weTypeGreen),
                   const SizedBox(width: 7),
                   Text(
-                    '${item.inputTokens} in · ${item.outputTokens} out · \$${item.costUsd.toStringAsFixed(4)}',
+                    widget.client.strings.usageCardLabel,
                     style: TextStyle(
-                      fontSize: 11,
-                      fontFamily: 'monospace',
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
                       color: secondaryTextColor(context),
+                    ),
+                  ),
+                  const Spacer(),
+                  // 7.5：本轮 tokens/费用三格展示
+                  Text(
+                    '${widget.client.strings.usageInput} ${item.inputTokens}',
+                    style: TextStyle(fontSize: 10.5, fontFamily: 'monospace', color: secondaryTextColor(context)),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${widget.client.strings.usageOutput} ${item.outputTokens}',
+                    style: TextStyle(fontSize: 10.5, fontFamily: 'monospace', color: secondaryTextColor(context)),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${widget.client.strings.usageCost} \$${item.costUsd.toStringAsFixed(4)}',
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w600,
+                      color: _weTypeGreen,
                     ),
                   ),
                 ],
@@ -1506,14 +1529,14 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = filled ? Colors.white : warnTextColor(context);
+    final color = filled ? Colors.white : warnTextColor(context); // 白字配 warnBtnBg
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: filled ? warnTextColor(context) : Colors.transparent,
+          color: filled ? warnBtnBgColor(context) : Colors.transparent,
           border: Border.all(
             color: const Color(0xFFB45309).withValues(alpha: 0.45),
           ),

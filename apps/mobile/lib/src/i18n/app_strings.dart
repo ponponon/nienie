@@ -765,4 +765,50 @@ class NienieStrings {
         AppLanguage.ja => '画面キャプチャ',
         AppLanguage.ko => '화면 캡처',
       };
+
+  // ===== 7.4 空状态教学化 =====
+
+  String get emptyStateTitle => switch (lang) {
+        AppLanguage.zh => '还没有会话',
+        AppLanguage.en => 'No sessions yet',
+        AppLanguage.ja => 'まだセッションがありません',
+        AppLanguage.ko => '아직 세션이 없습니다',
+      };
+
+  String get emptyStateBody => switch (lang) {
+        AppLanguage.zh => '在电脑上打开 OpenCode / Codex，然后点击左下角配对，即可在手机上继续。',
+        AppLanguage.en => 'Open OpenCode / Codex on your computer, then tap Pair (bottom-left) to continue here.',
+        AppLanguage.ja => 'パソコンで OpenCode / Codex を開き、左下の「ペアリング」をタップして続行します。',
+        AppLanguage.ko => 'PC에서 OpenCode / Codex를 연 후 왼쪽 아래 페어링을 눌러 계속하세요.',
+      };
+
+  // ===== 7.5 用量卡 =====
+
+  String get usageCardLabel => switch (lang) {
+        AppLanguage.zh => '本轮用量',
+        AppLanguage.en => 'Usage this round',
+        AppLanguage.ja => '今回合の使用量',
+        AppLanguage.ko => '이번 사용량',
+      };
+
+  String get usageInput => switch (lang) {
+        AppLanguage.zh => '输入',
+        AppLanguage.en => 'Input',
+        AppLanguage.ja => '入力',
+        AppLanguage.ko => '입력',
+      };
+
+  String get usageOutput => switch (lang) {
+        AppLanguage.zh => '输出',
+        AppLanguage.en => 'Output',
+        AppLanguage.ja => '出力',
+        AppLanguage.ko => '출력',
+      };
+
+  String get usageCost => switch (lang) {
+        AppLanguage.zh => '费用',
+        AppLanguage.en => 'Cost',
+        AppLanguage.ja => '費用',
+        AppLanguage.ko => '비용',
+      };
 }

@@ -376,7 +376,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           Expanded(
             child: Text(
               '${s.reconnectBannerPrefix}${client.reconnectAttempt}${s.reconnectBannerSuffix}',
-              style: TextStyle(fontSize: 12, color: Color(0xFFB45309), height: 1.4),
+              style: TextStyle(fontSize: 12, color: warnTextColor(context), height: 1.4),
             ),
           ),
         ],
@@ -731,25 +731,62 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             _buildSessionSummary(client, active)!],
         // Pure Kelivo Chat Canvas (100% clean white space when no messages yet)
         Expanded(
-          child: active == null
-              ? const SizedBox.shrink()
-              : SessionTimelineList(
-                  // P2：切换会话强制重建（不继承滚动状态/新回复提示）
-                  key: ValueKey('timeline-${active.id}'),
-                  client: client,
-                  session: active,
-                  // 4.5：引用追问——引用块追加输入框（保留草稿），光标移到末尾
-                  onQuoteReply: (quote) {
-                    setState(() {
-                      final prefix = _promptController.text.isEmpty ? '' : '\n\n';
-                      _promptController.text =
-                          '${_promptController.text}$prefix> ${quote.replaceAll('\n', '\n> ')}\n\n';
-                      _promptController.selection = TextSelection.fromPosition(
-                        TextPosition(offset: _promptController.text.length),
-                      );
-                    });
-                  },
+          child: Builder(builder: (bctx) {
+            if (active == null) return const SizedBox.shrink();
+            final timeline = client.timelineFor(active.id);
+            if (timeline.isEmpty) {
+              // 7.4：空状态教学化——还没有会话时给操作指引
+              return Center(
+                key: const Key('empty-state-guide'),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 36),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(LucideIcons.messageSquareDashed,
+                          size: 34, color: mutedTextColor(context)),
+                      const SizedBox(height: 12),
+                      Text(
+                        client.strings.emptyStateTitle,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: primaryTextColor(context),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        client.strings.emptyStateBody,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.5,
+                          color: secondaryTextColor(context),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+              );
+            }
+            return SessionTimelineList(
+              // P2：切换会话强制重建（不继承滚动状态/新回复提示）
+              key: ValueKey('timeline-${active.id}'),
+              client: client,
+              session: active,
+              // 4.5：引用追问——引用块追加输入框（保留草稿），光标移到末尾
+              onQuoteReply: (quote) {
+                setState(() {
+                  final prefix = _promptController.text.isEmpty ? '' : '\n\n';
+                  _promptController.text =
+                      '${_promptController.text}$prefix> ${quote.replaceAll('\n', '\n> ')}\n\n';
+                  _promptController.selection = TextSelection.fromPosition(
+                    TextPosition(offset: _promptController.text.length),
+                  );
+                });
+              },
+            );
+          }),
         ),
 
         // Kelivo 1:1 Floating Two-Deck Rounded Composer Capsule (R22, always visible)
@@ -902,7 +939,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                           child: IconButton.filled(
                             key: const Key('btn-send-prompt'),
                             padding: EdgeInsets.zero,
-                            style: IconButton.styleFrom(backgroundColor: primaryTextColor(context), foregroundColor: Colors.white, shape: const CircleBorder()),
+                            style: IconButton.styleFrom(backgroundColor: primaryTextColor(context), foregroundColor: isDark(context) ? const Color(0xFF121212) : Colors.white, shape: const CircleBorder()),
                             // 断线/重连期间禁用发送（补发语义：重连后自动同步会话消息，不谎称本地排队）
                             onPressed: client.connectionState == BridgeConnectionState.connected
                                 ? () async {

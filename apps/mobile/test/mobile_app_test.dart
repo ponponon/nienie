@@ -332,7 +332,7 @@ void main() {
       await tester.drag(find.byType(ListView).last, const Offset(0, -300));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('1500 in · 420 out'), findsOneWidget);
+      expect(find.textContaining('Input 1500'), findsOneWidget);
 
       // 终止按钮已合并进发送/停止切换，直接调用 client
       await client.cancelActiveSession();
@@ -3034,6 +3034,8 @@ void main() {
     final other = await client.createSession(agentId: 'opencode', title: 'B 会话');
     client.activeSession = other;
     await client.loadSessionSnapshot(other.id);
+    client.connectionState = BridgeConnectionState.connected;
+    await client.sendMessage('B 的内容'); // B 有内容才有时间线列表
     await tester.pumpAndSettle();
     // 重置：提示消失 + B 定位最新（初始底部）
     expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
@@ -3859,6 +3861,10 @@ void main() {
     tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
     addTearDown(() => tester.platformDispatcher.platformBrightnessTestValue = Brightness.light);
     await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
     final context = tester.element(find.byType(Scaffold));
     // 背景与卡片均为暗色（不瞎眼）
     expect(Theme.of(context).brightness, Brightness.dark);
@@ -3867,20 +3873,28 @@ void main() {
     expect(appBgColor(context), const Color(0xFF121212));
     expect(cardBgColor(context), const Color(0xFF1C1C1E));
 
-    // 渲染级断言：暗色下用户气泡背景为暗色（不再是浅灰 #F3F4F6）
+    // 渲染级断言（Round4：Key 定位具体 Widget，不扫全树防误判）
     await tester.enterText(find.byKey(const Key('input-session-prompt')), 'bubble');
     await tester.tap(find.byKey(const Key('btn-send-prompt')));
     await tester.pumpAndSettle();
-    // 扫渲染树 BoxDecoration 背景色验证
-    final containers = tester
-        .widgetList<Container>(find.byType(Container))
-        .map((c) => c.decoration)
-        .whereType<BoxDecoration>()
-        .map((d) => d.color)
-        .whereType<Color>()
-        .toList();
-    expect(containers, contains(const Color(0xFF2C2C2E))); // userBubbleBg 暗值出现在渲染树
-    expect(containers, isNot(contains(const Color(0xFFF3F4F6)))); // 浅灰气泡底消失
+    expect(find.text('bubble'), findsOneWidget); // 气泡文本确实渲染
+    final bubbleBox = tester
+        .widget<Container>(find.byKey(const Key('user-bubble')))
+        .decoration! as BoxDecoration;
+    expect(bubbleBox.color, userBubbleBgColor(context)); // 气泡背景=暗色映射
+
+    // 错误卡渲染级：暗色背景 + 亮红前景
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'dm1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'error',
+      'payload': {'errorId': 'e_dm', 'code': 'X', 'message': 'boom', 'retryable': true},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    final errBox = tester
+        .widget<Container>(find.byKey(const Key('error-card')))
+        .decoration! as BoxDecoration;
+    expect(errBox.color, dangerBgColor(context)); // 错误卡背景=暗色映射
   });
 
   testWidgets('7.3b 键盘提交成功触发触感、失败不触发、快捷指令与批准触发', (WidgetTester tester) async {
@@ -3957,6 +3971,35 @@ void main() {
     expect(calls.where((c) => c.method == 'HapticFeedback.vibrate'), isNotEmpty);
     // 气泡微动效存在
     expect(find.byType(TweenAnimationBuilder<double>), findsWidgets);
+  });
+
+  testWidgets('7.4 空状态教学化：空时间线显示操作指引', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    // 进入空会话（ses_beta 无内容）→ 引导卡
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    await client.openSession(client.sessions.firstWhere((x) => x.id == 'ses_beta'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('empty-state-guide')), findsOneWidget);
+    expect(find.textContaining('No sessions yet'), findsWidgets); // EN 默认
+  });
+
+  testWidgets('7.5 用量卡：tokens/费用三格展示', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'ug1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'usage',
+      'payload': {'inputTokens': 1500, 'outputTokens': 420, 'costUsd': 0.042},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.textContaining('Usage this round'), findsWidgets); // 卡标题
+    expect(find.textContaining('Input 1500'), findsOneWidget);
+    expect(find.textContaining('Output 420'), findsOneWidget);
+    expect(find.textContaining(r'Cost $0.0420'), findsOneWidget);
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {

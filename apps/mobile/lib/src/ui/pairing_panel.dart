@@ -239,7 +239,7 @@ class _PairingPanelState extends State<PairingPanel> {
                         key: const Key('btn-open-qr-scanner'),
                         style: FilledButton.styleFrom(
                           backgroundColor: _weTypeGreen,
-                          foregroundColor: Colors.white,
+                          foregroundColor: isDark(context) ? const Color(0xFF121212) : Colors.white,
                           padding: const EdgeInsets.symmetric(horizontal: 13),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),

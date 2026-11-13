@@ -31,6 +31,13 @@ Color mutedTextColor(BuildContext context) =>
 Color warnTextColor(BuildContext context) =>
     isDark(context) ? const Color(0xFFF8C47C) : const Color(0xFFB45309);
 
+/// 危险文字（暗色底上浅红，≥4.5:1）
+Color dangerTextColor(BuildContext context) =>
+    isDark(context) ? const Color(0xFFFCA5A5) : const Color(0xFFDC2626);
+
+/// 警示按钮填充背景（文字用白色——与 warnTextColor 拆分，避免 1.59:1 反向对比）
+Color warnBtnBgColor(BuildContext context) => const Color(0xFFB45309);
+
 /// 选中态浅底（会话行/Agent 胶囊）
 Color selectedBgColor(BuildContext context) =>
     isDark(context) ? const Color(0xFF2C2C2E) : const Color(0xFFF2F4F7);

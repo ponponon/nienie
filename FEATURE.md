@@ -789,3 +789,11 @@
 - **5.1 快捷指令栏**：输入框上方横向胶囊（`QuickCommandsBar`）——默认四条（继续/跑测试/看报错/总结改动，四语言）；点击**追加填充输入框保留草稿**（光标末尾）；长按删除（确认弹窗）；`+` 添加自定义（弹窗输入）；**按 Agent 定制**（scope=agentId，`DeviceCredentialStore.saveQuickCommands/loadQuickCommands` 持久化，InMemory/File 双实现；无自定义=null=内置默认）。
 - **5.2 回到底部按钮**：时间线初始停在底部（聊天语义）；在底部时新内容**静默跟随**；翻历史时新回复到达 → 浮出「↓ 有新回复」（不强制跳底），点击跳底+隐藏，用户滚回底部自动收起；`session-timeline-list` key 供测试/滚动定位。
 - 测试：默认胶囊/点击追加保留草稿/长按删除/添加自定义、Agent 隔离+持久化恢复、翻历史浮出/点击跳底/底部不浮出；mobile 79（+3）、全仓 275 vitest 全绿。
+
+### 2026-11-12 路线图#7 Round 4（对比度收口 + 7.4/7.5 范围闭合）
+
+- **P1 对比度**：dangerTextColor（暗 #FCA5A5/浅 #DC2626）——错误卡/审批高风险/拒绝/已拒绝文字；审批 Medium/Uncertain/Waiting→warnTextColor；_ActionButton 拆 warnBtnBgColor 填充背景（修 1.59:1 反向对比）；重连横幅文字→warnTextColor；发送按钮暗色深前景（修 1.26:1）。
+- **P2**：配对绿按钮暗色深前景；渲染测试改 **Key 定位具体 Widget**（user-bubble/error-card 防全树误判）+ 气泡文本/错误卡背景断言。
+- **7.4 空状态教学化**：空时间线显示 `empty-state-guide` 引导卡（「还没有会话→在电脑上打开 OpenCode/Codex，点左下角配对」四语言）。
+- **7.5 用量卡**：UsageSummaryItem 升级三格卡（本轮用量 · Input N · Output N · Cost $X）。
+- mobile 113（+2）。
