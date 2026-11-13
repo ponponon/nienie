@@ -66,14 +66,14 @@ class _PairingPanelState extends State<PairingPanel> {
       child: Icon(
         icon,
         size: 16,
-        color: active ? _weTypeGreen : const Color(0xFF52555D),
+        color: active ? _weTypeGreen : inactiveIconColor(context),
       ),
     );
   }
 
   BoxDecoration _cardDecoration() {
     return BoxDecoration(
-      color: Colors.white,
+      color: appBgColor(context),
       borderRadius: BorderRadius.circular(13),
       border: Border.all(color: _cardBorder),
       boxShadow: const [
@@ -380,7 +380,7 @@ class _PairingPanelState extends State<PairingPanel> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 2),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF6F7F9),
+                    color: inputBgColor(context),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: const Color(0x12000000)),
                   ),
@@ -415,7 +415,7 @@ class _PairingPanelState extends State<PairingPanel> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 2),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF6F7F9),
+                    color: inputBgColor(context),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: const Color(0x12000000)),
                   ),

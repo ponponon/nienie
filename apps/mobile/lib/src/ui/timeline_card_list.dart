@@ -457,7 +457,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
-                  color: Color(0xFFF3F4F6),
+                  color: userBubbleBgColor(context),
                   borderRadius: BorderRadius.only(
                     topLeft: Radius.circular(18),
                     topRight: Radius.circular(18),
@@ -529,7 +529,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.7),
+                          color: attachChipBgColor(context),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Row(
@@ -581,7 +581,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
               ? Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFF7ED),
+                    color: warnBgColor(context),
                     border: Border.all(
                       color: const Color(0xFFF59E0B).withValues(alpha: 0.35),
                     ),
@@ -595,7 +595,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                           Icon(
                             LucideIcons.clockAlert,
                             size: 14,
-                            color: Color(0xFFB45309),
+                            color: warnTextColor(context),
                           ),
                           const SizedBox(width: 6),
                           Text(
@@ -603,7 +603,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
-                              color: Color(0xFFB45309),
+                              color: warnTextColor(context),
                             ),
                           ),
                         ],
@@ -940,7 +940,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
           ErrorCardItem() => Container(
               padding: const EdgeInsets.all(11),
               decoration: BoxDecoration(
-                color: const Color(0xFFFEF2F2),
+                color: dangerBgColor(context),
                 border: Border.all(
                   color: const Color(0xFFEF4444).withValues(alpha: 0.3),
                 ),
@@ -1005,7 +1005,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
               return Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: focused ? const Color(0xFFEFF6FF) : const Color(0xFFFFFDF7),
+                color: focused ? infoBgColor(context) : cautionBgColor(context),
                 border: Border.all(
                   // 聚焦用独立蓝色描边（与风险色解耦）
                   color: focused ? const Color(0xFF2563EB) : riskColor.withValues(alpha: 0.32),
@@ -1506,14 +1506,14 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = filled ? Colors.white : const Color(0xFFB45309);
+    final color = filled ? Colors.white : warnTextColor(context);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: filled ? const Color(0xFFB45309) : Colors.transparent,
+          color: filled ? warnTextColor(context) : Colors.transparent,
           border: Border.all(
             color: const Color(0xFFB45309).withValues(alpha: 0.45),
           ),

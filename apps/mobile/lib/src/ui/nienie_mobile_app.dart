@@ -104,7 +104,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           return Scaffold(
             key: _scaffoldKey,
             backgroundColor:
-                isConnected ? Colors.white : userBubbleBgColor(context),
+                appBgColor(context),
             drawer: isConnected
                 ? KelivoWorkspaceDrawer(
                     client: client,
@@ -323,7 +323,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         borderRadius: BorderRadius.circular(12),
         side: const BorderSide(color: _borderSubtle),
       ),
-      color: Colors.white,
+      color: appBgColor(context),
       elevation: 6,
       itemBuilder: (context) => const [
         PopupMenuItem(value: AppLanguage.zh, child: Text('中文 (简体)')),
@@ -877,7 +877,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: chipBgColor(context),
                                 borderRadius: BorderRadius.circular(999),
                                 border: Border.all(color: const Color(0x18000000)),
                               ),

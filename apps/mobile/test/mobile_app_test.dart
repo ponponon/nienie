@@ -3866,6 +3866,21 @@ void main() {
     // 时间线主卡背景（暗色）
     expect(appBgColor(context), const Color(0xFF121212));
     expect(cardBgColor(context), const Color(0xFF1C1C1E));
+
+    // 渲染级断言：暗色下用户气泡背景为暗色（不再是浅灰 #F3F4F6）
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'bubble');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pumpAndSettle();
+    // 扫渲染树 BoxDecoration 背景色验证
+    final containers = tester
+        .widgetList<Container>(find.byType(Container))
+        .map((c) => c.decoration)
+        .whereType<BoxDecoration>()
+        .map((d) => d.color)
+        .whereType<Color>()
+        .toList();
+    expect(containers, contains(const Color(0xFF2C2C2E))); // userBubbleBg 暗值出现在渲染树
+    expect(containers, isNot(contains(const Color(0xFFF3F4F6)))); // 浅灰气泡底消失
   });
 
   testWidgets('7.3b 键盘提交成功触发触感、失败不触发、快捷指令与批准触发', (WidgetTester tester) async {

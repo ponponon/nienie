@@ -153,7 +153,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
-                          color: isSelected ? Colors.white : panelBgColor(context),
+                          color: isSelected ? selectedBgColor(context) : panelBgColor(context),
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
                             color: isSelected
@@ -483,7 +483,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         margin: const EdgeInsets.only(bottom: 2),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFF2F4F7) : Colors.transparent,
+          color: isSelected ? selectedBgColor(context) : Colors.transparent,
           borderRadius: BorderRadius.circular(9),
         ),
         child: Column(
@@ -510,7 +510,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                      color: isSelected ? primaryTextColor(context) : const Color(0xFF2C2E33),
+                      color: primaryTextColor(context),
                     ),
                   ),
                 ),
@@ -561,7 +561,7 @@ void showMultiComputerSheet({
       return Container(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
         decoration: BoxDecoration(
-          color: Color(0xFFF8F9FA),
+          color: panelBgColor(context),
           borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
         ),
         child: SafeArea(
@@ -589,7 +589,7 @@ void showMultiComputerSheet({
                     style: TextStyle(
                       fontSize: 15.5,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFF141416),
+                      color: primaryTextColor(context),
                     ),
                   ),
                   TextButton.icon(
@@ -628,7 +628,7 @@ void showMultiComputerSheet({
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: appBgColor(context),
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: const Color(0x12000000)),
                 ),
@@ -676,7 +676,7 @@ void showMultiComputerSheet({
                                     style: TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w600,
-                                      color: Color(0xFF141416),
+                                      color: primaryTextColor(context),
                                     ),
                                   ),
                                   Text(
@@ -684,7 +684,7 @@ void showMultiComputerSheet({
                                     style: TextStyle(
                                       fontSize: 11.5,
                                       fontFamily: 'monospace',
-                                      color: Color(0xFF686C75),
+                                      color: secondaryTextColor(context),
                                     ),
                                   ),
                                 ],

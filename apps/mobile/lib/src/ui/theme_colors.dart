@@ -23,9 +23,25 @@ Color primaryTextColor(BuildContext context) =>
 Color secondaryTextColor(BuildContext context) =>
     isDark(context) ? const Color(0xFF989BA3) : const Color(0xFF686C75);
 
-/// 弱化文字
+/// 弱化文字（暗色提亮至 ≥4.5:1 对比）
 Color mutedTextColor(BuildContext context) =>
-    isDark(context) ? const Color(0xFF6C7077) : const Color(0xFF989CA5);
+    isDark(context) ? const Color(0xFF8A8F98) : const Color(0xFF989CA5);
+
+/// 警示文字（暗色底上专用亮橙，≥4.5:1）
+Color warnTextColor(BuildContext context) =>
+    isDark(context) ? const Color(0xFFF8C47C) : const Color(0xFFB45309);
+
+/// 选中态浅底（会话行/Agent 胶囊）
+Color selectedBgColor(BuildContext context) =>
+    isDark(context) ? const Color(0xFF2C2C2E) : const Color(0xFFF2F4F7);
+
+/// 输入框底
+Color inputBgColor(BuildContext context) =>
+    isDark(context) ? const Color(0xFF2C2C2E) : const Color(0xFFF6F7F9);
+
+/// 非激活图标
+Color inactiveIconColor(BuildContext context) =>
+    isDark(context) ? const Color(0xFF989BA3) : const Color(0xFF52555D);
 
 /// 描边
 Color subtleBorderColor(BuildContext context) =>
