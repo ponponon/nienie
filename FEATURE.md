@@ -804,3 +804,8 @@
 - **小屏溢出修复（真 bug）**：AppBar 副标题 Row `mainAxisSize.min` 内 Flexible 不收缩 + _StatusPill 非弹性宽 → 85px 溢出——去 min + FittedBox.scaleDown 防御；模型胶囊同病同修（内 Row min→max）。
 - 7.5 用量卡三格改 Wrap（小屏换行）。
 - mobile 115（+2）。
+
+### 2026-11-12 路线图#7 Final QA v2（三点补强：真实渲染/溢出断言/文档落盘）
+
+- 超时卡改**真实路径**构造（sendMessage+假时钟超时 45s 阈值→timedOut 占位渲染断言）；360dp 测试恢复 `takeException()==null` 真实验证 85px 溢出关闭；FailureExperience 更新「已定位已修」（此前 heredoc&&链未落盘）。
+- mobile 115。
