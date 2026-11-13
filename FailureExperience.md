@@ -1097,3 +1097,9 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - **事故**：360dp 小屏溢出定位中，替换 `FlutterError.onError` 捕获 details → 测试 10 分钟超时挂死（pumpAndSettle 排水受干扰）；且替换后 `tester.takeException()` 假绿（异常被自定义 handler 吞掉）。
 - **已定位已修（7b04fac）**：85px 溢出=AppBar 副标题 Row（`mainAxisSize.min` 内 Flexible 不收缩 + _StatusPill 非弹性宽）——去 min + StatusPill 包 FittedBox.scaleDown 修复，并在 360dp 测试恢复 `takeException()==null` 真实验证关闭。**残留教训**：`mainAxisSize: MainAxisSize.min` 的 Row 内 Flexible 不起收缩作用（intrinsic 定宽）——要收缩必须默认 max 布局。
 - **教训**：不要在 testWidgets 内替换 FlutterError.onError（挂死+假绿双坑）；溢出定位用 `tester.view.physicalSize` + 一次性独立调试脚本跑 `allElements` 扫 RenderFlex intrinsic，不进主测试。
+
+### 2026-11-13 macOS 本机 Flutter/Android 构建工具链连环坑（APK 构建受阻记录）
+
+- **症状链**：`flutter build apk --release` 零输出超时（多次）→ 查明 ① bash tool timeout 会杀整个进程组（nohup 不豁免；**python `subprocess.Popen(start_new_session=True)` 才真正脱离**）② 被杀进程残留 `bin/cache/lockfile` 使后续 flutter 命令启动即挂 ③ gradle daemon registry 因强杀损坏（FileIntegrityViolation）④ 最终真实构建错误=**GeneratedPluginRegistrant stale**（file_picker 的 `com.mr.flutter.plugin.filepicker.FilePickerPlugin` 符号丢失）⑤ `flutter clean` 亦零输出挂起。
+- **假超时陷阱**：`flutter build | tail` 管道中 gradle daemon 继承 stdout fd → tail 永不 EOF → tool timeout 判挂但构建其实在跑/或已 exit 0；判断构建状态要看产物目录与进程 CPU（0% 空转=互锁，非编译）。
+- **待办**：APK 构建需在干净环境重试（重启 Android Studio 释放 SDK 锁 / `flutter clean` 成功后 `pub get` 重建 registrant / 或换 CI 机器构建内测包）；产品代码与测试基线（116 mobile+275 vitest）不受影响。
