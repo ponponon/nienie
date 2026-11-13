@@ -178,7 +178,7 @@ class _PairingPanelState extends State<PairingPanel> {
                         IconButton(
                           key: Key('btn-remove-machine-${client.savedMachines[i].machineId}'),
                           visualDensity: VisualDensity.compact,
-                          tooltip: 'Remove Machine',
+                          tooltip: client.strings.tooltipRemoveMachine,
                           onPressed: () => client.removeSavedMachine(
                             client.savedMachines[i].machineId,
                           ),

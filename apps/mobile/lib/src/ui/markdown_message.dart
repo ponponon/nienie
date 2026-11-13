@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'theme_colors.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
@@ -11,8 +12,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../i18n/app_strings.dart';
 
-const Color _textPrimary = Color(0xFF141416);
-const Color _textSecondary = Color(0xFF686C75);
 const Color _weTypeGreen = Color(0xFF17B378);
 const Color _codeBg = Color(0xFF17181C);
 const Color _codeHeader = Color(0xFF22242B);
@@ -65,75 +64,75 @@ class MarkdownMessage extends StatelessWidget {
         'pre': _CodeBlockBuilder(strings),
       },
       styleSheet: MarkdownStyleSheet(
-        p: const TextStyle(
-          color: _textPrimary,
+        p: TextStyle(
+          color: primaryTextColor(context),
           fontSize: 14,
           height: 1.55,
         ),
-        h1: const TextStyle(
-          color: _textPrimary,
+        h1: TextStyle(
+          color: primaryTextColor(context),
           fontSize: 20,
           height: 1.35,
           fontWeight: FontWeight.w700,
         ),
-        h2: const TextStyle(
-          color: _textPrimary,
+        h2: TextStyle(
+          color: primaryTextColor(context),
           fontSize: 17.5,
           height: 1.35,
           fontWeight: FontWeight.w700,
         ),
-        h3: const TextStyle(
-          color: _textPrimary,
+        h3: TextStyle(
+          color: primaryTextColor(context),
           fontSize: 15.5,
           height: 1.4,
           fontWeight: FontWeight.w600,
         ),
-        h4: const TextStyle(
-          color: _textPrimary,
+        h4: TextStyle(
+          color: primaryTextColor(context),
           fontSize: 14.5,
           height: 1.4,
           fontWeight: FontWeight.w600,
         ),
-        em: const TextStyle(
-          color: _textPrimary,
+        em: TextStyle(
+          color: primaryTextColor(context),
           fontStyle: FontStyle.italic,
         ),
-        strong: const TextStyle(
-          color: _textPrimary,
+        strong: TextStyle(
+          color: primaryTextColor(context),
           fontWeight: FontWeight.w700,
         ),
-        a: const TextStyle(
+        a: TextStyle(
           color: _weTypeGreen,
           decoration: TextDecoration.underline,
         ),
         code: TextStyle(
-          color: _textPrimary,
+          color: primaryTextColor(context),
           fontSize: 13,
           fontFamily: 'monospace',
-          backgroundColor: const Color(0xFFF3F4F6),
+          backgroundColor: chipBgColor(context),
         ),
-        blockquote: const TextStyle(
-          color: _textSecondary,
+        blockquote: TextStyle(
+          color: secondaryTextColor(context),
           fontSize: 14,
           height: 1.55,
         ),
-        blockquoteDecoration: const BoxDecoration(
+        blockquoteDecoration: BoxDecoration(
           border: Border(
             left: BorderSide(color: _weTypeGreen, width: 3),
           ),
         ),
         blockquotePadding: const EdgeInsets.only(left: 12),
-        listBullet: const TextStyle(
-          color: _textSecondary,
+        listBullet: TextStyle(
+          color: secondaryTextColor(context),
           fontSize: 14,
         ),
-        horizontalRuleDecoration: const BoxDecoration(
+        horizontalRuleDecoration: BoxDecoration(
           border: Border(
             top: BorderSide(color: Color(0x12000000), width: 1),
           ),
         ),
         // 代码块外观由自定义 builder 提供，清空默认 pre 包装的底色
-        codeblockDecoration: const BoxDecoration(),
+        codeblockDecoration: BoxDecoration(),
       ),
     );
   }
@@ -246,7 +245,7 @@ class _CodeBlockState extends State<_CodeBlock> {
                 Expanded(
                   child: Text(
                     widget.language?.isNotEmpty == true ? widget.language! : 'code',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: _codeHeaderLabel,
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -280,7 +279,7 @@ class _CodeBlockState extends State<_CodeBlock> {
               widget.code,
               language: widget.language,
               theme: atomOneDarkTheme,
-              textStyle: const TextStyle(
+              textStyle: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 12.5,
                 height: 1.55,

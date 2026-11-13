@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'theme_colors.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/services.dart';
 import 'package:nienie_mobile/src/services/attachment_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../i18n/app_strings.dart';
@@ -73,6 +75,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     return MaterialApp(
       title: 'Nienie Mobile',
       debugShowCheckedModeBanner: false,
+      // 7.2：跟随系统深色模式（暗色下关键容器/文字不刺眼）
+      themeMode: ThemeMode.system,
       theme: ThemeData.light(useMaterial3: true).copyWith(
         scaffoldBackgroundColor: Colors.white,
         cardColor: Colors.white,
@@ -80,6 +84,16 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         splashFactory: InkRipple.splashFactory,
         colorScheme: ColorScheme.fromSeed(
           seedColor: _weTypeGreen,
+          primary: _weTypeGreen,
+        ),
+      ),
+      darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
+        scaffoldBackgroundColor: const Color(0xFF121212),
+        cardColor: const Color(0xFF1C1C1E),
+        splashFactory: InkRipple.splashFactory,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: _weTypeGreen,
+          brightness: Brightness.dark,
           primary: _weTypeGreen,
         ),
       ),
@@ -130,7 +144,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   ) {
     return AppBar(
       toolbarHeight: 50,
-      backgroundColor: Colors.white,
+      backgroundColor: appBgColor(context),
       foregroundColor: _textPrimary,
       elevation: 0,
       scrolledUnderElevation: 0,
@@ -193,7 +207,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
 
     return AppBar(
       toolbarHeight: 54,
-      backgroundColor: Colors.white,
+      backgroundColor: appBgColor(context),
       surfaceTintColor: Colors.white,
       foregroundColor: _textPrimary,
       elevation: 0,
@@ -201,7 +215,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       leadingWidth: 46,
       leading: IconButton(
         key: const Key('btn-open-drawer'),
-        tooltip: 'Open Workspace Drawer',
+        tooltip: client.strings.tooltipOpenDrawer,
         onPressed: () => _scaffoldKey.currentState?.openDrawer(),
         icon: SvgPicture.string(_kelivoMenuListSvg, width: 18, height: 15),
       ),
@@ -266,14 +280,14 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           IconButton(
             key: const Key('btn-load-diffs'),
             visualDensity: VisualDensity.compact,
-            tooltip: 'Load Session Diffs',
+            tooltip: client.strings.tooltipLoadDiffs,
             onPressed: () => client.loadSessionDiffs(active.id),
             icon: const Icon(LucideIcons.map, size: 19, color: _textPrimary),
           ),
         IconButton(
           key: const Key('btn-new-session'),
           visualDensity: VisualDensity.compact,
-          tooltip: 'New Session',
+          tooltip: client.strings.tooltipNewSession,
           onPressed: () {
             final defaultAgent = client.selectedAgentId.isNotEmpty
                 ? client.selectedAgentId
@@ -294,7 +308,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         IconButton(
           key: const Key('btn-disconnect'),
           visualDensity: VisualDensity.compact,
-          tooltip: 'Disconnect',
+          tooltip: client.strings.tooltipDisconnect,
           onPressed: client.disconnect,
           icon: const Icon(LucideIcons.unplug, size: 17, color: _textSecondary),
         ),
@@ -404,7 +418,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   void _showAttachMenu(BuildContext context, MobileBridgeClient client) {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: appBgColor(context),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -412,14 +426,14 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text('添加附件', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(client.strings.attachMenuTitle, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             ),
             ListTile(
               key: const Key('btn-attach-image'),
               leading: const Icon(LucideIcons.image, size: 20),
-              title: const Text('图片'),
+              title: Text(client.strings.attachImageLabel),
               onTap: () {
                 Navigator.of(ctx).pop();
                 _pickAttachment(FileType.image);
@@ -428,7 +442,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             ListTile(
               key: const Key('btn-attach-file'),
               leading: const Icon(LucideIcons.file, size: 20),
-              title: const Text('文件'),
+              title: Text(client.strings.attachFileLabel),
               onTap: () {
                 Navigator.of(ctx).pop();
                 _pickAttachment(FileType.any);
@@ -468,7 +482,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     final collapsed = <String>{};
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: appBgColor(context),
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
@@ -515,7 +529,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                         onChanged: (v) => setState(() => query = v),
                         style: const TextStyle(fontSize: 14),
                         decoration: InputDecoration(
-                          hintText: '搜索模型',
+                          hintText: client.strings.modelSearchHint,
                           hintStyle: const TextStyle(
                             fontSize: 14,
                             color: _textSecondary,
@@ -542,10 +556,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     // 按 provider 分组的模型列表
                     Flexible(
                       child: filtered.isEmpty
-                          ? const Padding(
-                              padding: EdgeInsets.all(24),
+                          ? Padding(
+                              padding: const EdgeInsets.all(24),
                               child: Text(
-                                '暂无可用模型',
+                                client.strings.noModelsLabel,
                                 style: TextStyle(
                                   fontSize: 13,
                                   color: _textSecondary,
@@ -777,6 +791,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     client: client,
                     agentId: active?.agentId ?? '',
                     onUse: (command) {
+                      HapticFeedback.lightImpact(); // 7.3：快捷指令触感
                       setState(() {
                         // P2：完整保留草稿（含前后空白/多行），仅在末尾无空白时补分隔符
                         final existing = _promptController.text;
@@ -849,7 +864,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                           visualDensity: VisualDensity.compact,
                           padding: const EdgeInsets.symmetric(horizontal: 6),
                           constraints: const BoxConstraints(),
-                          tooltip: '添加附件',
+                          tooltip: client.strings.tooltipAddAttachment,
                           onPressed: () => _showAttachMenu(context, client),
                           icon: const Icon(LucideIcons.plus, size: 18, color: _textSecondary),
                         ),
@@ -905,6 +920,9 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                       for (final a in _attachments) '${a.path}:${a.name}',
                                     ];
                                     final accepted = await client.sendMessage(msg);
+                                    if (accepted) {
+                                      HapticFeedback.lightImpact(); // 7.3：发送触感
+                                    }
                                     if (accepted &&
                                         _promptController.text == draftSnapshot &&
                                         listEquals([

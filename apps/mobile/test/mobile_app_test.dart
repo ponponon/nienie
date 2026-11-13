@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nienie_mobile/src/ui/quick_commands_bar.dart';
+import 'package:nienie_mobile/src/ui/theme_colors.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:nienie_mobile/main.dart';
@@ -3821,6 +3822,76 @@ void main() {
     expect(card.files.length, 1); // 缺 diffId 条目被丢弃
     expect(card.files.single.diffId, 'd_ok');
     client.dispose();
+  });
+
+  testWidgets('7.1 i18n 收编：菜单/提示/tooltips 走四语言资源', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+
+    // 附件菜单（EN 默认）
+    await tester.tap(find.byKey(const Key('btn-attach')));
+    await tester.pumpAndSettle();
+    expect(find.text('Add attachment'), findsOneWidget); // 菜单标题
+    expect(find.text('Image'), findsOneWidget);
+    expect(find.text('File'), findsOneWidget);
+    await tester.tap(find.text('File')); // 关闭菜单
+    await tester.pumpAndSettle();
+
+    // tooltip（EN）
+    expect(
+      tester.widget<IconButton>(find.byKey(const Key('btn-open-drawer'))).tooltip,
+      'Open workspace drawer',
+    );
+
+    // 语言切换 zh → 中文资源
+    await client.setLanguage(AppLanguage.zh);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('btn-attach')));
+    await tester.pumpAndSettle();
+    expect(find.text('添加附件'), findsOneWidget);
+    expect(find.text('图片'), findsOneWidget);
+    await tester.tap(find.text('文件'));
+    await tester.pumpAndSettle();
+    client.dispose();
+  });
+
+  testWidgets('7.2 深色模式：系统暗色下背景/卡片不刺眼白', (WidgetTester tester) async {
+    tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
+    addTearDown(() => tester.platformDispatcher.platformBrightnessTestValue = Brightness.light);
+    await pumpToSession(tester);
+    final context = tester.element(find.byType(Scaffold));
+    // 背景与卡片均为暗色（不瞎眼）
+    expect(Theme.of(context).brightness, Brightness.dark);
+    expect(Theme.of(context).scaffoldBackgroundColor, const Color(0xFF121212));
+    // 时间线主卡背景（暗色）
+    expect(appBgColor(context), const Color(0xFF121212));
+    expect(cardBgColor(context), const Color(0xFF1C1C1E));
+  });
+
+  testWidgets('7.3 触感反馈：发送/长按触发 HapticFeedback', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final calls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        calls.add(call);
+        return null;
+      },
+    );
+
+    // 发送触感
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'hi');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pumpAndSettle();
+    expect(calls.where((c) => c.method == 'HapticFeedback.vibrate'), isNotEmpty);
+
+    // 长按菜单触感
+    calls.clear();
+    await tester.longPress(find.text('hi').first);
+    await tester.pumpAndSettle();
+    expect(calls.where((c) => c.method == 'HapticFeedback.vibrate'), isNotEmpty);
+    // 气泡微动效存在
+    expect(find.byType(TweenAnimationBuilder<double>), findsWidgets);
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {

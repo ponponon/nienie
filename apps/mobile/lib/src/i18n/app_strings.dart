@@ -658,4 +658,111 @@ class NienieStrings {
         AppLanguage.ja => '変更後',
         AppLanguage.ko => '변경 후',
       };
+
+  // ===== 7.1 i18n 收编（散落 tooltip/菜单/提示文案）=====
+
+  String get attachMenuTitle => switch (lang) {
+        AppLanguage.zh => '添加附件',
+        AppLanguage.en => 'Add attachment',
+        AppLanguage.ja => '添付を追加',
+        AppLanguage.ko => '첨부 추가',
+      };
+
+  String get attachImageLabel => switch (lang) {
+        AppLanguage.zh => '图片',
+        AppLanguage.en => 'Image',
+        AppLanguage.ja => '画像',
+        AppLanguage.ko => '이미지',
+      };
+
+  String get attachFileLabel => switch (lang) {
+        AppLanguage.zh => '文件',
+        AppLanguage.en => 'File',
+        AppLanguage.ja => 'ファイル',
+        AppLanguage.ko => '파일',
+      };
+
+  String get modelSearchHint => switch (lang) {
+        AppLanguage.zh => '搜索模型',
+        AppLanguage.en => 'Search models',
+        AppLanguage.ja => 'モデルを検索',
+        AppLanguage.ko => '모델 검색',
+      };
+
+  String get noModelsLabel => switch (lang) {
+        AppLanguage.zh => '暂无可用模型',
+        AppLanguage.en => 'No models available',
+        AppLanguage.ja => '利用可能なモデルがありません',
+        AppLanguage.ko => '사용 가능한 모델 없음',
+      };
+
+  String get connectedComputersTitle => switch (lang) {
+        AppLanguage.zh => '已连接的电脑 (支持多台切换)',
+        AppLanguage.en => 'Connected computers (multi-switch)',
+        AppLanguage.ja => '接続済みのパソコン（複数切替対応）',
+        AppLanguage.ko => '연결된 PC (다중 전환 지원)',
+      };
+
+  String get switchLabel => switch (lang) {
+        AppLanguage.zh => '切换',
+        AppLanguage.en => 'Switch',
+        AppLanguage.ja => '切り替え',
+        AppLanguage.ko => '전환',
+      };
+
+  String get tooltipOpenDrawer => switch (lang) {
+        AppLanguage.zh => '打开工作区',
+        AppLanguage.en => 'Open workspace drawer',
+        AppLanguage.ja => 'ワークスペースを開く',
+        AppLanguage.ko => '작업 공간 열기',
+      };
+
+  String get tooltipLoadDiffs => switch (lang) {
+        AppLanguage.zh => '加载会话改动',
+        AppLanguage.en => 'Load session diffs',
+        AppLanguage.ja => 'セッションの差分を読み込む',
+        AppLanguage.ko => '세션 변경 로드',
+      };
+
+  String get tooltipNewSession => switch (lang) {
+        AppLanguage.zh => '新建会话',
+        AppLanguage.en => 'New session',
+        AppLanguage.ja => '新しいセッション',
+        AppLanguage.ko => '새 세션',
+      };
+
+  String get tooltipDisconnect => switch (lang) {
+        AppLanguage.zh => '断开连接',
+        AppLanguage.en => 'Disconnect',
+        AppLanguage.ja => '切断',
+        AppLanguage.ko => '연결 해제',
+      };
+
+  String get tooltipRemoveMachine => switch (lang) {
+        AppLanguage.zh => '移除设备',
+        AppLanguage.en => 'Remove machine',
+        AppLanguage.ja => 'デバイスを削除',
+        AppLanguage.ko => '장치 제거',
+      };
+
+  String get tooltipAddAttachment => switch (lang) {
+        AppLanguage.zh => '添加附件',
+        AppLanguage.en => 'Add attachment',
+        AppLanguage.ja => '添付を追加',
+        AppLanguage.ko => '첨부 추가',
+      };
+
+  String get replyTimedOutLabel => switch (lang) {
+        AppLanguage.zh => '回复超时',
+        AppLanguage.en => 'Reply timed out',
+        AppLanguage.ja => '応答がタイムアウトしました',
+        AppLanguage.ko => '응답 시간 초과',
+      };
+
+  String get screenCaptureLabel => switch (lang) {
+        AppLanguage.zh => '屏幕截取',
+        AppLanguage.en => 'Screen Capture',
+        AppLanguage.ja => '画面キャプチャ',
+        AppLanguage.ko => '화면 캡처',
+      };
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'theme_colors.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/protocol_models.dart';
 import '../state/mobile_bridge_client.dart';
@@ -46,7 +47,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
 
     return Drawer(
       width: 310,
-      backgroundColor: Colors.white,
+      backgroundColor: appBgColor(context),
       surfaceTintColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.horizontal(right: Radius.circular(20)),
@@ -215,7 +216,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                 height: 40,
                 child: OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
-                    backgroundColor: Colors.white,
+                    backgroundColor: appBgColor(context),
                     foregroundColor: _textPrimary,
                     side: const BorderSide(color: Color(0x18000000)),
                     shape: const StadiumBorder(),
@@ -587,8 +588,8 @@ void showMultiComputerSheet({
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    '已连接的电脑 (支持多台切换)',
+                  Text(
+                    client.strings.connectedComputersTitle,
                     style: TextStyle(
                       fontSize: 15.5,
                       fontWeight: FontWeight.w700,
@@ -711,7 +712,7 @@ void showMultiComputerSheet({
                                     client.savedMachines[i].machineId,
                                   );
                                 },
-                                child: const Text('切换', style: TextStyle(fontSize: 12)),
+                                child: Text(client.strings.switchLabel, style: const TextStyle(fontSize: 12)),
                               ),
                           ],
                         ),

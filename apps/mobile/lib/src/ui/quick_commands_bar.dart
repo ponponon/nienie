@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
+import 'theme_colors.dart';
 
 import '../i18n/app_strings.dart';
 import '../state/mobile_bridge_client.dart';
 
-const Color _textPrimary = Color(0xFF141416);
-const Color _textSecondary = Color(0xFF686C75);
-const Color _chipBg = Color(0xFFF3F4F6);
 
 /// 5.1：快捷指令栏——输入框上方自定义胶囊（按 Agent 定制，点击填充输入框）。
 class QuickCommandsBar extends StatefulWidget {
@@ -83,15 +81,15 @@ class _QuickCommandsBarState extends State<QuickCommandsBar> {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: _chipBg,
+                color: chipBgColor(context),
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
                 command,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12.5,
                   fontWeight: FontWeight.w500,
-                  color: _textPrimary,
+                  color: primaryTextColor(context),
                 ),
               ),
             ),
@@ -179,7 +177,7 @@ class _AddCommandButton extends StatelessWidget {
           border: Border.all(color: const Color(0x12000000)),
           borderRadius: BorderRadius.circular(999),
         ),
-        child: const Icon(Icons.add, size: 15, color: _textSecondary),
+        child: Icon(Icons.add, size: 15, color: secondaryTextColor(context)),
       ),
     );
   }

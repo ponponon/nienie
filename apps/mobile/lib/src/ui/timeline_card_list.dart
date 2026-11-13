@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'theme_colors.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/protocol_models.dart';
@@ -80,7 +81,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   : item.risk == PermissionRiskLevel.high
                       ? widget.client.strings.permConfirmHighRiskNote
                       : widget.client.strings.permConfirmUnknownNote,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
             ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -90,21 +91,21 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   isAlways
                       ? widget.client.strings.permConfirmAlwaysLine
                       : widget.client.strings.permConfirmOnceLine,
-                  style: const TextStyle(fontSize: 12.5),
+                  style: TextStyle(fontSize: 12.5),
                 ),
                 const SizedBox(height: 4),
                 Text(item.permission,
-                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
+                    style: TextStyle(fontSize: 12, fontFamily: 'monospace')),
                 if (item.patterns.isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  Text(widget.client.strings.permConfirmResources, style: const TextStyle(fontSize: 11, color: _textSecondary)),
+                  Text(widget.client.strings.permConfirmResources, style: TextStyle(fontSize: 11, color: secondaryTextColor(context))),
                   Text(item.patterns.join('\n'),
-                      style: const TextStyle(fontSize: 11, fontFamily: 'monospace')),
+                      style: TextStyle(fontSize: 11, fontFamily: 'monospace')),
                 ],
                 if (isAlways) ...[
                   const SizedBox(height: 8),
                   Text(widget.client.strings.permConfirmFutureNote,
-                      style: const TextStyle(fontSize: 11, color: Color(0xFFD97706))),
+                      style: TextStyle(fontSize: 11, color: Color(0xFFD97706))),
                 ],
               ],
             ),
@@ -142,16 +143,16 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             width: 56,
             child: Text(
               label,
-              style: const TextStyle(fontSize: 10.5, color: _textSecondary),
+              style: TextStyle(fontSize: 10.5, color: secondaryTextColor(context)),
             ),
           ),
           Expanded(
             child: SelectableText(
               value,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11.5,
                 fontFamily: 'monospace',
-                color: _textPrimary,
+                color: primaryTextColor(context),
               ),
             ),
           ),
@@ -186,16 +187,16 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
       width: double.infinity,
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: const Color(0xFFF7F8FA),
+        color: cardBgColor(context),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _borderSubtle),
+        border: Border.all(color: subtleBorderColor(context)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 10.5,
               fontWeight: FontWeight.w600,
               color: Color(0xFF2563EB),
@@ -221,7 +222,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                 ? const Color(0xFFDC2626)
                                 : line.startsWith('@@')
                                     ? const Color(0xFF2563EB)
-                                    : _textSecondary,
+                                    : secondaryTextColor(context),
                         backgroundColor: line.startsWith('+')
                             ? _weTypeGreen.withValues(alpha: 0.07)
                             : line.startsWith('-')
@@ -248,7 +249,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             ? _weTypeGreen.withValues(alpha: 0.06)
             : const Color(0xFFEF4444).withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _borderSubtle),
+        border: Border.all(color: subtleBorderColor(context)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -267,10 +268,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             child: SingleChildScrollView(
               child: Text(
                 content.isEmpty ? '—' : content,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontFamily: 'monospace',
-                  color: _textSecondary,
+                  color: secondaryTextColor(context),
                   height: 1.5,
                 ),
               ),
@@ -287,9 +288,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
     required String text,
     UserPromptItem? userItem,
   }) {
+    HapticFeedback.lightImpact(); // 7.3：长按菜单触感
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: appBgColor(context),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -300,7 +302,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             const SizedBox(height: 8),
             ListTile(
               key: const Key('menu-copy-text'),
-              leading: const Icon(LucideIcons.copy, size: 19),
+              leading: Icon(LucideIcons.copy, size: 19),
               title: Text(widget.client.strings.actionCopyText),
               onTap: () async {
                 Navigator.of(ctx).pop();
@@ -317,7 +319,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             ),
             ListTile(
               key: const Key('menu-quote-reply'),
-              leading: const Icon(LucideIcons.quote, size: 19),
+              leading: Icon(LucideIcons.quote, size: 19),
               title: Text(widget.client.strings.actionQuoteReply),
               onTap: () {
                 Navigator.of(ctx).pop();
@@ -330,7 +332,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             if (userItem != null && userItem.receipt != SendReceipt.pending)
               ListTile(
                 key: const Key('menu-resend-from-here'),
-                leading: const Icon(LucideIcons.rotateCcw, size: 19),
+                leading: Icon(LucideIcons.rotateCcw, size: 19),
                 title: Text(widget.client.strings.actionResendFromHere),
                 onTap: () {
                   Navigator.of(ctx).pop();
@@ -412,10 +414,6 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
   }
 
   static const Color _weTypeGreen = Color(0xFF17B378);
-  static const Color _textPrimary = Color(0xFF141416);
-  static const Color _textSecondary = Color(0xFF686C75);
-  static const Color _borderSubtle = Color(0x12000000);
-
   @override
   Widget build(BuildContext context) {
     final items = widget.client.timelineFor(widget.session.id);
@@ -434,7 +432,13 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
         final item = items[index];
         return switch (item) {
           // Kelivo Soft Gray User Prompt Bubble (borderless R18 pill)
-          UserPromptItem() => Column(
+          UserPromptItem() => TweenAnimationBuilder<double>(
+              // 7.3：新气泡淡入微动效（150ms 一次性）
+              tween: Tween(begin: 0, end: 1),
+              duration: const Duration(milliseconds: 150),
+              builder: (context, opacity, child) =>
+                  Opacity(opacity: opacity, child: child),
+              child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -452,7 +456,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   maxWidth: MediaQuery.sizeOf(context).width * 0.8,
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   color: Color(0xFFF3F4F6),
                   borderRadius: BorderRadius.only(
                     topLeft: Radius.circular(18),
@@ -472,8 +476,8 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         Flexible(
                           child: Text(
                             item.message,
-                            style: const TextStyle(
-                              color: _textPrimary,
+                            style: TextStyle(
+                              color: primaryTextColor(context),
                               fontSize: 14,
                               height: 1.45,
                             ),
@@ -484,17 +488,17 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         Builder(builder: (context) {
                           final receipt = item.receipt;
                           final icon = switch (receipt) {
-                            SendReceipt.pending => const Icon(
+                            SendReceipt.pending => Icon(
                                 LucideIcons.clock,
                                 size: 12,
-                                color: _textSecondary,
+                                color: secondaryTextColor(context),
                               ),
-                            SendReceipt.delivered => const Icon(
+                            SendReceipt.delivered => Icon(
                                 LucideIcons.checkCheck,
                                 size: 13,
                                 color: _weTypeGreen,
                               ),
-                            SendReceipt.failed => const Icon(
+                            SendReceipt.failed => Icon(
                                 LucideIcons.circleAlert,
                                 size: 13,
                                 color: Color(0xFFDC2626),
@@ -531,10 +535,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(
+                            Icon(
                               LucideIcons.paperclip,
                               size: 12,
-                              color: _textSecondary,
+                              color: secondaryTextColor(context),
                             ),
                             const SizedBox(width: 5),
                             Flexible(
@@ -544,9 +548,9 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                     : attachment.mime,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 11,
-                                  color: _textSecondary,
+                                  color: secondaryTextColor(context),
                                 ),
                               ),
                             ),
@@ -565,10 +569,11 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   padding: const EdgeInsets.only(right: 4),
                   child: Text(
                     widget.client.strings.relativeTime(item.createdAt),
-                    style: const TextStyle(fontSize: 11, color: _textSecondary),
+                    style: TextStyle(fontSize: 11, color: secondaryTextColor(context)),
                   ),
                 ),
               ],
+            ),
             ),
 
           // 等待回复占位 / 超时兜底卡片
@@ -587,14 +592,14 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     children: [
                       Row(
                         children: [
-                          const Icon(
+                          Icon(
                             LucideIcons.clockAlert,
                             size: 14,
                             color: Color(0xFFB45309),
                           ),
                           const SizedBox(width: 6),
-                          const Text(
-                            'Reply timed out',
+                          Text(
+                            widget.client.strings.replyTimedOutLabel,
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
@@ -604,10 +609,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         ],
                       ),
                       const SizedBox(height: 6),
-                      const Text(
+                      Text(
                         'No response yet. The agent may still be working on the computer.',
                         style: TextStyle(
-                          color: _textSecondary,
+                          color: secondaryTextColor(context),
                           fontSize: 13,
                           height: 1.45,
                         ),
@@ -639,10 +644,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     const SizedBox(width: 8),
                     Text(
                       widget.session.agentId.toUpperCase(),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: _textSecondary,
+                        color: secondaryTextColor(context),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -655,11 +660,11 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    const Text(
+                    Text(
                       'Thinking…',
                       style: TextStyle(
                         fontSize: 12.5,
-                        color: _textSecondary,
+                        color: secondaryTextColor(context),
                         height: 1.4,
                       ),
                     ),
@@ -680,11 +685,11 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         width: 22,
                         height: 22,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF3F4F6),
+                          color: chipBgColor(context),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         alignment: Alignment.center,
-                        child: const Icon(
+                        child: Icon(
                           LucideIcons.sparkles,
                           size: 13,
                           color: _weTypeGreen,
@@ -695,10 +700,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     const SizedBox(width: 8),
                     Text(
                       item.isThinking ? 'Thinking' : widget.session.agentId.toUpperCase(),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: _textSecondary,
+                        color: secondaryTextColor(context),
                       ),
                     ),
                     if (item.isThinking) ...[
@@ -708,7 +713,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                             ? LucideIcons.chevronDown
                             : LucideIcons.chevronUp,
                         size: 14,
-                        color: _textSecondary,
+                        color: secondaryTextColor(context),
                       ),
                     ],
                   ],
@@ -728,8 +733,8 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     child: item.isThinking
                         ? Text(
                             item.text,
-                            style: const TextStyle(
-                              color: _textSecondary,
+                            style: TextStyle(
+                              color: secondaryTextColor(context),
                               fontSize: 14,
                               height: 1.55,
                             ),
@@ -746,7 +751,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   const SizedBox(height: 4),
                   Text(
                     widget.client.strings.relativeTime(item.createdAt),
-                    style: const TextStyle(fontSize: 11, color: _textSecondary),
+                    style: TextStyle(fontSize: 11, color: secondaryTextColor(context)),
                   ),
                 ],
               ],
@@ -756,7 +761,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
           ToolCallCardItem() => Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
-                color: const Color(0xFFF7F8FA),
+                color: cardBgColor(context),
                 border: Border.all(
                   color: switch (item.status) {
                     ToolCallStatus.failed =>
@@ -765,7 +770,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                       _weTypeGreen.withValues(alpha: 0.25),
                     ToolCallStatus.running =>
                       _weTypeGreen.withValues(alpha: 0.35),
-                    ToolCallStatus.pending => _borderSubtle,
+                    ToolCallStatus.pending => subtleBorderColor(context),
                   },
                 ),
                 borderRadius: BorderRadius.circular(12),
@@ -793,17 +798,17 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                           ToolCallStatus.failed => const Color(0xFFDC2626),
                           ToolCallStatus.completed => _weTypeGreen,
                           ToolCallStatus.running => _weTypeGreen,
-                          ToolCallStatus.pending => _textSecondary,
+                          ToolCallStatus.pending => secondaryTextColor(context),
                         },
                       ),
                       const SizedBox(width: 7),
                       Text(
                         item.name,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 12,
                           fontFamily: 'monospace',
-                          color: _textPrimary,
+                          color: primaryTextColor(context),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -812,10 +817,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                           jsonEncode(item.input),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11,
                             fontFamily: 'monospace',
-                            color: _textSecondary,
+                            color: secondaryTextColor(context),
                           ),
                         ),
                       ),
@@ -834,7 +839,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                             ToolCallStatus.failed => const Color(0xFFDC2626),
                             ToolCallStatus.completed => _weTypeGreen,
                             ToolCallStatus.running => _weTypeGreen,
-                            ToolCallStatus.pending => _textSecondary,
+                            ToolCallStatus.pending => secondaryTextColor(context),
                           },
                         ),
                       ),
@@ -843,10 +848,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         const SizedBox(width: 6),
                         Text(
                           item.durationLabel!,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 10.5,
                             fontFamily: 'monospace',
-                            color: _textSecondary,
+                            color: secondaryTextColor(context),
                           ),
                         ),
                       ],
@@ -881,7 +886,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                               ? LucideIcons.chevronUp
                               : LucideIcons.chevronDown,
                           size: 13,
-                          color: _textSecondary,
+                          color: secondaryTextColor(context),
                         ),
                       ],
                     ],
@@ -901,10 +906,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                               await Clipboard.setData(
                                   ClipboardData(text: item.resultContent!));
                             },
-                            child: const Icon(
+                            child: Icon(
                               LucideIcons.copy,
                               size: 13,
-                              color: _textSecondary,
+                              color: secondaryTextColor(context),
                             ),
                           ),
                         ),
@@ -921,7 +926,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                             fontFamily: 'monospace',
                             color: item.status == ToolCallStatus.failed
                                 ? const Color(0xFFDC2626)
-                                : _textSecondary,
+                                : secondaryTextColor(context),
                           ),
                         ),
                       ),
@@ -946,7 +951,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                 children: [
                   Row(
                     children: [
-                      const Icon(
+                      Icon(
                         LucideIcons.circleAlert,
                         size: 15,
                         color: Color(0xFFDC2626),
@@ -954,7 +959,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                       const SizedBox(width: 6),
                       Text(
                         item.code,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 12,
                           fontFamily: 'monospace',
@@ -966,7 +971,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   const SizedBox(height: 3),
                   Text(
                     item.message,
-                    style: const TextStyle(fontSize: 12.5, color: _textPrimary),
+                    style: TextStyle(fontSize: 12.5, color: primaryTextColor(context)),
                   ),
                 ],
               ),
@@ -979,7 +984,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                 PermissionRiskLevel.low => _weTypeGreen,
                 PermissionRiskLevel.medium => const Color(0xFFD97706),
                 PermissionRiskLevel.high => const Color(0xFFDC2626),
-                PermissionRiskLevel.unknown => _textSecondary,
+                PermissionRiskLevel.unknown => secondaryTextColor(context),
               };
               final riskLabel = switch (risk) {
                 PermissionRiskLevel.low => widget.client.strings.riskLow,
@@ -1018,10 +1023,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                       Expanded(
                         child: Text(
                           widget.client.strings.permRequestHeader,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w600,
                             fontSize: 12.5,
-                            color: _textPrimary,
+                            color: primaryTextColor(context),
                           ),
                         ),
                       ),
@@ -1050,15 +1055,15 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     const SizedBox(height: 6),
                     Text(
                       widget.client.strings.permResourcesLabel,
-                      style: const TextStyle(fontSize: 10.5, color: _textSecondary),
+                      style: TextStyle(fontSize: 10.5, color: secondaryTextColor(context)),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       item.patterns.join('\n'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
                         fontFamily: 'monospace',
-                        color: _textPrimary,
+                        color: primaryTextColor(context),
                       ),
                     ),
                   ],
@@ -1082,7 +1087,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                   color: item.resolvedDecision == 'reject'
                                       ? const Color(0xFFDC2626)
                                       : item.resolvedDecision == 'unknown'
-                                          ? _textSecondary
+                                          ? secondaryTextColor(context)
                                           : _weTypeGreen,
                                 ),
                                 const SizedBox(width: 6),
@@ -1100,7 +1105,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                     color: item.resolvedDecision == 'reject'
                                         ? const Color(0xFFDC2626)
                                         : item.resolvedDecision == 'unknown'
-                                            ? _textSecondary
+                                            ? secondaryTextColor(context)
                                             : _weTypeGreen,
                                   ),
                                 ),
@@ -1113,7 +1118,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                 child: Text(
                                   widget.client.strings.permUncertainNote,
                                   key: Key('perm-uncertain-${item.permissionId}'),
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w500,
                                     color: Color(0xFFD97706),
@@ -1134,7 +1139,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                             key: Key('btn-perm-reject-${item.permissionId}'),
                                             style: OutlinedButton.styleFrom(
                                               foregroundColor: const Color(0xFFDC2626),
-                                              side: const BorderSide(color: Color(0xFFF0B7B7)),
+                                              side: BorderSide(color: Color(0xFFF0B7B7)),
                                               padding: const EdgeInsets.symmetric(horizontal: 14),
                                               shape: RoundedRectangleBorder(
                                                 borderRadius: BorderRadius.circular(10),
@@ -1145,7 +1150,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                                 : () => _handlePermissionDecision(item, 'reject'),
                                             child: Text(
                                               widget.client.strings.rejectBtn,
-                                              style: const TextStyle(fontSize: 12),
+                                              style: TextStyle(fontSize: 12),
                                             ),
                                           ),
                                         ),
@@ -1162,10 +1167,13 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                             ),
                                             onPressed: item.replyPending
                                                 ? null
-                                                : () => _handlePermissionDecision(item, 'allow_once'),
+                                                : () {
+                                                    HapticFeedback.lightImpact(); // 7.3：批准触感
+                                                    _handlePermissionDecision(item, 'allow_once');
+                                                  },
                                             child: Text(
                                               widget.client.strings.allowOnceBtn,
-                                              style: const TextStyle(fontSize: 12),
+                                              style: TextStyle(fontSize: 12),
                                             ),
                                           ),
                                         ),
@@ -1186,7 +1194,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                                 : () => _handlePermissionDecision(item, 'allow_always'),
                                             child: Text(
                                               widget.client.strings.allowAlwaysBtn,
-                                              style: const TextStyle(fontSize: 12),
+                                              style: TextStyle(fontSize: 12),
                                             ),
                                           ),
                                         ),
@@ -1198,7 +1206,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                         child: Text(
                                           widget.client.strings.permWaitingLong,
                                           key: Key('perm-waiting-${item.permissionId}'),
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontSize: 10.5,
                                             color: Color(0xFFD97706),
                                           ),
@@ -1219,9 +1227,9 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
               key: Key('change-summary-${item.diffId}'),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
-                color: const Color(0xFFF7F8FA),
+                color: cardBgColor(context),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _borderSubtle),
+                border: Border.all(color: subtleBorderColor(context)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1232,7 +1240,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     borderRadius: BorderRadius.circular(8),
                     child: Row(
                       children: [
-                        const Icon(
+                        Icon(
                           LucideIcons.fileDiff,
                           size: 14.5,
                           color: Color(0xFF2563EB),
@@ -1240,10 +1248,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         const SizedBox(width: 7),
                         Text(
                           widget.client.strings.changeSummaryLabel,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w600,
                             fontSize: 12,
-                            color: _textPrimary,
+                            color: primaryTextColor(context),
                           ),
                         ),
                         const SizedBox(width: 7),
@@ -1251,13 +1259,13 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                           item.files.isEmpty
                               ? widget.client.strings.changeNoChanges
                               : widget.client.strings.changeFilesCount(item.files.length),
-                          style: const TextStyle(fontSize: 11, color: _textSecondary),
+                          style: TextStyle(fontSize: 11, color: secondaryTextColor(context)),
                         ),
                         const Spacer(),
                         if (item.files.isNotEmpty)
                           Text(
                             '+${item.totalAdditions} / -${item.totalDeletions}',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 11.5,
                               fontFamily: 'monospace',
                               fontWeight: FontWeight.w600,
@@ -1268,7 +1276,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                         Icon(
                           item.expanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
                           size: 13,
-                          color: _textSecondary,
+                          color: secondaryTextColor(context),
                         ),
                       ],
                     ),
@@ -1291,19 +1299,19 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                   f.file,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 11.5,
                                     fontFamily: 'monospace',
-                                    color: _textPrimary,
+                                    color: primaryTextColor(context),
                                   ),
                                 ),
                               ),
                               Text(
                                 '+${f.additions} / -${f.deletions}',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 11,
                                   fontFamily: 'monospace',
-                                  color: _textSecondary,
+                                  color: secondaryTextColor(context),
                                 ),
                               ),
                             ],
@@ -1344,13 +1352,13 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
           FileDiffCardItem() => Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
-                color: const Color(0xFFF7F8FA),
+                color: cardBgColor(context),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _borderSubtle),
+                border: Border.all(color: subtleBorderColor(context)),
               ),
               child: Row(
                 children: [
-                  const Icon(
+                  Icon(
                     LucideIcons.fileDiff,
                     size: 14.5,
                     color: Color(0xFF2563EB),
@@ -1359,17 +1367,17 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   Expanded(
                     child: Text(
                       item.file,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 12,
                         fontFamily: 'monospace',
-                        color: _textPrimary,
+                        color: primaryTextColor(context),
                       ),
                     ),
                   ),
                   Text(
                     '+${item.additions} / -${item.deletions}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11.5,
                       fontFamily: 'monospace',
                       fontWeight: FontWeight.w600,
@@ -1384,13 +1392,13 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
           ScreenCaptureCardItem() => Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
-                color: const Color(0xFFF7F8FA),
+                color: cardBgColor(context),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _borderSubtle),
+                border: Border.all(color: subtleBorderColor(context)),
               ),
               child: Row(
                 children: [
-                  const Icon(
+                  Icon(
                     LucideIcons.monitor,
                     size: 14.5,
                     color: Color(0xFF2563EB),
@@ -1398,20 +1406,20 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
-                      'Screen Capture (${item.displayId})',
-                      style: const TextStyle(
+                      '${widget.client.strings.screenCaptureLabel} (${item.displayId})',
+                      style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 12,
-                        color: _textPrimary,
+                        color: primaryTextColor(context),
                       ),
                     ),
                   ),
                   Text(
                     '${item.width}x${item.height}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11,
                       fontFamily: 'monospace',
-                      color: _textSecondary,
+                      color: secondaryTextColor(context),
                     ),
                   ),
                 ],
@@ -1422,20 +1430,20 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
           UsageSummaryItem() => Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFFF7F8FA),
+                color: cardBgColor(context),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _borderSubtle),
+                border: Border.all(color: subtleBorderColor(context)),
               ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.activity, size: 13.5, color: _weTypeGreen),
+                  Icon(LucideIcons.activity, size: 13.5, color: _weTypeGreen),
                   const SizedBox(width: 7),
                   Text(
                     '${item.inputTokens} in · ${item.outputTokens} out · \$${item.costUsd.toStringAsFixed(4)}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11,
                       fontFamily: 'monospace',
-                      color: _textSecondary,
+                      color: secondaryTextColor(context),
                     ),
                   ),
                 ],
@@ -1461,10 +1469,10 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                 child: FilledButton.tonalIcon(
                   key: const Key('btn-jump-to-latest'),
                   onPressed: _jumpToBottom,
-                  icon: const Icon(LucideIcons.arrowDown, size: 14),
+                  icon: Icon(LucideIcons.arrowDown, size: 14),
                   label: Text(
                     widget.client.strings.newRepliesBelow,
-                    style: const TextStyle(fontSize: 12),
+                    style: TextStyle(fontSize: 12),
                   ),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
