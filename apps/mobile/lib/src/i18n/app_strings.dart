@@ -782,6 +782,20 @@ class NienieStrings {
         AppLanguage.ko => 'PC에서 OpenCode / Codex를 연 후 왼쪽 아래 페어링을 눌러 계속하세요.',
       };
 
+  String get emptyMessagesTitle => switch (lang) {
+        AppLanguage.zh => '还没有消息',
+        AppLanguage.en => 'No messages yet',
+        AppLanguage.ja => 'まだメッセージがありません',
+        AppLanguage.ko => '아직 메시지가 없습니다',
+      };
+
+  String get emptyMessagesBody => switch (lang) {
+        AppLanguage.zh => '在下方输入框发送第一条消息，开始和 Agent 对话。',
+        AppLanguage.en => 'Send your first message in the composer below to start talking to the agent.',
+        AppLanguage.ja => '下の入力欄で最初のメッセージを送信して、エージェントと会話を始めましょう。',
+        AppLanguage.ko => '아래 입력창에서 첫 메시지를 보내 대화를 시작하세요.',
+      };
+
   // ===== 7.5 用量卡 =====
 
   String get usageCardLabel => switch (lang) {

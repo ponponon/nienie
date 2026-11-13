@@ -3895,6 +3895,14 @@ void main() {
         .widget<Container>(find.byKey(const Key('error-card')))
         .decoration! as BoxDecoration;
     expect(errBox.color, dangerBgColor(context)); // 错误卡背景=暗色映射
+    // 前景断言：错误文字=亮红（不是旧红 #DC2626）
+    final errTexts = tester.widgetList<Text>(
+      find.descendant(of: find.byKey(const Key('error-card')), matching: find.byType(Text)),
+    );
+    expect(
+      errTexts.any((t) => t.style?.color == dangerTextColor(context)),
+      isTrue,
+    );
   });
 
   testWidgets('7.3b 键盘提交成功触发触感、失败不触发、快捷指令与批准触发', (WidgetTester tester) async {
@@ -3973,14 +3981,24 @@ void main() {
     expect(find.byType(TweenAnimationBuilder<double>), findsWidgets);
   });
 
-  testWidgets('7.4 空状态教学化：空时间线显示操作指引', (WidgetTester tester) async {
+  testWidgets('7.4 空状态双语义：无会话=配对引导，有会话空时间线=发第一条引导', (WidgetTester tester) async {
     await pumpToSession(tester);
-    // 进入空会话（ses_beta 无内容）→ 引导卡
     final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+
+    // 无 activeSession → 配对引导
+    client.activeSession = null;
+    client.notifyListenersForTest();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('empty-state-guide')), findsOneWidget);
+    expect(find.textContaining('No sessions yet'), findsWidgets);
+    expect(find.byKey(const Key('empty-timeline-guide')), findsNothing);
+
+    // 有会话但无消息 → 发第一条引导（语义区分）
     await client.openSession(client.sessions.firstWhere((x) => x.id == 'ses_beta'));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('empty-state-guide')), findsOneWidget);
-    expect(find.textContaining('No sessions yet'), findsWidgets); // EN 默认
+    expect(find.byKey(const Key('empty-timeline-guide')), findsOneWidget);
+    expect(find.textContaining('No messages yet'), findsWidgets);
+    expect(find.byKey(const Key('empty-state-guide')), findsNothing);
   });
 
   testWidgets('7.5 用量卡：tokens/费用三格展示', (WidgetTester tester) async {

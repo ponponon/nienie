@@ -89,6 +89,12 @@ class MobileBridgeClient extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 测试触发 UI 重建（模拟外部状态变更后的通知）
+  @visibleForTesting
+  void notifyListenersForTest() {
+    notifyListeners();
+  }
+
   void _markUnreadIfBackground(String sessionId) {
     if (sessionId != activeSession?.id) {
       _unreadSessionIds.add(sessionId);

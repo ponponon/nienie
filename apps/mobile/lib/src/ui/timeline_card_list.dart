@@ -105,7 +105,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                 if (isAlways) ...[
                   const SizedBox(height: 8),
                   Text(widget.client.strings.permConfirmFutureNote,
-                      style: TextStyle(fontSize: 11, color: Color(0xFFD97706))),
+                      style: TextStyle(fontSize: 11, color: warnTextColor(context))),
                 ],
               ],
             ),
@@ -502,7 +502,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                             SendReceipt.failed => Icon(
                                 LucideIcons.circleAlert,
                                 size: 13,
-                                color: Color(0xFFDC2626),
+                                color: dangerTextColor(context),
                               ),
                           };
                           if (receipt == SendReceipt.failed) {
@@ -956,7 +956,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                       Icon(
                         LucideIcons.circleAlert,
                         size: 15,
-                        color: Color(0xFFDC2626),
+                        color: dangerTextColor(context),
                       ),
                       const SizedBox(width: 6),
                       Text(
@@ -965,7 +965,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                           fontWeight: FontWeight.w700,
                           fontSize: 12,
                           fontFamily: 'monospace',
-                          color: Color(0xFFDC2626),
+                          color: dangerTextColor(context),
                         ),
                       ),
                     ],
@@ -1123,7 +1123,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w500,
-                                    color: Color(0xFFD97706),
+                                    color: warnTextColor(context),
                                   ),
                                 ),
                               )
@@ -1210,7 +1210,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                                           key: Key('perm-waiting-${item.permissionId}'),
                                           style: TextStyle(
                                             fontSize: 10.5,
-                                            color: Color(0xFFD97706),
+                                            color: warnTextColor(context),
                                           ),
                                         ),
                                       ),

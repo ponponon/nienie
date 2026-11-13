@@ -371,7 +371,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       ),
       child: Row(
         children: [
-          Icon(LucideIcons.wifiOff, size: 15, color: Color(0xFFD97706)),
+          Icon(LucideIcons.wifiOff, size: 15, color: warnTextColor(context)),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -732,10 +732,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         // Pure Kelivo Chat Canvas (100% clean white space when no messages yet)
         Expanded(
           child: Builder(builder: (bctx) {
-            if (active == null) return const SizedBox.shrink();
-            final timeline = client.timelineFor(active.id);
-            if (timeline.isEmpty) {
-              // 7.4：空状态教学化——还没有会话时给操作指引
+            if (active == null) {
+              // 7.4：无会话——引导在电脑端启动 Agent 并配对
               return Center(
                 key: const Key('empty-state-guide'),
                 child: Padding(
@@ -743,7 +741,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(LucideIcons.messageSquareDashed,
+                      Icon(LucideIcons.monitorSmartphone,
                           size: 34, color: mutedTextColor(context)),
                       const SizedBox(height: 12),
                       Text(
@@ -757,6 +755,42 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                       const SizedBox(height: 6),
                       Text(
                         client.strings.emptyStateBody,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.5,
+                          color: secondaryTextColor(context),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+            final timeline = client.timelineFor(active.id);
+            if (timeline.isEmpty) {
+              // 7.4：有会话但还没有消息——引导发第一条（与无会话语义区分）
+              return Center(
+                key: const Key('empty-timeline-guide'),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 36),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(LucideIcons.messageSquareDashed,
+                          size: 34, color: mutedTextColor(context)),
+                      const SizedBox(height: 12),
+                      Text(
+                        client.strings.emptyMessagesTitle,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: primaryTextColor(context),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        client.strings.emptyMessagesBody,
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 12.5,

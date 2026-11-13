@@ -437,14 +437,14 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                     icon: Icon(
                       LucideIcons.unplug,
                       size: 14,
-                      color: Color(0xFFDC2626),
+                      color: dangerTextColor(context),
                     ),
                     label: Text(
                       '断开',
                       style: TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w500,
-                        color: Color(0xFFDC2626),
+                        color: dangerTextColor(context),
                       ),
                     ),
                   ),
