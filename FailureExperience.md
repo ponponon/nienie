@@ -1095,5 +1095,5 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 ### 2026-11-12 testWidgets 内替换 FlutterError.onError 会引发测试挂死（+85px 溢出未定位）
 
 - **事故**：360dp 小屏溢出定位中，替换 `FlutterError.onError` 捕获 details → 测试 10 分钟超时挂死（pumpAndSettle 排水受干扰）；且替换后 `tester.takeException()` 假绿（异常被自定义 handler 吞掉）。
-- **已知遗留**：360dp 视口存在一处 85px RenderFlex 右溢出（诊断挂死未能定位具体 Row），已在测试中以「关键内容渲染」断言替代「无溢出」断言，待后续用截图/DevTools 定位。
+- **已定位已修（7b04fac）**：85px 溢出=AppBar 副标题 Row（`mainAxisSize.min` 内 Flexible 不收缩 + _StatusPill 非弹性宽）——去 min + StatusPill 包 FittedBox.scaleDown 修复，并在 360dp 测试恢复 `takeException()==null` 真实验证关闭。**残留教训**：`mainAxisSize: MainAxisSize.min` 的 Row 内 Flexible 不起收缩作用（intrinsic 定宽）——要收缩必须默认 max 布局。
 - **教训**：不要在 testWidgets 内替换 FlutterError.onError（挂死+假绿双坑）；溢出定位用 `tester.view.physicalSize` + 一次性独立调试脚本跑 `allElements` 扫 RenderFlex intrinsic，不进主测试。

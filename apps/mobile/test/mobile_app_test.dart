@@ -3879,7 +3879,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('bubble'), findsOneWidget); // 气泡文本确实渲染
     final bubbleBox = tester
-        .widget<Container>(find.byKey(const Key('user-bubble')))
+        .widget<Container>(find.byKey(const Key('user-bubble')).first)
         .decoration! as BoxDecoration;
     expect(bubbleBox.color, userBubbleBgColor(context)); // 气泡背景=暗色映射
 
@@ -4054,8 +4054,17 @@ void main() {
     await tester.enterText(find.byKey(const Key('input-session-prompt')), 'msg');
     await tester.tap(find.byKey(const Key('btn-send-prompt')));
     await tester.pumpAndSettle();
-    // 超时卡：warnBg + warnTextColor（构造 timedOut 占位——直接渲染断言 warnBg 出现即可由事件路径难造，改为检查 warnBg helper 映射值一致性）
-    expect(warnBgColor(context), const Color(0xFF3A2E14));
+    // 超时卡：真实路径构造 timedOut（sendMessage 占位 + 假时钟超过 pendingResponseTimeout）
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    client.connectionState = BridgeConnectionState.connected;
+    await client.sendMessage('会超时的请求');
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(minutes: 3)); // 超过占位超时阈值
+    await tester.pump(const Duration(milliseconds: 50));
+    final timeoutBox = tester
+        .widget<Container>(find.byKey(const Key('timeout-card')).first)
+        .decoration! as BoxDecoration;
+    expect(timeoutBox.color, warnBgColor(context));
     expect(warnTextColor(context), const Color(0xFFF8C47C));
     expect(attachChipBgColor(context).a, greaterThan(0));
   });
@@ -4081,6 +4090,8 @@ void main() {
     expect(find.textContaining('Input 123456'), findsOneWidget);
     expect(find.byKey(const Key('btn-send-prompt')), findsOneWidget);
     expect(find.byKey(const Key('input-session-prompt')), findsOneWidget);
+    // 小屏无 RenderFlex 溢出（85px StatusPill 溢出已修，此处必须真实验证关闭）
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
