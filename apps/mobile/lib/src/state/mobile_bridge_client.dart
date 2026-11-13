@@ -102,10 +102,13 @@ class MobileBridgeClient extends ChangeNotifier {
   int timelineVersionFor(String sessionId) =>
       _timelineVersionBySession[sessionId] ?? 0;
 
-  void _bumpTimeline(String sessionId) {
+  void _bumpTimeline(String sessionId, {bool recordActivity = true}) {
     _timelineVersionBySession[sessionId] =
         (_timelineVersionBySession[sessionId] ?? 0) + 1;
-    _lastActivityBySession[sessionId] = DateTime.now(); // 6.1：活动时间随内容变化
+    // Round3：历史快照恢复不伪造活动时间（recordActivity:false）
+    if (recordActivity) {
+      _lastActivityBySession[sessionId] = DateTime.now(); // 6.1：活动时间随内容变化
+    }
     _markUnreadIfBackground(sessionId); // 6.1：后台会话可见变化 → 未读
   }
 
@@ -439,9 +442,8 @@ class MobileBridgeClient extends ChangeNotifier {
     if (activeSession != null) {
       await replayMissedEvents(activeSession!.id);
     } else if (sessions.isNotEmpty) {
-      activeSession = sessions.first;
-      selectedAgentId = activeSession!.agentId;
-      await loadModels(selectedAgentId);
+      // Round3：已保存设备重连自动选中也走 openSession 统一恢复入口
+      await openSession(sessions.first);
     }
     connectionState = BridgeConnectionState.connected;
     reconnectAttempt = 0;
@@ -600,7 +602,8 @@ class MobileBridgeClient extends ChangeNotifier {
 
   /// 会话快照：resetRequired/truncated 时拉完整 Part 状态，原子替换本地时间线。
   /// Snapshot 是「状态」不是「事件」：临时构建 Timeline → 校验 → 同步一次性替换。
-  Future<void> loadSessionSnapshot(String sessionId) async {
+  /// 返回是否成功安装快照（Round3：恢复流程据此决定是否需要外层 Replay 兜底）
+  Future<bool> loadSessionSnapshot(String sessionId) async {
     final res = await transport.sendRequest({
       'type': 'session.snapshot',
       'requestId': _nextRequestId(),
@@ -610,7 +613,7 @@ class MobileBridgeClient extends ChangeNotifier {
       // 读取失败绝不清空旧 Timeline，只提示
       errorMessage = '快照恢复失败，已保留当前记录';
       notifyListeners();
-      return;
+      return false;
     }
     final data = res['data'] as Map<String, dynamic>;
     // 严格白名单校验（ChatGPT J0.1）：字段/身份/watermark/Part 结构全查，
@@ -638,7 +641,7 @@ class MobileBridgeClient extends ChangeNotifier {
     if (!valid) {
       errorMessage = '快照不完整或不可信，已保留当前记录';
       notifyListeners();
-      return;
+      return false;
     }
     final epoch = data['streamEpoch'] as String? ?? '';
     final watermark = wm;
@@ -764,17 +767,18 @@ class MobileBridgeClient extends ChangeNotifier {
       }
     }
     _timelineBySession[sessionId] = nextTimeline;
-    // 空快照装入不算可见变化（不误更新活动时间/未读）
+    // 空快照装入不算可见变化；快照=历史恢复，**不伪造活动时间**（Round3）
     if (nextTimeline.isNotEmpty || existingItems.isNotEmpty) {
-      _bumpTimeline(sessionId); // 5.2：快照安装也是可见内容变化
+      _bumpTimeline(sessionId, recordActivity: false);
     }
     _lastSequenceBySession.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
     if (epoch.isNotEmpty) _lastSequenceBySession['$sessionId#$epoch'] = watermark;
     _pendingEventsByEpoch.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
     _seenEventIds.removeWhere((k) => k.startsWith('$sessionId#'));
     notifyListeners();
-    // 阶段五：接续 watermark 之后的增量
+    // 阶段五：接续 watermark 之后的增量（快照成功时此处即唯一的 Replay 调度点）
     await replayMissedEvents(sessionId);
+    return true;
   }
 
   /// 撤回最后一条用户消息：从时间线移除（真撤回），返回其内容供输入框编辑重发。
@@ -1192,14 +1196,17 @@ class MobileBridgeClient extends ChangeNotifier {
     final sessionMap = (res['data'] as Map<String, dynamic>)['session'] as Map;
     activeSession = AgentSession.fromJson(Map<String, dynamic>.from(sessionMap));
     if ((_timelineBySession[session.id] ?? const []).isEmpty) {
-      // Round2：统一恢复入口——快照恢复（历史）+ 事件回放（补缺口），
-      // 冷启动自动选中与手动打开走同一路径，摘要条才有数据源
+      // Round2：统一恢复入口——快照恢复（含 watermark 后 Replay）；
+      // Round3：快照失败才外层 Replay 兜底（消除重复 events.replay）
+      var restored = false;
       try {
-        await loadSessionSnapshot(session.id);
+        restored = await loadSessionSnapshot(session.id);
       } catch (_) {}
-      try {
-        await replayMissedEvents(session.id);
-      } catch (_) {}
+      if (!restored) {
+        try {
+          await replayMissedEvents(session.id);
+        } catch (_) {}
+      }
     }
     // Round2：未读清除放在成功进入后（覆盖「打开期间又收到事件」竞态）
     _unreadSessionIds.remove(session.id);

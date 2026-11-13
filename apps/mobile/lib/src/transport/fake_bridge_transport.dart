@@ -38,6 +38,8 @@ class FakeBridgeTransport implements BridgeTransport {
   Map<String, dynamic>? snapshotResponse;
   /// Round2 测试钩子：下一次 session.load 失败（打开失败保留未读用）
   bool failSessionLoadOnce = false;
+  /// Round3 测试钩子：events.replay 请求计数（重复 Replay 消除验证）
+  int replayRequests = 0;
   String? helloMachineId;
   bool omitHelloMachineId = false;
 
@@ -234,6 +236,14 @@ class FakeBridgeTransport implements BridgeTransport {
                 'totalParts': 0,
                 'parts': [],
               },
+        };
+      case 'events.replay':
+        replayRequests += 1;
+        return {
+          'type': 'response',
+          'requestId': requestId,
+          'ok': true,
+          'data': {'events': []},
         };
       case 'session.cancel':
         cancelledSessionIds.add(request['sessionId'] as String);

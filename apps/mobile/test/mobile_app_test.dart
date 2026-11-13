@@ -3521,6 +3521,119 @@ void main() {
     client.dispose();
   });
 
+  test('Round3 真实已保存设备重连自动恢复（reconnectWithSavedCredential→openSession→Snapshot）', () async {
+    final transport = FakeBridgeTransport();
+    final store = InMemoryCredentialStore();
+    // 预置已保存设备凭证（machineId 匹配 fake hello）
+    await store.save(const SavedDeviceCredential(
+      machineId: 'machine_mac',
+      wsUrl: 'ws://127.0.0.1:4100',
+      deviceId: 'dev_1',
+      deviceToken: 'tok_1',
+    ));
+    final t0 = DateTime.now().subtract(const Duration(minutes: 30));
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_re',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep1',
+      'watermark': 1,
+      'capturedAt': DateTime.now().toIso8601String(),
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {
+          'kind': 'message', 'ordinal': 0, 'partId': 'm_re', 'revision': 1,
+          'createdAt': t0.toIso8601String(), 'updatedAt': t0.toIso8601String(),
+          'role': 'user',
+          'content': [{'type': 'text', 'text': '重连前的最后一条消息'}],
+        },
+      ],
+    };
+    final client = MobileBridgeClient(transport: transport, credentialStore: store);
+    // 真实重连入口（已保存设备路径——此前绕过统一恢复）
+    await client.reconnectWithSavedCredential('machine_mac');
+    final lastUser = client
+        .timelineFor('ses_alpha')
+        .whereType<UserPromptItem>()
+        .lastOrNull;
+    expect(lastUser?.message, '重连前的最后一条消息'); // 历史已恢复
+    client.dispose();
+  });
+
+  test('Round3 快照恢复不伪造活动时间（30 分钟前的会话显示 30 min ago）', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions();
+    final t0 = DateTime.now().subtract(const Duration(minutes: 30));
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_time',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep1',
+      'watermark': 1,
+      'capturedAt': DateTime.now().toIso8601String(),
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {
+          'kind': 'message', 'ordinal': 0, 'partId': 'm_t', 'revision': 1,
+          'createdAt': t0.toIso8601String(), 'updatedAt': t0.toIso8601String(),
+          'role': 'user',
+          'content': [{'type': 'text', 'text': '旧消息'}],
+        },
+      ],
+    };
+    await client.openSession(client.sessions.firstWhere((x) => x.id == 'ses_alpha'));
+    // 活动时间未被历史恢复伪造（为 null → 卡片回退 modelTime=30 分钟前）
+    expect(client.lastActivityFor('ses_alpha'), isNull);
+    final label = client.strings.relativeTime(t0);
+    expect(label, '30 min ago');
+    client.dispose();
+  });
+
+  test('Round3 消除重复 Replay：快照成功时仅一次 events.replay', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions();
+    await client.openSession(client.sessions.firstWhere((x) => x.id == 'ses_alpha'));
+    // 快照成功路径：loadSessionSnapshot 内的 Replay 是唯一调度点
+    expect(transport.replayRequests, 1);
+
+    // 快照失败路径：外层 Replay 兜底（仍恰好一次）
+    final transport2 = FakeBridgeTransport();
+    transport2.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_bad',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      // 故意缺 watermark/capturedAt → 校验失败
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 0,
+      'parts': [],
+    };
+    final client2 = MobileBridgeClient(
+      transport: transport2,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client2.refreshSessions();
+    await client2.openSession(client2.sessions.firstWhere((x) => x.id == 'ses_alpha'));
+    expect(transport2.replayRequests, 1); // 失败兜底恰好一次
+    client.dispose();
+    client2.dispose();
+  });
+
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
     await pumpToSession(tester);
     final transport = tester
