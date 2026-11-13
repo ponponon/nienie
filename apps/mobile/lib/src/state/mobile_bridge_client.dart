@@ -1310,22 +1310,26 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   /// 收到回复内容或会话空闲时，移除「等待中」占位并取消超时计时。
-  void _resolvePending(String sessionId, [PendingResponseItem? specific]) {
+  /// 返回是否**实际移除**了等待占位（内容水位精确判定用）。
+  bool _resolvePending(String sessionId, [PendingResponseItem? specific]) {
     final timer = specific != null ? _pendingTimers.remove(specific) : null;
     timer?.cancel();
     final items = _timelineBySession[sessionId];
-    if (items == null) return;
+    if (items == null) return false;
     if (specific != null) {
-      items.remove(specific);
-      _bumpTimeline(sessionId); // 5.2：占位消失也是可见变化
-      return;
+      final removed = items.remove(specific);
+      if (removed) _bumpTimeline(sessionId); // 5.2：占位消失也是可见变化
+      return removed;
     }
     // 未指定时移除末尾的等待占位（回复开始 / 结束）
+    var removedAny = false;
     while (items.isNotEmpty && items.last is PendingResponseItem) {
       final p = items.removeLast() as PendingResponseItem;
       _pendingTimers.remove(p)?.cancel();
       _bumpTimeline(sessionId); // 5.2：占位消失也是可见变化
+      removedAny = true;
     }
+    return removedAny;
   }
 
   /// 兜底卡片的「重试」：重发该卡片记录的 prompt。
@@ -1475,17 +1479,17 @@ class MobileBridgeClient extends ChangeNotifier {
         }
         if (status == 'idle') {
           // 回复结束：收起「等待中」占位，并把思考过程折叠（不占屏幕空间）
-          // 收尾：只在**实际**可见变化时递增（无占位/无未折叠思考的普通 idle 不算）
-          final hadPending = items.any((i) => i is PendingResponseItem);
+          // 收尾：只在**实际**可见变化时递增——按真正被移除的占位判定（非末尾占位不算），
+          // 无未折叠思考的普通 idle 不算
           var collapsedAny = false;
-          _resolvePending(event.sessionId);
+          final removedPending = _resolvePending(event.sessionId);
           for (final item in items) {
             if (item is StreamingTextItem && item.isThinking && !item.collapsed) {
               item.collapsed = true;
               collapsedAny = true;
             }
           }
-          changed = hadPending || collapsedAny;
+          changed = removedPending || collapsedAny;
         }
         final permissionId = event.payload['permissionId'] as String?;
         if (status == 'waiting' && permissionId != null) {
@@ -1585,11 +1589,14 @@ class MobileBridgeClient extends ChangeNotifier {
                 }
               }
               if (claimed != null) {
+                // 收尾：认领对账只在**实际差异**时算可见变化（相同文本认领不误报新回复）
+                if (claimed.message != delta || attachments.isNotEmpty) {
+                  changed = true;
+                }
                 claimed.partId = partId;
                 claimed.revision = partRevision ?? 0;
                 claimed.message = delta;
                 if (attachments.isNotEmpty) claimed.attachments = attachments;
-                changed = true; // 认领对账是可见变化
               } else {
                 items.add(UserPromptItem(delta,
                     partId: partId,

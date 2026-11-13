@@ -3192,6 +3192,107 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('Round3 收尾2：认领相同文本不提示、权威文本差异才提示', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 历史内容（底部完成，不触发提示）
+    for (var i = 1; i <= 8; i++) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'c$i', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': i, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'text_delta',
+        'payload': {
+          'delta': '背景 $i\n\n${List.filled(12, '行').join('\n\n')}',
+          'partId': 'p$i', 'partRevision': 1,
+        },
+      });
+    }
+    await tester.pumpAndSettle();
+
+    // 底部发送（乐观消息=可见变化，在底部静默跟随）——记录权威对账用的 clientMessageId
+    await client.sendMessage('重复文本');
+    await tester.pumpAndSettle();
+    final optimistic =
+        client.timelineFor('ses_alpha').whereType<UserPromptItem>().last;
+    final claimId = optimistic.messageId!;
+
+    // 翻到历史位置 → 服务端认领**相同文本**：无实际差异，不提示
+    await tester.drag(find.byKey(const Key('session-timeline-list')), const Offset(0, 3000));
+    await tester.pump(const Duration(milliseconds: 300));
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'claim_same', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 9,
+      'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {
+        'delta': '重复文本', 'partId': 'cm1', 'partRevision': 1,
+        'role': 'user', 'messageId': claimId,
+      },
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing); // 相同认领不误报
+
+    // 权威文本**确实不同**：正常提示
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'claim_diff', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 10,
+      'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {
+        'delta': '权威修正文本', 'partId': 'cm1', 'partRevision': 2,
+        'role': 'user', 'messageId': claimId,
+      },
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsOneWidget);
+    client.dispose();
+  });
+
+  testWidgets('Round3 收尾2：idle 只按实际移除占位判定（非末尾占位不误报）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    // 历史内容（底部完成）
+    for (var i = 1; i <= 8; i++) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'd$i', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': i, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'text_delta',
+        'payload': {
+          'delta': '内容 $i\n\n${List.filled(12, '行').join('\n\n')}',
+          'partId': 'p$i', 'partRevision': 1,
+        },
+      });
+    }
+    await tester.pumpAndSettle();
+
+    // 底部发送（产生 [User, Pending]）+ 追加错误卡 → pending 不在末尾
+    await client.sendMessage('触发占位');
+    await tester.pumpAndSettle();
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'd_err', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 9, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'error',
+      'payload': {'errorId': 'e1', 'code': 'X', 'message': 'tail', 'retryable': true},
+    });
+    await tester.pumpAndSettle();
+
+    // 翻到历史位置 → idle：末尾非 pending（无实际移除）且无思考折叠 → 不提示
+    await tester.drag(find.byKey(const Key('session-timeline-list')), const Offset(0, 3000));
+    await tester.pump(const Duration(milliseconds: 300));
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'd_idle', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 10, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'idle'},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
+    client.dispose();
+  });
+
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
     await pumpToSession(tester);
     final transport = tester
