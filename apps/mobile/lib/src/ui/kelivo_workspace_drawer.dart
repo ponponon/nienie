@@ -462,7 +462,14 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
 
   Widget _buildSessionItem(MobileBridgeClient client, AgentSession session) {
     final isSelected = client.activeSession?.id == session.id;
+    final unread = client.isSessionUnread(session.id) && !isSelected;
+    // 6.1：标题 · 项目 · 相对时间 · 状态点 · 未读标记
+    final projectName = session.projectPath.isNotEmpty
+        ? session.projectPath.split('/').where((s) => s.isNotEmpty).lastOrNull ?? ''
+        : '';
+    final time = session.updatedAt ?? session.createdAt;
     return InkWell(
+      key: Key('session-item-${session.id}'),
       borderRadius: BorderRadius.circular(9),
       onTap: () async {
         await client.openSession(session);
@@ -475,15 +482,61 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
           color: isSelected ? const Color(0xFFF2F4F7) : Colors.transparent,
           borderRadius: BorderRadius.circular(9),
         ),
-        child: Text(
-          session.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-            color: isSelected ? _textPrimary : const Color(0xFF2C2E33),
-          ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                // 状态点（运行中/idle）
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: session.status == 'running'
+                        ? _accentGreen
+                        : _textMuted,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 7),
+                Expanded(
+                  child: Text(
+                    session.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                      color: isSelected ? _textPrimary : const Color(0xFF2C2E33),
+                    ),
+                  ),
+                ),
+                if (unread)
+                  Container(
+                    key: Key('unread-dot-${session.id}'),
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFEF4444),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Text(
+              [
+                if (projectName.isNotEmpty) projectName,
+                if (time != null) client.strings.relativeTime(time),
+              ].join(' · '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11.5,
+                color: _textMuted,
+              ),
+            ),
+          ],
         ),
       ),
     );

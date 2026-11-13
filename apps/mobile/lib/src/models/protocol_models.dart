@@ -112,6 +112,9 @@ class AgentSession {
   final String title;
   final String projectPath;
   final String status;
+  /// 6.1：会话时间（列表相对时间用）；旧协议缺失时为 null
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
 
   const AgentSession({
     required this.id,
@@ -119,6 +122,8 @@ class AgentSession {
     required this.title,
     required this.projectPath,
     required this.status,
+    this.createdAt,
+    this.updatedAt,
   });
 
   factory AgentSession.fromJson(Map<String, dynamic> json) {
@@ -128,6 +133,8 @@ class AgentSession {
       title: json['title'] as String? ?? 'Untitled',
       projectPath: json['projectPath'] as String? ?? '',
       status: json['status'] as String? ?? 'idle',
+      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
+      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
     );
   }
 }

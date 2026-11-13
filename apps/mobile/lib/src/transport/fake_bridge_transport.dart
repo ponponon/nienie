@@ -125,6 +125,8 @@ class FakeBridgeTransport implements BridgeTransport {
                 'title': 'Implement OpenCode adapter',
                 'projectPath': '/workspace/nienie',
                 'status': 'idle',
+                'createdAt': DateTime.now().subtract(const Duration(hours: 1)).toIso8601String(),
+                'updatedAt': DateTime.now().subtract(const Duration(minutes: 3)).toIso8601String(),
               },
             ],
           },

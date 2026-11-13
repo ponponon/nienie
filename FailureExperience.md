@@ -1085,3 +1085,9 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - **根因**：AutomatedTestWidgetsFlutterBinding 的 FakeAsync 控制微任务/定时器——假时钟区内启动的真实文件 I/O，其续体挂在假区域微任务队列上无法推进；runAsync 等待该 Future 时假区域被冻结 → 互锁。
 - **修复**：真实 I/O **全部**在 `tester.runAsync(() async {...})` 回调内发起并 await（回调整体运行在真实事件循环），再 pumpWidget；预加载优于 pumpAndSettle 后补加载（后者同样等不到任意 Future）。
 - **预防**：testWidgets 内磁盘/网络测试一律 runAsync 包裹 I/O；纯数据链路测试优先用 `test()`（真实区域）而非 testWidgets。
+
+### 2026-11-12 python 批量 patch「只写最后一个文件」第三次踩坑（强化版教训）
+
+- **事故**：多文件 patch 脚本共用 `s` 变量、只在结尾 write 最后一个文件——protocol_models 的修改第三次静默丢失（analyzeflag undefined_getter 后才发现）。
+- **强化预防（硬规则）**：批量 patch 脚本必须「一文件一写盘」——每个 `open(p,'w').write(s)` 紧跟该文件的 rep 之后；或统一用 `patch_file(path, edits)` 封装（内部 write+print 落盘确认）。禁止「读多个→改多个→最后写一个」的结构。
+- 另：`re.subn` 跨段 regex 删除代码行极易误删相邻段（本次误删 J0.6b 测试声明）——删代码行一律用 edit 工具精确匹配，不用跨段 regex。

@@ -77,6 +77,24 @@ class MobileBridgeClient extends ChangeNotifier {
 
   NienieStrings get strings => NienieStrings(language);
 
+  // ===== 6.1 未读跟踪：非活跃会话收到可见内容变化即标记 =====
+  final Set<String> _unreadSessionIds = {};
+
+  bool isSessionUnread(String sessionId) => _unreadSessionIds.contains(sessionId);
+
+  /// 测试注入未读（模拟后台到达）
+  @visibleForTesting
+  void markSessionUnreadForTest(String sessionId) {
+    _unreadSessionIds.add(sessionId);
+    notifyListeners();
+  }
+
+  void _markUnreadIfBackground(String sessionId) {
+    if (sessionId != activeSession?.id) {
+      _unreadSessionIds.add(sessionId);
+    }
+  }
+
   // ===== 5.2 Timeline 内容水位：任何可见内容变化（含同 partId 增量）都递增 =====
   final Map<String, int> _timelineVersionBySession = {};
 
@@ -87,6 +105,7 @@ class MobileBridgeClient extends ChangeNotifier {
   void _bumpTimeline(String sessionId) {
     _timelineVersionBySession[sessionId] =
         (_timelineVersionBySession[sessionId] ?? 0) + 1;
+    _markUnreadIfBackground(sessionId); // 6.1：后台会话可见变化 → 未读
   }
 
   // ===== 5.1 快捷指令（按 Agent 定制，scope=agentId）=====
@@ -1143,6 +1162,7 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   Future<void> openSession(AgentSession session) async {
+    _unreadSessionIds.remove(session.id); // 6.1：打开即读
     selectedAgentId = session.agentId;
     await loadModels(session.agentId);
     final res = await transport.sendRequest({

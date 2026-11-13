@@ -2046,7 +2046,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     // 延迟接受期间：删掉 A、添加 B（数量不变，身份变了）
-    await tester.tap(find.byIcon(LucideIcons.x));
+    await tester.tap(find.descendant(
+      of: find.byType(Chip),
+      matching: find.byIcon(LucideIcons.x),
+    ));
     await tester.pumpAndSettle();
     AttachmentPicker.debugOverrideFiles = [(name: 'file-B.png', path: '/tmp/b.png')];
     await tester.tap(find.byKey(const Key('btn-attach')));
@@ -3291,6 +3294,53 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
     client.dispose();
+  });
+
+  testWidgets('6.1 会话卡片：状态点/项目·相对时间/未读标记（后台事件→未读，打开清除）', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    // 造第二会话为 active，使 ses_alpha 成为「非活跃」以测未读红点
+    final other = await client.createSession(agentId: 'opencode', title: 'B 会话');
+    client.activeSession = other;
+
+    // 打开会话抽屉
+    await tester.tap(find.byKey(const Key('btn-open-drawer')));
+    await tester.pumpAndSettle();
+
+    // 卡片信息密度：标题 + 项目 basename · 相对时间
+    expect(find.byKey(const Key('session-item-ses_alpha')), findsOneWidget);
+    expect(find.textContaining('nienie'), findsWidgets); // 项目 basename
+    expect(find.textContaining('min ago'), findsWidgets); // 相对时间（3 分钟前）
+
+    // 活跃会话收到内容不标未读
+    expect(client.isSessionUnread('ses_alpha'), isFalse);
+
+    // 未读标记渲染：非活跃会话显示红点（模拟后台到达）
+    client.markSessionUnreadForTest('ses_alpha');
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('unread-dot-ses_alpha')), findsOneWidget);
+
+    // 打开会话 → 未读清除
+    await tester.tap(find.byKey(const Key('session-item-ses_alpha')));
+    await tester.pumpAndSettle();
+    expect(client.isSessionUnread('ses_alpha'), isFalse);
+  });
+
+  testWidgets('6.2 会话摘要条：上次消息·状态一句话恢复上下文，可关闭', (WidgetTester tester) async {
+    await pumpToSession(tester);
+
+    // 时间线有内容（用户消息）→ 摘要条显示
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '修复登录崩溃的问题');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-summary-bar')), findsOneWidget);
+    expect(find.textContaining('Last'), findsWidgets); // 默认测试语言为英文
+    expect(find.textContaining('修复登录崩溃的问题'), findsWidgets);
+
+    // 关闭 → 消失
+    await tester.tap(find.byKey(const Key('btn-close-session-summary')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-summary-bar')), findsNothing);
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {

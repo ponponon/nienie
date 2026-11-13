@@ -591,4 +591,27 @@ class NienieStrings {
         AppLanguage.ja => '新しい返信',
         AppLanguage.ko => '새 답변',
       };
+
+  // ===== 6.2 会话摘要条 =====
+
+  String get summaryLastLabel => switch (lang) {
+        AppLanguage.zh => '上次',
+        AppLanguage.en => 'Last',
+        AppLanguage.ja => '前回',
+        AppLanguage.ko => '마지막',
+      };
+
+  String get sessionIdleLabel => switch (lang) {
+        AppLanguage.zh => '空闲',
+        AppLanguage.en => 'Idle',
+        AppLanguage.ja => '待機',
+        AppLanguage.ko => '유휴',
+      };
+
+  String get summaryDismiss => switch (lang) {
+        AppLanguage.zh => '关闭摘要',
+        AppLanguage.en => 'Dismiss summary',
+        AppLanguage.ja => 'サマリーを閉じる',
+        AppLanguage.ko => '요약 닫기',
+      };
 }

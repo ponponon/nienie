@@ -31,11 +31,14 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   final TextEditingController _pairingCodeController = TextEditingController();
   final TextEditingController _qrUriController = TextEditingController();
   final TextEditingController _promptController = TextEditingController();
+  // 6.2：会话摘要条——被关闭的会话不再显示
+  String? _dismissedSummarySessionId;
   final List<_Attachment> _attachments = [];
 
   static const Color _weTypeGreen = Color(0xFF17B378);
   static const Color _textPrimary = Color(0xFF141416);
   static const Color _textSecondary = Color(0xFF686C75);
+  static const Color _textMuted = Color(0xFF989CA5);
   static const Color _borderSubtle = Color(0x14000000);
 
   // Kelivo's exact 2-bar staggered menu icon (assets/icons/list.svg)
@@ -642,6 +645,62 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     );
   }
 
+  /// 6.2：会话摘要条——「上次：<最后消息> · <状态>」一句话恢复上下文
+  Widget? _buildSessionSummary(MobileBridgeClient client, AgentSession active) {
+    if (_dismissedSummarySessionId == active.id) return null;
+    final lastUser = client
+        .timelineFor(active.id)
+        .whereType<UserPromptItem>()
+        .lastOrNull;
+    final status = client.statusFor(active.id);
+    if (lastUser == null && status != 'running') return null;
+    final statusLabel = status == 'running'
+        ? client.strings.toolStatusRunning
+        : status == 'failed'
+            ? client.strings.toolStatusFailed
+            : client.strings.sessionIdleLabel;
+    final lastText = lastUser == null
+        ? '…'
+        : (lastUser.message.length > 60
+            ? '${lastUser.message.substring(0, 60)}…'
+            : lastUser.message);
+    return Container(
+      key: const Key('session-summary-bar'),
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.only(left: 12, right: 4, top: 6, bottom: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0x12000000)),
+      ),
+      child: Row(
+        children: [
+          const Icon(LucideIcons.history, size: 13, color: _textSecondary),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              '${client.strings.summaryLastLabel}：$lastText · $statusLabel',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11.5, color: _textSecondary, height: 1.4),
+            ),
+          ),
+          IconButton(
+            key: const Key('btn-close-session-summary'),
+            tooltip: client.strings.summaryDismiss,
+            iconSize: 14,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            icon: const Icon(LucideIcons.x, size: 14, color: _textMuted),
+            onPressed: () {
+              setState(() => _dismissedSummarySessionId = active.id);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildKelivoConnectedBody(
     BuildContext context,
     MobileBridgeClient client,
@@ -654,6 +713,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         if (client.connectionState == BridgeConnectionState.reconnecting ||
             client.connectionState == BridgeConnectionState.disconnected)
           _buildReconnectBanner(client),
+        // 6.2：会话摘要条（进入会话顶部，一句话恢复上下文，可关闭）
+        if (active != null)
+          ...[if (_buildSessionSummary(client, active) != null)
+            _buildSessionSummary(client, active)!],
         // Pure Kelivo Chat Canvas (100% clean white space when no messages yet)
         Expanded(
           child: active == null
