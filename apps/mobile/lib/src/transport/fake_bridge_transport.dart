@@ -40,6 +40,8 @@ class FakeBridgeTransport implements BridgeTransport {
   bool failSessionLoadOnce = false;
   /// Round3 测试钩子：events.replay 请求计数（重复 Replay 消除验证）
   int replayRequests = 0;
+  /// FinalQA 测试钩子：返回空会话列表（电脑未开 Agent 场景）
+  bool emptySessions = false;
   String? helloMachineId;
   bool omitHelloMachineId = false;
 
@@ -122,7 +124,7 @@ class FakeBridgeTransport implements BridgeTransport {
           'requestId': requestId,
           'ok': true,
           'data': {
-            'sessions': [
+            'sessions': emptySessions ? [] : [
               {
                 'id': 'ses_alpha',
                 'agentId': 'opencode',

@@ -3982,18 +3982,28 @@ void main() {
   });
 
   testWidgets('7.4 空状态双语义：无会话=配对引导，有会话空时间线=发第一条引导', (WidgetTester tester) async {
-    await pumpToSession(tester);
-    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
-
-    // 无 activeSession → 配对引导
-    client.activeSession = null;
-    client.notifyListenersForTest();
-    await tester.pump(const Duration(milliseconds: 50));
+    // Fixture 修正（FinalQA）：真实「电脑无会话」路径——空会话列表连接后 activeSession 天然为 null
+    final transport = FakeBridgeTransport()..emptySessions = true;
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await tester.pumpWidget(NienieMobileApp(client: client));
+    await tester.pumpAndSettle();
+    // 走真实连接（配对→连接成功→自动选中分支因空列表跳过）
+    await tester.tap(find.byKey(const Key('btn-toggle-advanced')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('input-ws-url')), 'ws://127.0.0.1:4100');
+    await tester.enterText(find.byKey(const Key('input-pairing-code')), '123456');
+    await tester.tap(find.byKey(const Key('btn-connect-pair')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('empty-state-guide')), findsOneWidget);
     expect(find.textContaining('No sessions yet'), findsWidgets);
     expect(find.byKey(const Key('empty-timeline-guide')), findsNothing);
 
-    // 有会话但无消息 → 发第一条引导（语义区分）
+    // 有会话但无消息 → 发第一条引导（语义区分；恢复会话列表）
+    transport.emptySessions = false;
+    await client.refreshSessions();
     await client.openSession(client.sessions.firstWhere((x) => x.id == 'ses_beta'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('empty-timeline-guide')), findsOneWidget);
@@ -4050,23 +4060,109 @@ void main() {
     );
     expect(permTexts.any((t) => t.style?.color == dangerTextColor(context)), isTrue);
 
-    // 附件胶囊：attachChipBg 暗值
-    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'msg');
-    await tester.tap(find.byKey(const Key('btn-send-prompt')));
-    await tester.pumpAndSettle();
-    // 超时卡：真实路径构造 timedOut（sendMessage 占位 + 假时钟超过 pendingResponseTimeout）
+    // 附件胶囊：真实带附件消息渲染 → 断言暗色背景
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'qa3', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 2, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {
+        'delta': '带附件', 'role': 'user', 'partId': 'p_att', 'partRevision': 1,
+        'attachments': [
+          {'name': 'a.png', 'mime': 'image/png', 'sourceType': 'uri', 'uri': 'file:///w/a.png'},
+        ],
+      },
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    final chipBox = tester
+        .widget<Container>(find.byKey(const Key('attach-chip-a.png')))
+        .decoration! as BoxDecoration;
+    expect(chipBox.color, attachChipBgColor(context)); // 真实渲染背景=暗色映射
+
+    // 超时卡：真实路径构造 timedOut → 背景 + 文字颜色断言
     final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
     client.connectionState = BridgeConnectionState.connected;
     await client.sendMessage('会超时的请求');
     await tester.pumpAndSettle();
-    await tester.pump(const Duration(minutes: 3)); // 超过占位超时阈值
+    await tester.pump(const Duration(minutes: 3)); // 超过占位超时阈值（45s）
     await tester.pump(const Duration(milliseconds: 50));
     final timeoutBox = tester
         .widget<Container>(find.byKey(const Key('timeout-card')).first)
         .decoration! as BoxDecoration;
     expect(timeoutBox.color, warnBgColor(context));
-    expect(warnTextColor(context), const Color(0xFFF8C47C));
-    expect(attachChipBgColor(context).a, greaterThan(0));
+    final timeoutTexts = tester.widgetList<Text>(
+      find.descendant(
+        of: find.byKey(const Key('timeout-card')).first,
+        matching: find.byType(Text),
+      ),
+    );
+    expect(timeoutTexts.any((t) => t.style?.color == warnTextColor(context)), isTrue);
+  });
+
+  testWidgets('FinalQA PermissionCard 风险色矩阵：Medium/High/Uncertain/Waiting', (WidgetTester tester) async {
+    tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
+    addTearDown(() => tester.platformDispatcher.platformBrightnessTestValue = Brightness.light);
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+    final context = tester.element(find.byType(Scaffold));
+
+    // Medium 风险（write）→ warnTextColor；High（exec）→ dangerTextColor
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'pm', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(), 'type': 'status',
+      'payload': {'status': 'waiting', 'permissionId': 'perm_m', 'permission': 'bash',
+        'detail': 'run', 'patterns': ['a.ts']},
+    });
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'ph', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 2, 'timestamp': DateTime.now().subtract(const Duration(minutes: 5)).toIso8601String(),
+      'type': 'status',
+      'payload': {'status': 'waiting', 'permissionId': 'perm_h', 'permission': 'exec',
+        'detail': 'rm', 'patterns': ['*']},
+    });
+    await tester.pumpAndSettle();
+
+    final mediumTexts = tester.widgetList<Text>(
+      find.descendant(
+        of: find.byKey(const Key('perm-card-perm_m')),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(mediumTexts.any((t) => t.style?.color == warnTextColor(context)), isTrue);
+    final highTexts = tester.widgetList<Text>(
+      find.descendant(
+        of: find.byKey(const Key('perm-card-perm_h')),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(highTexts.any((t) => t.style?.color == dangerTextColor(context)), isTrue);
+
+    // 未知决策（fail-closed 定格 unknown）→ 结果文字 secondaryTextColor
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'pr', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 3, 'timestamp': DateTime.now().toIso8601String(), 'type': 'status',
+      'payload': {'status': 'resolved', 'permissionId': 'perm_m', 'decision': 'unexpected'},
+    });
+    await tester.pumpAndSettle();
+    final unknownTexts = tester.widgetList<Text>(
+      find.descendant(
+        of: find.byKey(const Key('perm-card-perm_m')),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(unknownTexts.any((t) => t.style?.color == secondaryTextColor(context)), isTrue);
+
+    // Waiting（perm_h 未决 5 分钟，真实时钟差 ≥2min）→ permWaitingLong 文字 warnTextColor
+    await tester.pump(const Duration(milliseconds: 50));
+    final waitingTexts = tester.widgetList<Text>(
+      find.descendant(
+        of: find.byKey(const Key('perm-card-perm_h')),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(waitingTexts.any((t) => t.style?.color == warnTextColor(context)), isTrue);
   });
 
   testWidgets('FinalQA 360dp 小屏：用量卡与 composer 关键内容正常渲染', (WidgetTester tester) async {
