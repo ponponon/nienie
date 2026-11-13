@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'theme_colors.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../models/protocol_models.dart';
 import '../state/mobile_bridge_client.dart';
@@ -26,8 +27,6 @@ class _PairingPanelState extends State<PairingPanel> {
   bool _showAdvanced = false;
 
   static const Color _weTypeGreen = Color(0xFF17B378);
-  static const Color _textPrimary = Color(0xFF141416);
-  static const Color _textSecondary = Color(0xFF6E7178);
   static const Color _dividerColor = Color(0x0E000000);
   static const Color _cardBorder = Color(0x12000000);
   static const Color _btnBorderColor = Color(0xFFDCDFE4);
@@ -57,7 +56,7 @@ class _PairingPanelState extends State<PairingPanel> {
       width: 34,
       height: 34,
       decoration: BoxDecoration(
-        color: active ? _weTypeGreen.withValues(alpha: 0.1) : const Color(0xFFF5F6F8),
+        color: active ? _weTypeGreen.withValues(alpha: 0.1) : panelBgColor(context),
         borderRadius: BorderRadius.circular(9),
         border: Border.all(
           color: active ? _weTypeGreen.withValues(alpha: 0.22) : const Color(0x0D000000),
@@ -98,11 +97,11 @@ class _PairingPanelState extends State<PairingPanel> {
           padding: const EdgeInsets.only(left: 2, bottom: 12),
           child: Text(
             s.connectTitle,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 16.5,
               fontWeight: FontWeight.w600,
               letterSpacing: -0.3,
-              color: _textPrimary,
+              color: primaryTextColor(context),
             ),
           ),
         ),
@@ -130,19 +129,19 @@ class _PairingPanelState extends State<PairingPanel> {
                             children: [
                               Text(
                                 client.savedMachines[i].machineId,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
-                                  color: _textPrimary,
+                                  color: primaryTextColor(context),
                                 ),
                               ),
                               const SizedBox(height: 2),
                               Text(
                                 client.savedMachines[i].wsUrl,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 11.5,
                                   fontFamily: 'monospace',
-                                  color: _textSecondary,
+                                  color: secondaryTextColor(context),
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -156,7 +155,7 @@ class _PairingPanelState extends State<PairingPanel> {
                               'btn-reconnect-machine-${client.savedMachines[i].machineId}',
                             ),
                             style: OutlinedButton.styleFrom(
-                              foregroundColor: _textPrimary,
+                              foregroundColor: primaryTextColor(context),
                               side: const BorderSide(color: _btnBorderColor),
                               padding: const EdgeInsets.symmetric(horizontal: 12),
                               shape: RoundedRectangleBorder(
@@ -168,7 +167,7 @@ class _PairingPanelState extends State<PairingPanel> {
                             ),
                             child: Text(
                               s.reconnectBtn,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -182,10 +181,10 @@ class _PairingPanelState extends State<PairingPanel> {
                           onPressed: () => client.removeSavedMachine(
                             client.savedMachines[i].machineId,
                           ),
-                          icon: const Icon(
+                          icon: Icon(
                             LucideIcons.trash2,
                             size: 15,
-                            color: _textSecondary,
+                            color: secondaryTextColor(context),
                           ),
                         ),
                       ],
@@ -216,18 +215,18 @@ class _PairingPanelState extends State<PairingPanel> {
                         children: [
                           Text(
                             s.scanQrBtn,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
-                              color: _textPrimary,
+                              color: primaryTextColor(context),
                             ),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             s.scanQrHint,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 12,
-                              color: _textSecondary,
+                              color: secondaryTextColor(context),
                             ),
                           ),
                         ],
@@ -247,8 +246,8 @@ class _PairingPanelState extends State<PairingPanel> {
                           ),
                         ),
                         onPressed: () => _openCameraScanner(context),
-                        icon: const Icon(LucideIcons.qrCode, size: 15),
-                        label: const Text(
+                        icon: Icon(LucideIcons.qrCode, size: 15),
+                        label: Text(
                           'QR',
                           style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
                         ),
@@ -270,19 +269,19 @@ class _PairingPanelState extends State<PairingPanel> {
                         key: const Key('input-pairing-code'),
                         controller: widget.pairingCodeController,
                         keyboardType: TextInputType.number,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
                           letterSpacing: 1.5,
-                          color: _textPrimary,
+                          color: primaryTextColor(context),
                         ),
                         decoration: InputDecoration(
                           hintText: s.pairingCodeLabel,
-                          hintStyle: const TextStyle(
+                          hintStyle: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w400,
                             letterSpacing: 0,
-                            color: _textSecondary,
+                            color: secondaryTextColor(context),
                           ),
                           isDense: true,
                           border: InputBorder.none,
@@ -296,7 +295,7 @@ class _PairingPanelState extends State<PairingPanel> {
                       child: OutlinedButton(
                         key: const Key('btn-connect-pair'),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: _textPrimary,
+                          foregroundColor: primaryTextColor(context),
                           side: const BorderSide(color: _btnBorderColor),
                           padding: const EdgeInsets.symmetric(horizontal: 14),
                           shape: RoundedRectangleBorder(
@@ -311,7 +310,7 @@ class _PairingPanelState extends State<PairingPanel> {
                         },
                         child: Text(
                           s.pairAndConnectBtn,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12.5,
                             fontWeight: FontWeight.w500,
                           ),
@@ -326,12 +325,12 @@ class _PairingPanelState extends State<PairingPanel> {
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Row(
                     children: [
-                      const Icon(LucideIcons.circleAlert, size: 14, color: Color(0xFFEF4444)),
+                      Icon(LucideIcons.circleAlert, size: 14, color: Color(0xFFEF4444)),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
                           client.errorMessage!,
-                          style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12),
+                          style: TextStyle(color: Color(0xFFEF4444), fontSize: 12),
                         ),
                       ),
                     ],
@@ -350,14 +349,14 @@ class _PairingPanelState extends State<PairingPanel> {
             icon: Icon(
               _showAdvanced ? LucideIcons.chevronUp : LucideIcons.chevronDown,
               size: 15,
-              color: _textSecondary,
+              color: secondaryTextColor(context),
             ),
             label: Text(
               s.advancedOptionsLabel,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
-                color: _textSecondary,
+                color: secondaryTextColor(context),
               ),
             ),
           ),
@@ -371,10 +370,10 @@ class _PairingPanelState extends State<PairingPanel> {
               children: [
                 Text(
                   s.wsUrlLabel,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12.5,
                     fontWeight: FontWeight.w500,
-                    color: _textSecondary,
+                    color: secondaryTextColor(context),
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -388,12 +387,12 @@ class _PairingPanelState extends State<PairingPanel> {
                   child: TextField(
                     key: const Key('input-ws-url'),
                     controller: widget.wsUrlController,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontFamily: 'monospace',
-                      color: _textPrimary,
+                      color: primaryTextColor(context),
                     ),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       border: InputBorder.none,
                       isDense: true,
                       contentPadding: EdgeInsets.symmetric(vertical: 8),
@@ -406,10 +405,10 @@ class _PairingPanelState extends State<PairingPanel> {
                 ),
                 Text(
                   s.qrUriLabel,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12.5,
                     fontWeight: FontWeight.w500,
-                    color: _textSecondary,
+                    color: secondaryTextColor(context),
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -423,17 +422,17 @@ class _PairingPanelState extends State<PairingPanel> {
                   child: TextField(
                     key: const Key('input-qr-uri'),
                     controller: widget.qrUriController,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12.5,
                       fontFamily: 'monospace',
-                      color: _textPrimary,
+                      color: primaryTextColor(context),
                     ),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       hintText: 'nienie://pair?data=...',
                       hintStyle: TextStyle(
                         fontSize: 12.5,
                         fontFamily: 'monospace',
-                        color: _textSecondary,
+                        color: secondaryTextColor(context),
                       ),
                       border: InputBorder.none,
                       isDense: true,
@@ -447,7 +446,7 @@ class _PairingPanelState extends State<PairingPanel> {
                   child: OutlinedButton.icon(
                     key: const Key('btn-pair-qr-uri'),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: _textPrimary,
+                      foregroundColor: primaryTextColor(context),
                       side: const BorderSide(color: _btnBorderColor),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
@@ -456,10 +455,10 @@ class _PairingPanelState extends State<PairingPanel> {
                     onPressed: () {
                       client.pairWithQrUri(widget.qrUriController.text);
                     },
-                    icon: const Icon(LucideIcons.link, size: 14, color: _textSecondary),
+                    icon: Icon(LucideIcons.link, size: 14, color: secondaryTextColor(context)),
                     label: Text(
                       s.pairWithQrBtn,
-                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
+                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
                     ),
                   ),
                 ),

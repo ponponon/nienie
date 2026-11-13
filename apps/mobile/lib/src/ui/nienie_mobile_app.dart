@@ -38,9 +38,6 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   final List<_Attachment> _attachments = [];
 
   static const Color _weTypeGreen = Color(0xFF17B378);
-  static const Color _textPrimary = Color(0xFF141416);
-  static const Color _textSecondary = Color(0xFF686C75);
-  static const Color _textMuted = Color(0xFF989CA5);
   static const Color _borderSubtle = Color(0x14000000);
 
   // Kelivo's exact 2-bar staggered menu icon (assets/icons/list.svg)
@@ -107,7 +104,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           return Scaffold(
             key: _scaffoldKey,
             backgroundColor:
-                isConnected ? Colors.white : const Color(0xFFF3F4F6),
+                isConnected ? Colors.white : userBubbleBgColor(context),
             drawer: isConnected
                 ? KelivoWorkspaceDrawer(
                     client: client,
@@ -145,7 +142,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     return AppBar(
       toolbarHeight: 50,
       backgroundColor: appBgColor(context),
-      foregroundColor: _textPrimary,
+      foregroundColor: primaryTextColor(context),
       elevation: 0,
       scrolledUnderElevation: 0,
       titleSpacing: 16,
@@ -168,11 +165,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           Expanded(
             child: Text(
               client.strings.appTitle,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
                 letterSpacing: -0.2,
-                color: _textPrimary,
+                color: primaryTextColor(context),
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -208,8 +205,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
     return AppBar(
       toolbarHeight: 54,
       backgroundColor: appBgColor(context),
-      surfaceTintColor: Colors.white,
-      foregroundColor: _textPrimary,
+      surfaceTintColor: Colors.transparent,
+      foregroundColor: primaryTextColor(context),
       elevation: 0,
       scrolledUnderElevation: 0,
       leadingWidth: 46,
@@ -235,10 +232,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             children: [
               Text(
                 active?.title ?? '新对话',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 15.5,
                   fontWeight: FontWeight.w600,
-                  color: _textPrimary,
+                  color: primaryTextColor(context),
                   height: 1.2,
                 ),
                 maxLines: 1,
@@ -251,10 +248,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   Flexible(
                     child: Text(
                       '$folderName · $agentName ($machineName)',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w500,
-                        color: _textSecondary,
+                        color: secondaryTextColor(context),
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -263,10 +260,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                   const SizedBox(width: 6),
                   _StatusPill(client: client, sessionId: active?.id),
                   const SizedBox(width: 2),
-                  const Icon(
+                  Icon(
                     LucideIcons.chevronDown,
                     size: 11,
-                    color: _textSecondary,
+                    color: secondaryTextColor(context),
                   ),
                 ],
               ),
@@ -282,7 +279,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             visualDensity: VisualDensity.compact,
             tooltip: client.strings.tooltipLoadDiffs,
             onPressed: () => client.loadSessionDiffs(active.id),
-            icon: const Icon(LucideIcons.map, size: 19, color: _textPrimary),
+            icon: Icon(LucideIcons.map, size: 19, color: primaryTextColor(context)),
           ),
         IconButton(
           key: const Key('btn-new-session'),
@@ -299,10 +296,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
               projectPath: active?.projectPath,
             );
           },
-          icon: const Icon(
+          icon: Icon(
             LucideIcons.messageCircleDashed,
             size: 20,
-            color: _textPrimary,
+            color: primaryTextColor(context),
           ),
         ),
         IconButton(
@@ -310,7 +307,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           visualDensity: VisualDensity.compact,
           tooltip: client.strings.tooltipDisconnect,
           onPressed: client.disconnect,
-          icon: const Icon(LucideIcons.unplug, size: 17, color: _textSecondary),
+          icon: Icon(LucideIcons.unplug, size: 17, color: secondaryTextColor(context)),
         ),
         const SizedBox(width: 4),
       ],
@@ -339,14 +336,14 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(LucideIcons.globe, size: 14, color: _textSecondary),
+            Icon(LucideIcons.globe, size: 14, color: secondaryTextColor(context)),
             const SizedBox(width: 3),
             Text(
               client.strings.langShortLabel,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11.5,
                 fontWeight: FontWeight.w500,
-                color: _textPrimary,
+                color: primaryTextColor(context),
               ),
             ),
           ],
@@ -368,18 +365,18 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF7ED),
+        color: warnBgColor(context),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
       ),
       child: Row(
         children: [
-          const Icon(LucideIcons.wifiOff, size: 15, color: Color(0xFFD97706)),
+          Icon(LucideIcons.wifiOff, size: 15, color: Color(0xFFD97706)),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               '${s.reconnectBannerPrefix}${client.reconnectAttempt}${s.reconnectBannerSuffix}',
-              style: const TextStyle(fontSize: 12, color: Color(0xFFB45309), height: 1.4),
+              style: TextStyle(fontSize: 12, color: Color(0xFFB45309), height: 1.4),
             ),
           ),
         ],
@@ -428,11 +425,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text(client.strings.attachMenuTitle, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              child: Text(client.strings.attachMenuTitle, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             ),
             ListTile(
               key: const Key('btn-attach-image'),
-              leading: const Icon(LucideIcons.image, size: 20),
+              leading: Icon(LucideIcons.image, size: 20),
               title: Text(client.strings.attachImageLabel),
               onTap: () {
                 Navigator.of(ctx).pop();
@@ -441,7 +438,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             ),
             ListTile(
               key: const Key('btn-attach-file'),
-              leading: const Icon(LucideIcons.file, size: 20),
+              leading: Icon(LucideIcons.file, size: 20),
               title: Text(client.strings.attachFileLabel),
               onTap: () {
                 Navigator.of(ctx).pop();
@@ -527,17 +524,17 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                       child: TextField(
                         onChanged: (v) => setState(() => query = v),
-                        style: const TextStyle(fontSize: 14),
+                        style: TextStyle(fontSize: 14),
                         decoration: InputDecoration(
                           hintText: client.strings.modelSearchHint,
-                          hintStyle: const TextStyle(
+                          hintStyle: TextStyle(
                             fontSize: 14,
-                            color: _textSecondary,
+                            color: secondaryTextColor(context),
                           ),
-                          prefixIcon: const Icon(
+                          prefixIcon: Icon(
                             LucideIcons.search,
                             size: 18,
-                            color: _textSecondary,
+                            color: secondaryTextColor(context),
                           ),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
@@ -545,7 +542,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                             vertical: 10,
                           ),
                           filled: true,
-                          fillColor: const Color(0xFFF3F4F6),
+                          fillColor: userBubbleBgColor(context),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                             borderSide: BorderSide.none,
@@ -562,7 +559,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                 client.strings.noModelsLabel,
                                 style: TextStyle(
                                   fontSize: 13,
-                                  color: _textSecondary,
+                                  color: secondaryTextColor(context),
                                 ),
                               ),
                             )
@@ -590,10 +587,10 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                           Expanded(
                                             child: Text(
                                               entry.key,
-                                              style: const TextStyle(
+                                              style: TextStyle(
                                                 fontSize: 12,
                                                 fontWeight: FontWeight.w600,
-                                                color: _textSecondary,
+                                                color: secondaryTextColor(context),
                                               ),
                                             ),
                                           ),
@@ -602,7 +599,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                                 ? LucideIcons.chevronDown
                                                 : LucideIcons.chevronUp,
                                             size: 14,
-                                            color: _textSecondary,
+                                            color: secondaryTextColor(context),
                                           ),
                                         ],
                                       ),
@@ -628,12 +625,12 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                           color:
                                               model.id == client.selectedModelId
                                                   ? _weTypeGreen
-                                                  : _textPrimary,
+                                                  : primaryTextColor(context),
                                         ),
                                       ),
                                       trailing:
                                           model.id == client.selectedModelId
-                                              ? const Icon(
+                                              ? Icon(
                                                   LucideIcons.check,
                                                   size: 18,
                                                   color: _weTypeGreen,
@@ -684,20 +681,20 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       padding: const EdgeInsets.only(left: 12, right: 4, top: 6, bottom: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFFF7F8FA),
+        color: cardBgColor(context),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0x12000000)),
       ),
       child: Row(
         children: [
-          const Icon(LucideIcons.history, size: 13, color: _textSecondary),
+          Icon(LucideIcons.history, size: 13, color: secondaryTextColor(context)),
           const SizedBox(width: 7),
           Expanded(
             child: Text(
               '${client.strings.summaryLastLabel}$lastText · $statusLabel',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 11.5, color: _textSecondary, height: 1.4),
+              style: TextStyle(fontSize: 11.5, color: secondaryTextColor(context), height: 1.4),
             ),
           ),
           IconButton(
@@ -706,7 +703,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             iconSize: 14,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            icon: const Icon(LucideIcons.x, size: 14, color: _textMuted),
+            icon: Icon(LucideIcons.x, size: 14, color: mutedTextColor(context)),
             onPressed: () {
               setState(() => _dismissedSummarySessionIds.add(active.id));
             },
@@ -761,7 +758,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           child: Container(
               padding: const EdgeInsets.fromLTRB(14, 10, 10, 8),
               decoration: BoxDecoration(
-                color: const Color(0xFFF3F4F6),
+                color: userBubbleBgColor(context),
                 borderRadius: BorderRadius.circular(22),
                 border: Border.all(color: const Color(0x16000000), width: 0.8),
               ),
@@ -779,8 +776,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                         children: [
                           for (final a in _attachments)
                             Chip(
-                              label: Text(a.name, style: const TextStyle(fontSize: 11)),
-                              deleteIcon: const Icon(LucideIcons.x, size: 13),
+                              label: Text(a.name, style: TextStyle(fontSize: 11)),
+                              deleteIcon: Icon(LucideIcons.x, size: 13),
                               onDeleted: () => setState(() => _attachments.remove(a)),
                             ),
                         ],
@@ -825,6 +822,9 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                         for (final a in _attachments) '${a.path}:${a.name}',
                       ];
                       client.sendMessage(msg).then((accepted) {
+                        if (accepted) {
+                          HapticFeedback.lightImpact(); // 7.3：键盘提交成功触感（失败不触发）
+                        }
                         if (accepted &&
                             _promptController.text == draftSnapshot &&
                             listEquals([
@@ -835,16 +835,16 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                         }
                       });
                     },
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 15,
-                      color: _textPrimary,
+                      color: primaryTextColor(context),
                       height: 1.35,
                     ),
                     decoration: InputDecoration(
                       hintText: client.strings.promptHint,
                       hintStyle: TextStyle(
                         fontSize: 14.5,
-                        color: _textPrimary.withValues(alpha: 0.42),
+                        color: primaryTextColor(context).withValues(alpha: 0.42),
                       ),
                       border: InputBorder.none,
                       isDense: true,
@@ -866,7 +866,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                           constraints: const BoxConstraints(),
                           tooltip: client.strings.tooltipAddAttachment,
                           onPressed: () => _showAttachMenu(context, client),
-                          icon: const Icon(LucideIcons.plus, size: 18, color: _textSecondary),
+                          icon: Icon(LucideIcons.plus, size: 18, color: secondaryTextColor(context)),
                         ),
                         if (_agentSupportsModelSwitch(client)) ...[
                           const SizedBox(width: 4),
@@ -884,11 +884,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Icon(LucideIcons.cpu, size: 13, color: _textSecondary),
+                                  Icon(LucideIcons.cpu, size: 13, color: secondaryTextColor(context)),
                                   const SizedBox(width: 5),
-                                  Text(_currentModelName(client), style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: _textPrimary)),
+                                  Text(_currentModelName(client), style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: primaryTextColor(context))),
                                   const SizedBox(width: 3),
-                                  const Icon(LucideIcons.chevronDown, size: 12, color: _textSecondary),
+                                  Icon(LucideIcons.chevronDown, size: 12, color: secondaryTextColor(context)),
                                 ],
                               ),
                             ),
@@ -902,7 +902,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                           child: IconButton.filled(
                             key: const Key('btn-send-prompt'),
                             padding: EdgeInsets.zero,
-                            style: IconButton.styleFrom(backgroundColor: _textPrimary, foregroundColor: Colors.white, shape: const CircleBorder()),
+                            style: IconButton.styleFrom(backgroundColor: primaryTextColor(context), foregroundColor: Colors.white, shape: const CircleBorder()),
                             // 断线/重连期间禁用发送（补发语义：重连后自动同步会话消息，不谎称本地排队）
                             onPressed: client.connectionState == BridgeConnectionState.connected
                                 ? () async {

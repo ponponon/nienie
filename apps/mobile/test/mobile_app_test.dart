@@ -3868,6 +3868,56 @@ void main() {
     expect(cardBgColor(context), const Color(0xFF1C1C1E));
   });
 
+  testWidgets('7.3b 键盘提交成功触发触感、失败不触发、快捷指令与批准触发', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+    final calls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        calls.add(call);
+        return null;
+      },
+    );
+    int haptics() => calls.where((c) => c.method == 'HapticFeedback.vibrate').length;
+
+    // 键盘提交成功 → 触感
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'keyboard msg');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pumpAndSettle();
+    expect(haptics(), greaterThan(0));
+
+    // 发送失败 → 不触发
+    transport.failNextSend = true;
+    calls.clear();
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'fail msg');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pumpAndSettle();
+    expect(haptics(), 0);
+
+    // 快捷指令 → 触感
+    calls.clear();
+    await tester.tap(find.byKey(const Key('quick-command-Continue')));
+    await tester.pump();
+    expect(haptics(), greaterThan(0));
+
+    // 批准（allow_once 低风险直达）→ 触感
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'hp1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(), 'type': 'status',
+      'payload': {'status': 'waiting', 'permissionId': 'perm_h', 'permission': 'read', 'detail': 'r', 'patterns': ['src/**']},
+    });
+    await tester.pumpAndSettle();
+    await tester.drag(find.byKey(const Key('session-timeline-list')), const Offset(0, -500));
+    await tester.pump(const Duration(milliseconds: 200));
+    calls.clear();
+    await tester.tap(find.byKey(const Key('btn-perm-allow-once-perm_h')));
+    await tester.pumpAndSettle();
+    expect(haptics(), greaterThan(0));
+    client.dispose();
+  });
+
   testWidgets('7.3 触感反馈：发送/长按触发 HapticFeedback', (WidgetTester tester) async {
     await pumpToSession(tester);
     final calls = <MethodCall>[];

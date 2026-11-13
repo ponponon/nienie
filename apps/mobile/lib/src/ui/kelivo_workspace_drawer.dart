@@ -25,10 +25,6 @@ class KelivoWorkspaceDrawer extends StatefulWidget {
 class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
   final Set<String> _collapsedProjects = {};
   final Set<String> _expandedMoreProjects = {};
-
-  static const Color _textPrimary = Color(0xFF141416);
-  static const Color _textSecondary = Color(0xFF686C75);
-  static const Color _textMuted = Color(0xFF989CA5);
   static const Color _accentGreen = Color(0xFF17B378);
 
   @override
@@ -48,7 +44,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
     return Drawer(
       width: 310,
       backgroundColor: appBgColor(context),
-      surfaceTintColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.horizontal(right: Radius.circular(20)),
       ),
@@ -69,10 +65,10 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                       Stack(
                         clipBehavior: Clip.none,
                         children: [
-                          const Icon(
+                          Icon(
                             LucideIcons.monitor,
                             size: 20,
-                            color: _textPrimary,
+                            color: primaryTextColor(context),
                           ),
                           Positioned(
                             top: -2,
@@ -96,20 +92,20 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                             Flexible(
                               child: Text(
                                 machineName,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 17.5,
                                   fontWeight: FontWeight.w700,
                                   letterSpacing: -0.3,
-                                  color: _textPrimary,
+                                  color: primaryTextColor(context),
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
                             const SizedBox(width: 4),
-                            const Icon(
+                            Icon(
                               LucideIcons.chevronDown,
                               size: 16,
-                              color: _textSecondary,
+                              color: secondaryTextColor(context),
                             ),
                           ],
                         ),
@@ -125,7 +121,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                         ),
                         child: Text(
                           '$onlineComputersCount 台在线',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: _accentGreen,
@@ -157,7 +153,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
-                          color: isSelected ? Colors.white : const Color(0xFFF5F6F8),
+                          color: isSelected ? Colors.white : panelBgColor(context),
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
                             color: isSelected
@@ -185,7 +181,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                                 fontSize: 12.5,
                                 fontWeight:
                                     isSelected ? FontWeight.w600 : FontWeight.w500,
-                                color: isSelected ? _textPrimary : _textSecondary,
+                                color: isSelected ? primaryTextColor(context) : secondaryTextColor(context),
                               ),
                             ),
                             if (agent.available) ...[
@@ -193,7 +189,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                               Container(
                                 width: 5,
                                 height: 5,
-                                decoration: const BoxDecoration(
+                                decoration: BoxDecoration(
                                   color: _accentGreen,
                                   shape: BoxShape.circle,
                                 ),
@@ -217,7 +213,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                 child: OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     backgroundColor: appBgColor(context),
-                    foregroundColor: _textPrimary,
+                    foregroundColor: primaryTextColor(context),
                     side: const BorderSide(color: Color(0x18000000)),
                     shape: const StadiumBorder(),
                   ),
@@ -235,12 +231,12 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                           );
                           widget.onCloseDrawer();
                         },
-                  icon: const Icon(LucideIcons.messageSquarePlus, size: 16),
+                  icon: Icon(LucideIcons.messageSquarePlus, size: 16),
                   label: Text(
                     isSelectedAgentAvailable
                         ? '新建任务'
                         : '${selectedAgent?.name ?? "该助手"} 未安装',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                     ),
@@ -258,17 +254,17 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                 children: [
                   Text(
                     '空间 (${projectGroups.length})',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w600,
-                      color: _textSecondary,
+                      color: secondaryTextColor(context),
                     ),
                   ),
                   const SizedBox(width: 4),
-                  const Icon(
+                  Icon(
                     LucideIcons.chevronDown,
                     size: 13,
-                    color: _textSecondary,
+                    color: secondaryTextColor(context),
                   ),
                 ],
               ),
@@ -287,9 +283,9 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                               ? '暂无历史项目会话'
                               : '这台电脑尚未安装 ${selectedAgent?.name ?? client.selectedAgentId}',
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
-                            color: _textMuted,
+                            color: mutedTextColor(context),
                           ),
                         ),
                       ),
@@ -328,19 +324,19 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                           ),
                           child: Row(
                             children: [
-                              const Icon(
+                              Icon(
                                 LucideIcons.folder,
                                 size: 17,
-                                color: _textPrimary,
+                                color: primaryTextColor(context),
                               ),
                               const SizedBox(width: 9),
                               Expanded(
                                 child: Text(
                                   group.projectName,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w600,
-                                    color: _textPrimary,
+                                    color: primaryTextColor(context),
                                   ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -350,7 +346,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                                     ? LucideIcons.chevronRight
                                     : LucideIcons.chevronDown,
                                 size: 15,
-                                color: _textMuted,
+                                color: mutedTextColor(context),
                               ),
                               const SizedBox(width: 8),
                               GestureDetector(
@@ -362,12 +358,12 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                                   );
                                   widget.onCloseDrawer();
                                 },
-                                child: const Padding(
+                                child: Padding(
                                   padding: EdgeInsets.all(2),
                                   child: Icon(
                                     LucideIcons.plus,
                                     size: 16,
-                                    color: _textSecondary,
+                                    color: secondaryTextColor(context),
                                   ),
                                 ),
                               ),
@@ -393,7 +389,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                                       _expandedMoreProjects.add(group.projectPath);
                                     });
                                   },
-                                  child: const Padding(
+                                  child: Padding(
                                     padding: EdgeInsets.symmetric(
                                       horizontal: 8,
                                       vertical: 6,
@@ -402,7 +398,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                                       '查看更多',
                                       style: TextStyle(
                                         fontSize: 12.5,
-                                        color: _textMuted,
+                                        color: mutedTextColor(context),
                                       ),
                                     ),
                                   ),
@@ -419,7 +415,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
             // Drawer Footer: Disconnect / Switch Computer
             Container(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 border: Border(top: BorderSide(color: Color(0x12000000))),
               ),
               child: Row(
@@ -427,10 +423,10 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                 children: [
                   TextButton.icon(
                     onPressed: widget.onOpenComputerSheet,
-                    icon: const Icon(LucideIcons.laptop, size: 15, color: _textSecondary),
-                    label: const Text(
+                    icon: Icon(LucideIcons.laptop, size: 15, color: secondaryTextColor(context)),
+                    label: Text(
                       '管理已连接电脑',
-                      style: TextStyle(fontSize: 12.5, color: _textSecondary),
+                      style: TextStyle(fontSize: 12.5, color: secondaryTextColor(context)),
                     ),
                   ),
                   TextButton.icon(
@@ -438,12 +434,12 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                       widget.onCloseDrawer();
                       client.disconnect();
                     },
-                    icon: const Icon(
+                    icon: Icon(
                       LucideIcons.unplug,
                       size: 14,
                       color: Color(0xFFDC2626),
                     ),
-                    label: const Text(
+                    label: Text(
                       '断开',
                       style: TextStyle(
                         fontSize: 12.5,
@@ -501,7 +497,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                   width: 7,
                   height: 7,
                   decoration: BoxDecoration(
-                    color: liveStatus == 'running' ? _accentGreen : _textMuted,
+                    color: liveStatus == 'running' ? _accentGreen : mutedTextColor(context),
                     shape: BoxShape.circle,
                   ),
                 ),
@@ -514,7 +510,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                      color: isSelected ? _textPrimary : const Color(0xFF2C2E33),
+                      color: isSelected ? primaryTextColor(context) : const Color(0xFF2C2E33),
                     ),
                   ),
                 ),
@@ -523,7 +519,7 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
                     key: Key('unread-dot-${session.id}'),
                     width: 8,
                     height: 8,
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       color: Color(0xFFEF4444),
                       shape: BoxShape.circle,
                     ),
@@ -538,9 +534,9 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
               ].join(' · '),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11.5,
-                color: _textMuted,
+                color: mutedTextColor(context),
               ),
             ),
           ],
@@ -564,7 +560,7 @@ void showMultiComputerSheet({
     builder: (sheetCtx) {
       return Container(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: Color(0xFFF8F9FA),
           borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
         ),
@@ -612,12 +608,12 @@ void showMultiComputerSheet({
                         ),
                       );
                     },
-                    icon: const Icon(
+                    icon: Icon(
                       LucideIcons.scanLine,
                       size: 14,
                       color: Color(0xFF17B378),
                     ),
-                    label: const Text(
+                    label: Text(
                       '扫码添加新电脑',
                       style: TextStyle(
                         fontSize: 12.5,
@@ -643,7 +639,7 @@ void showMultiComputerSheet({
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         child: Text(
                           client.activeMachineId ?? 'MacBook-Pro-M5 (当前在线)',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                           ),
@@ -664,7 +660,7 @@ void showMultiComputerSheet({
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               alignment: Alignment.center,
-                              child: const Icon(
+                              child: Icon(
                                 LucideIcons.monitor,
                                 size: 18,
                                 color: Color(0xFF17B378),
@@ -677,7 +673,7 @@ void showMultiComputerSheet({
                                 children: [
                                   Text(
                                     client.savedMachines[i].machineId,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w600,
                                       color: Color(0xFF141416),
@@ -685,7 +681,7 @@ void showMultiComputerSheet({
                                   ),
                                   Text(
                                     client.savedMachines[i].wsUrl,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 11.5,
                                       fontFamily: 'monospace',
                                       color: Color(0xFF686C75),
@@ -696,7 +692,7 @@ void showMultiComputerSheet({
                             ),
                             if (client.activeMachineId ==
                                 client.savedMachines[i].machineId)
-                              const Text(
+                              Text(
                                 '● 当前激活',
                                 style: TextStyle(
                                   fontSize: 12,
@@ -712,7 +708,7 @@ void showMultiComputerSheet({
                                     client.savedMachines[i].machineId,
                                   );
                                 },
-                                child: Text(client.strings.switchLabel, style: const TextStyle(fontSize: 12)),
+                                child: Text(client.strings.switchLabel, style: TextStyle(fontSize: 12)),
                               ),
                           ],
                         ),
