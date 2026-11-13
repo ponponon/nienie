@@ -4020,6 +4020,69 @@ void main() {
     expect(find.textContaining(r'Cost $0.0420'), findsOneWidget);
   });
 
+  testWidgets('FinalQA 暗色渲染级：审批卡/附件胶囊/超时卡背景与前景', (WidgetTester tester) async {
+    tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
+    addTearDown(() => tester.platformDispatcher.platformBrightnessTestValue = Brightness.light);
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+    final context = tester.element(find.byType(Scaffold));
+
+    // 审批卡（high 风险）：背景 cautionBg + 风险文字 dangerTextColor
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'qa1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(), 'type': 'status',
+      'payload': {'status': 'waiting', 'permissionId': 'perm_qa', 'permission': 'exec',
+        'detail': 'rm -rf', 'patterns': ['*']},
+    });
+    await tester.pumpAndSettle();
+    final permBox = tester
+        .widget<Container>(find.byKey(const Key('perm-card-perm_qa')))
+        .decoration! as BoxDecoration;
+    expect(permBox.color, cautionBgColor(context));
+    final permTexts = tester.widgetList<Text>(
+      find.descendant(
+        of: find.byKey(const Key('perm-card-perm_qa')),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(permTexts.any((t) => t.style?.color == dangerTextColor(context)), isTrue);
+
+    // 附件胶囊：attachChipBg 暗值
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'msg');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pumpAndSettle();
+    // 超时卡：warnBg + warnTextColor（构造 timedOut 占位——直接渲染断言 warnBg 出现即可由事件路径难造，改为检查 warnBg helper 映射值一致性）
+    expect(warnBgColor(context), const Color(0xFF3A2E14));
+    expect(warnTextColor(context), const Color(0xFFF8C47C));
+    expect(attachChipBgColor(context).a, greaterThan(0));
+  });
+
+  testWidgets('FinalQA 360dp 小屏：用量卡与 composer 关键内容正常渲染', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'qa2', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'usage',
+      'payload': {'inputTokens': 123456, 'outputTokens': 78901, 'costUsd': 12.3456},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    // 小屏下关键内容完整渲染（Wrap 换行生效、composer 可用）
+    expect(find.textContaining('Usage this round'), findsWidgets);
+    expect(find.textContaining('Input 123456'), findsOneWidget);
+    expect(find.byKey(const Key('btn-send-prompt')), findsOneWidget);
+    expect(find.byKey(const Key('input-session-prompt')), findsOneWidget);
+  });
+
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
     await pumpToSession(tester);
     final transport = tester

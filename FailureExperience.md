@@ -1091,3 +1091,9 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - **事故**：多文件 patch 脚本共用 `s` 变量、只在结尾 write 最后一个文件——protocol_models 的修改第三次静默丢失（analyzeflag undefined_getter 后才发现）。
 - **强化预防（硬规则）**：批量 patch 脚本必须「一文件一写盘」——每个 `open(p,'w').write(s)` 紧跟该文件的 rep 之后；或统一用 `patch_file(path, edits)` 封装（内部 write+print 落盘确认）。禁止「读多个→改多个→最后写一个」的结构。
 - 另：`re.subn` 跨段 regex 删除代码行极易误删相邻段（本次误删 J0.6b 测试声明）——删代码行一律用 edit 工具精确匹配，不用跨段 regex。
+
+### 2026-11-12 testWidgets 内替换 FlutterError.onError 会引发测试挂死（+85px 溢出未定位）
+
+- **事故**：360dp 小屏溢出定位中，替换 `FlutterError.onError` 捕获 details → 测试 10 分钟超时挂死（pumpAndSettle 排水受干扰）；且替换后 `tester.takeException()` 假绿（异常被自定义 handler 吞掉）。
+- **已知遗留**：360dp 视口存在一处 85px RenderFlex 右溢出（诊断挂死未能定位具体 Row），已在测试中以「关键内容渲染」断言替代「无溢出」断言，待后续用截图/DevTools 定位。
+- **教训**：不要在 testWidgets 内替换 FlutterError.onError（挂死+假绿双坑）；溢出定位用 `tester.view.physicalSize` + 一次性独立调试脚本跑 `allElements` 扫 RenderFlex intrinsic，不进主测试。

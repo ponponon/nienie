@@ -243,7 +243,6 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
               ),
               const SizedBox(height: 2),
               Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
                   Flexible(
                     child: Text(
@@ -258,7 +257,12 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  _StatusPill(client: client, sessionId: active?.id),
+                  Flexible(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: _StatusPill(client: client, sessionId: active?.id),
+                    ),
+                  ),
                   const SizedBox(width: 2),
                   Icon(
                     LucideIcons.chevronDown,
@@ -941,7 +945,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                         ),
                         if (_agentSupportsModelSwitch(client)) ...[
                           const SizedBox(width: 4),
-                          InkWell(
+                          Flexible(
+                          child: InkWell(
                             key: const Key('btn-select-model'),
                             borderRadius: BorderRadius.circular(999),
                             onTap: () => _showModelPicker(context, client),
@@ -953,16 +958,23 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
                                 border: Border.all(color: const Color(0x18000000)),
                               ),
                               child: Row(
-                                mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Icon(LucideIcons.cpu, size: 13, color: secondaryTextColor(context)),
                                   const SizedBox(width: 5),
-                                  Text(_currentModelName(client), style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: primaryTextColor(context))),
+                                  Flexible(
+                                    child: Text(
+                                      _currentModelName(client),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: primaryTextColor(context)),
+                                    ),
+                                  ),
                                   const SizedBox(width: 3),
                                   Icon(LucideIcons.chevronDown, size: 12, color: secondaryTextColor(context)),
                                 ],
                               ),
                             ),
+                          ),
                           ),
                         ],
                         const Spacer(),

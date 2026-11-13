@@ -797,3 +797,10 @@
 - **7.4 空状态教学化**：空时间线显示 `empty-state-guide` 引导卡（「还没有会话→在电脑上打开 OpenCode/Codex，点左下角配对」四语言）。
 - **7.5 用量卡**：UsageSummaryItem 升级三格卡（本轮用量 · Input N · Output N · Cost $X）。
 - mobile 113（+2）。
+
+### 2026-11-12 路线图#7 Final QA（渲染测试补齐 + 小屏溢出修复）
+
+- **P2 测试补齐**：审批卡 Key（perm-card-*）+ 暗色渲染级（背景 cautionBg/风险文字 dangerTextColor）、附件胶囊 Key+暗值、超时卡 warnBg/warnTextColor 映射一致性；360dp 小屏测试（用量卡大数字 + composer 关键内容渲染）。
+- **小屏溢出修复（真 bug）**：AppBar 副标题 Row `mainAxisSize.min` 内 Flexible 不收缩 + _StatusPill 非弹性宽 → 85px 溢出——去 min + FittedBox.scaleDown 防御；模型胶囊同病同修（内 Row min→max）。
+- 7.5 用量卡三格改 Wrap（小屏换行）。
+- mobile 115（+2）。

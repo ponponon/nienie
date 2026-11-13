@@ -528,6 +528,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     for (final attachment in item.attachments) ...[
                       const SizedBox(height: 6),
                       Container(
+                        key: Key('attach-chip-${attachment.name}'),
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                         decoration: BoxDecoration(
                           color: attachChipBgColor(context),
@@ -580,6 +581,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
           // 等待回复占位 / 超时兜底卡片
           PendingResponseItem() => item.timedOut
               ? Container(
+                  key: const Key('timeout-card'),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
                     color: warnBgColor(context),
@@ -1005,6 +1007,7 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                   widget.client.focusedPermissionId == item.permissionId &&
                   item.resolvedDecision == null;
               return Container(
+              key: Key('perm-card-${item.permissionId}'),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: focused ? infoBgColor(context) : cautionBgColor(context),
@@ -1449,24 +1452,29 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                     ),
                   ),
                   const Spacer(),
-                  // 7.5：本轮 tokens/费用三格展示
-                  Text(
-                    '${widget.client.strings.usageInput} ${item.inputTokens}',
-                    style: TextStyle(fontSize: 10.5, fontFamily: 'monospace', color: secondaryTextColor(context)),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${widget.client.strings.usageOutput} ${item.outputTokens}',
-                    style: TextStyle(fontSize: 10.5, fontFamily: 'monospace', color: secondaryTextColor(context)),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${widget.client.strings.usageCost} \$${item.costUsd.toStringAsFixed(4)}',
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontFamily: 'monospace',
-                      fontWeight: FontWeight.w600,
-                      color: _weTypeGreen,
+                  // 7.5：本轮 tokens/费用三格展示（Wrap 防小屏溢出）
+                  Flexible(
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        Text(
+                          '${widget.client.strings.usageInput} ${item.inputTokens}',
+                          style: TextStyle(fontSize: 10.5, fontFamily: 'monospace', color: secondaryTextColor(context)),
+                        ),
+                        Text(
+                          '${widget.client.strings.usageOutput} ${item.outputTokens}',
+                          style: TextStyle(fontSize: 10.5, fontFamily: 'monospace', color: secondaryTextColor(context)),
+                        ),
+                        Text(
+                          '${widget.client.strings.usageCost} \$${item.costUsd.toStringAsFixed(4)}',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w600,
+                            color: _weTypeGreen,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
