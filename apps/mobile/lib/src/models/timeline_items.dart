@@ -223,6 +223,9 @@ class FileDiffCardItem extends SessionTimelineItem {
 class FileDiffEntry {
   /// 服务端稳定 diffId（SHA 确定性），不得丢弃/伪造
   final String diffId;
+
+  /// 6.3 Round3：显式格式契约（'content'=before/after 文件内容；'unified_patch'=patch）；null=旧服务端启发式回退
+  final String? format;
   final String file;
   final String before;
   final String after;
@@ -231,6 +234,7 @@ class FileDiffEntry {
 
   const FileDiffEntry({
     required this.diffId,
+    this.format,
     required this.file,
     required this.before,
     required this.after,

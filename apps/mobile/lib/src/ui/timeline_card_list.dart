@@ -1312,15 +1312,27 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                       ),
                       if (item.expandedFile == f.file) ...[
                         const SizedBox(height: 4),
-                        // Round2 数据契约：V2 原生数据是 unified patch——按 diff 行着色展示；
-                        // 仅当数据源真给 before/after 全文时才双栏（不把 patch 伪装成「修改后」）
-                        if (_looksLikePatch(f.after) || (f.before.isEmpty && f.after.isNotEmpty))
-                          _buildPatchView(widget.client.strings.changePatchLabel, f.after),
-                        if (!_looksLikePatch(f.after) && f.before.isNotEmpty) ...[
-                          _buildDiffSection(widget.client.strings.changeBeforeLabel, f.before, false),
-                          const SizedBox(height: 6),
-                          _buildDiffSection(widget.client.strings.changeAfterLabel, f.after, true),
-                        ],
+                        // 6.3 Round3：显式 format 契约优先（unified_patch→着色；content→单/双栏），
+                        // 旧服务端无 format 才回退启发式（不再凭 before 空就断言 patch）
+                        ...() {
+                          final isPatch = f.format == 'unified_patch' ||
+                              (f.format == null && _looksLikePatch(f.after));
+                          if (isPatch) {
+                            return [ _buildPatchView(widget.client.strings.changePatchLabel, f.after) ];
+                          }
+                          // content：新增=After 单栏；删除=Before 单栏；修改=双栏
+                          final widgets = <Widget>[];
+                          if (f.before.isNotEmpty && f.after.isNotEmpty) {
+                            widgets.add(_buildDiffSection(widget.client.strings.changeBeforeLabel, f.before, false));
+                            widgets.add(const SizedBox(height: 6));
+                            widgets.add(_buildDiffSection(widget.client.strings.changeAfterLabel, f.after, true));
+                          } else if (f.after.isNotEmpty) {
+                            widgets.add(_buildDiffSection(widget.client.strings.changeAfterLabel, f.after, true));
+                          } else {
+                            widgets.add(_buildDiffSection(widget.client.strings.changeBeforeLabel, f.before, false));
+                          }
+                          return widgets;
+                        }(),
                         const SizedBox(height: 6),
                       ],
                     ],

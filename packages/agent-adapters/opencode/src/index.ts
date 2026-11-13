@@ -977,6 +977,7 @@ export class OpenCodeAdapter implements AgentAdapter {
           patch: after || before,
         }),
         file,
+        format: 'content' as const, // 6.3 Round3：显式格式契约（V1=文件内容）
         before,
         after,
         additions: Number(d['additions'] ?? 0),
@@ -1002,6 +1003,7 @@ export class OpenCodeAdapter implements AgentAdapter {
         patch: f.patch,
       }),
       file: f.file,
+      format: 'unified_patch', // 6.3 Round3：显式格式契约（V2=patch）
       before: '',
       after: f.patch,
       additions: f.additions,

@@ -93,9 +93,14 @@ export type ModelInfo = {
 };
 
 export type SessionFileDiff = {
-  /** 稳定差异标识（J0.6b）：sha256 派生，跨重连/重放不变。 */
+  /** 稳定差异标识（J0.6b）：sha256 派生，跨重连/重放不变。缺失=协议违规（客户端丢弃该条）。 */
   diffId: string;
   file: string;
+  /**
+   * 6.3 Round3：显式格式契约——'content'=before/after 为文件内容（V1）；
+   * 'unified_patch'=after 为 unified diff 文本（V2）。缺失=旧服务端，客户端启发式回退。
+   */
+  format?: 'content' | 'unified_patch' | undefined;
   before: string;
   after: string;
   additions: number;

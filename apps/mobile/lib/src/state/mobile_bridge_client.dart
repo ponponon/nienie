@@ -943,12 +943,16 @@ class MobileBridgeClient extends ChangeNotifier {
       _diffUnavailableSessions.remove(sessionId);
       final diffs = data['diffs'] as List<dynamic>? ?? const [];
       // 6.3：改动摘要卡——单卡聚合「本轮改动 N 文件 +X/-Y」，点开文件列表 → diff
-      final entries = <FileDiffEntry>[
+      // 6.3 Round3：diffId 缺失=协议违规 fail-closed 丢弃（文件路径不是 SHA 身份，不悄悄替代）
+      final entries = <FileDiffEntry?>[
         for (final raw in diffs)
           () {
             final map = Map<String, dynamic>.from(raw as Map);
+            final diffId = map['diffId'] as String? ?? '';
+            if (diffId.isEmpty) return null;
             return FileDiffEntry(
-              diffId: map['diffId'] as String? ?? map['file'] as String? ?? '',
+              diffId: diffId,
+              format: map['format'] as String?,
               file: map['file'] as String? ?? '',
               before: map['before'] as String? ?? '',
               after: map['after'] as String? ?? '',
@@ -956,7 +960,7 @@ class MobileBridgeClient extends ChangeNotifier {
               deletions: map['deletions'] as int? ?? 0,
             );
           }(),
-      ];
+      ].whereType<FileDiffEntry>().toList();
       // Round2：聚合卡身份=稳定 diffId 集合（同数据重载得到同一身份，不用时间戳）
       final summaryId = 'summary:${entries.map((e) => e.diffId).join('|')}';
       items.add(ChangeSummaryCardItem(
