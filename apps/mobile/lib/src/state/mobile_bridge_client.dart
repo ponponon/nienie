@@ -925,8 +925,8 @@ class MobileBridgeClient extends ChangeNotifier {
       final data = res['data'] as Map<String, dynamic>;
       final items = _timelineBySession.putIfAbsent(sessionId, () => []);
       // 重试去重（J0.6b-3.2）：重新加载前清掉旧差异卡/聚合卡与降级提示，不重复生成
+      // Round2：只清聚合卡与降级提示——快照来源的 FileDiffCardItem 是历史状态不误清
       items.removeWhere((item) =>
-          item is FileDiffCardItem ||
           item is ChangeSummaryCardItem ||
           (item is ErrorCardItem && item.code == 'DIFF_UNAVAILABLE'));
       if (data['unavailable'] == true) {
@@ -948,6 +948,7 @@ class MobileBridgeClient extends ChangeNotifier {
           () {
             final map = Map<String, dynamic>.from(raw as Map);
             return FileDiffEntry(
+              diffId: map['diffId'] as String? ?? map['file'] as String? ?? '',
               file: map['file'] as String? ?? '',
               before: map['before'] as String? ?? '',
               after: map['after'] as String? ?? '',
@@ -956,8 +957,10 @@ class MobileBridgeClient extends ChangeNotifier {
             );
           }(),
       ];
+      // Round2：聚合卡身份=稳定 diffId 集合（同数据重载得到同一身份，不用时间戳）
+      final summaryId = 'summary:${entries.map((e) => e.diffId).join('|')}';
       items.add(ChangeSummaryCardItem(
-        diffId: 'diff_${DateTime.now().microsecondsSinceEpoch}',
+        diffId: summaryId,
         files: entries,
       ));
       // 主动加载不是会话活动（不伪造活动时间），但可见内容变化要入水位

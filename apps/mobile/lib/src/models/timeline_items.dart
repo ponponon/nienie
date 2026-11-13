@@ -221,6 +221,8 @@ class FileDiffCardItem extends SessionTimelineItem {
 
 /// 6.3：单文件改动条目（改动摘要卡内文件列表/展开 diff 用）
 class FileDiffEntry {
+  /// 服务端稳定 diffId（SHA 确定性），不得丢弃/伪造
+  final String diffId;
   final String file;
   final String before;
   final String after;
@@ -228,6 +230,7 @@ class FileDiffEntry {
   final int deletions;
 
   const FileDiffEntry({
+    required this.diffId,
     required this.file,
     required this.before,
     required this.after,

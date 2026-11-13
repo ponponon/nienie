@@ -620,7 +620,7 @@ class NienieStrings {
   String get changeSummaryLabel => switch (lang) {
         AppLanguage.zh => '本轮改动',
         AppLanguage.en => 'Changes',
-        AppLanguage.ja => '今回合の変更',
+        AppLanguage.ja => '今回の変更',
         AppLanguage.ko => '이번 변경',
       };
 
@@ -636,6 +636,13 @@ class NienieStrings {
         AppLanguage.en => 'No changes',
         AppLanguage.ja => '変更なし',
         AppLanguage.ko => '변경 없음',
+      };
+
+  String get changePatchLabel => switch (lang) {
+        AppLanguage.zh => '差异',
+        AppLanguage.en => 'Diff',
+        AppLanguage.ja => '差分',
+        AppLanguage.ko => '차이',
       };
 
   String get changeBeforeLabel => switch (lang) {

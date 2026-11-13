@@ -167,6 +167,77 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
     });
   }
 
+  /// unified diff 形态判定（@@/diff --git/+/-/空格上下文行）
+  static bool _looksLikePatch(String content) {
+    final firstLine = content
+        .split('\n')
+        .firstWhere((l) => l.trim().isNotEmpty, orElse: () => '');
+    return firstLine.startsWith('@@') ||
+        firstLine.startsWith('diff --git') ||
+        firstLine.startsWith('+') ||
+        firstLine.startsWith('-');
+  }
+
+  /// 6.3：unified patch 着色视图（- 红 / + 绿 / @@ 蓝 / 空格灰）
+  Widget _buildPatchView(String label, String patch) {
+    final lines = patch.split('\n');
+    return Container(
+      key: const Key('diff-patch-view'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _borderSubtle),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF2563EB),
+            ),
+          ),
+          const SizedBox(height: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 180),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final line in lines)
+                    Text(
+                      line.isEmpty ? ' ' : line,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                        height: 1.5,
+                        color: line.startsWith('+')
+                            ? _weTypeGreen
+                            : line.startsWith('-')
+                                ? const Color(0xFFDC2626)
+                                : line.startsWith('@@')
+                                    ? const Color(0xFF2563EB)
+                                    : _textSecondary,
+                        backgroundColor: line.startsWith('+')
+                            ? _weTypeGreen.withValues(alpha: 0.07)
+                            : line.startsWith('-')
+                                ? const Color(0xFFEF4444).withValues(alpha: 0.06)
+                                : null,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 6.3：diff Before/After 区块（mono 内滚动，轻底色区分）
   Widget _buildDiffSection(String label, String content, bool isAfter) {
     return Container(
@@ -1241,9 +1312,15 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
                       ),
                       if (item.expandedFile == f.file) ...[
                         const SizedBox(height: 4),
-                        _buildDiffSection(widget.client.strings.changeBeforeLabel, f.before, false),
-                        const SizedBox(height: 6),
-                        _buildDiffSection(widget.client.strings.changeAfterLabel, f.after, true),
+                        // Round2 数据契约：V2 原生数据是 unified patch——按 diff 行着色展示；
+                        // 仅当数据源真给 before/after 全文时才双栏（不把 patch 伪装成「修改后」）
+                        if (_looksLikePatch(f.after) || (f.before.isEmpty && f.after.isNotEmpty))
+                          _buildPatchView(widget.client.strings.changePatchLabel, f.after),
+                        if (!_looksLikePatch(f.after) && f.before.isNotEmpty) ...[
+                          _buildDiffSection(widget.client.strings.changeBeforeLabel, f.before, false),
+                          const SizedBox(height: 6),
+                          _buildDiffSection(widget.client.strings.changeAfterLabel, f.after, true),
+                        ],
                         const SizedBox(height: 6),
                       ],
                     ],

@@ -3645,10 +3645,13 @@ void main() {
     await pumpToSession(tester);
     final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
     final transport = client.transport as FakeBridgeTransport;
+    // Round2：真实 V2 数据形态——unified patch（before 为空，after=patch 文本）
     transport.diffResponse = [
-      {'diffId': 'd1', 'file': 'src/a.ts', 'before': 'const a = 1;', 'after': 'const a = 2;',
+      {'diffId': 'd1', 'file': 'src/a.ts', 'before': '',
+        'after': '@@ -1 +1 @@\n-const a = 1;\n+const a = 2;',
         'additions': 3, 'deletions': 1},
-      {'diffId': 'd2', 'file': 'src/b.ts', 'before': '', 'after': 'export const b = 1;',
+      {'diffId': 'd2', 'file': 'src/b.ts', 'before': '',
+        'after': '@@ -0,0 +1 @@\n+export const b = 1;',
         'additions': 5, 'deletions': 0},
     ];
     await client.loadSessionDiffs('ses_alpha');
@@ -3666,18 +3669,99 @@ void main() {
     expect(find.byKey(const Key('change-file-src/a.ts')), findsOneWidget);
     expect(find.byKey(const Key('change-file-src/b.ts')), findsOneWidget);
 
-    // 点文件行 → 展开 Before/After diff
+    // 点文件行 → unified patch 着色视图（不是伪装 Before/After）
     await tester.tap(find.byKey(const Key('change-file-src/a.ts')));
     await tester.pump();
-    expect(find.text('Before'), findsOneWidget);
-    expect(find.text('After'), findsOneWidget);
-    expect(find.textContaining('const a = 1;'), findsWidgets); // before 内容
-    expect(find.textContaining('const a = 2;'), findsWidgets); // after 内容
+    expect(find.byKey(const Key('diff-patch-view')), findsOneWidget);
+    expect(find.text('Diff'), findsOneWidget);
+    expect(find.textContaining('-const a = 1;'), findsWidgets); // 删除行
+    expect(find.textContaining('+const a = 2;'), findsWidgets); // 新增行
 
     // 再点收起 diff
     await tester.tap(find.byKey(const Key('change-file-src/a.ts')));
     await tester.pump();
-    expect(find.text('Before'), findsNothing);
+    expect(find.byKey(const Key('diff-patch-view')), findsNothing);
+    client.dispose();
+  });
+
+  testWidgets('6.3 全文态（before/after 都非空且非 patch）显示 Before/After 双栏', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+    transport.diffResponse = [
+      {'diffId': 'd3', 'file': 'src/c.ts', 'before': 'const a = 1;', 'after': 'const a = 2;',
+        'additions': 1, 'deletions': 1},
+    ];
+    await client.loadSessionDiffs('ses_alpha');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('change-summary-header')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('change-file-src/c.ts')));
+    await tester.pump();
+    expect(find.text('Before'), findsOneWidget);
+    expect(find.text('After'), findsOneWidget);
+    expect(find.byKey(const Key('diff-patch-view')), findsNothing); // 非 patch 不着色渲染
+    client.dispose();
+  });
+
+  test('6.3 稳定 diffId：相同数据重载得到相同聚合卡身份（不用时间戳）', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions();
+    transport.diffResponse = [
+      {'diffId': 'd1', 'file': 'a.ts', 'before': '', 'after': '@@ -1 +1 @@\n-a\n+b',
+        'additions': 1, 'deletions': 1},
+    ];
+    await client.loadSessionDiffs('ses_alpha');
+    final first = client.timelineFor('ses_alpha').whereType<ChangeSummaryCardItem>().single;
+    await client.loadSessionDiffs('ses_alpha');
+    final second = client.timelineFor('ses_alpha').whereType<ChangeSummaryCardItem>().single;
+    expect(second.diffId, first.diffId); // 稳定身份（含原始 diffId 派生）
+    expect(first.files.single.diffId, 'd1'); // 保留服务端稳定 diffId
+    client.dispose();
+  });
+
+  test('6.3 快照来源 FileDiffCardItem 不被主动加载清除', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions();
+    final t = DateTime.now().toIso8601String();
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_fc',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep1',
+      'watermark': 1,
+      'capturedAt': t,
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {
+          'kind': 'file_change', 'ordinal': 0, 'partId': 'fc1', 'revision': 1,
+          'createdAt': t, 'updatedAt': t,
+          'diffId': 'd_snap', 'file': 'snap.ts', 'before': '', 'after': '@@ -1 +1 @@\n-a\n+b',
+          'additions': 1, 'deletions': 1,
+        },
+      ],
+    };
+    await client.loadSessionSnapshot('ses_alpha');
+    expect(client.timelineFor('ses_alpha').whereType<FileDiffCardItem>().length, 1);
+    transport.diffResponse = [
+      {'diffId': 'd1', 'file': 'x.ts', 'before': '', 'after': '@@ -1 +1 @@\n-a\n+b',
+        'additions': 1, 'deletions': 1},
+    ];
+    await client.loadSessionDiffs('ses_alpha');
+    // 快照来源卡保留 + 聚合卡新增（来源区分）
+    expect(client.timelineFor('ses_alpha').whereType<FileDiffCardItem>().length, 1);
+    expect(client.timelineFor('ses_alpha').whereType<ChangeSummaryCardItem>().length, 1);
     client.dispose();
   });
 
