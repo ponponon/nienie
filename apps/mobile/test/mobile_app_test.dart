@@ -278,8 +278,12 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      // 6.3：改动摘要卡——点开文件列表见文件行
+      await tester.tap(find.byKey(const Key('change-summary-header')));
+      await tester.pumpAndSettle();
       expect(find.text('src/index.ts'), findsOneWidget);
-      expect(find.text('+3 / -1'), findsOneWidget);
+      // 头部总计与文件行统计同文本（单文件时）——出现即达标
+      expect(find.text('+3 / -1'), findsWidgets);
 
       // 10. Load models and send message with selected modelId
       await client.loadModels('opencode');
@@ -1275,7 +1279,10 @@ void main() {
     await client.loadSessionDiffs('ses_alpha');
     await client.loadSessionDiffs('ses_alpha');
     await tester.pump();
-    expect(client.timelineFor('ses_alpha').whereType<FileDiffCardItem>().length, 1);
+    // 6.3：聚合卡语义——重复加载仍只一张改动摘要卡（去重语义保留）
+    final summaries = client.timelineFor('ses_alpha').whereType<ChangeSummaryCardItem>().toList();
+    expect(summaries.length, 1);
+    expect(summaries.single.files.length, 1);
     expect(
       client.timelineFor('ses_alpha').whereType<ErrorCardItem>().where((e) => e.code == 'DIFF_UNAVAILABLE').isEmpty,
       isTrue,
@@ -3632,6 +3639,46 @@ void main() {
     expect(transport2.replayRequests, 1); // 失败兜底恰好一次
     client.dispose();
     client2.dispose();
+  });
+
+  testWidgets('6.3 改动摘要卡：N 文件 +X/-Y → 文件列表 → Before/After diff', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+    transport.diffResponse = [
+      {'diffId': 'd1', 'file': 'src/a.ts', 'before': 'const a = 1;', 'after': 'const a = 2;',
+        'additions': 3, 'deletions': 1},
+      {'diffId': 'd2', 'file': 'src/b.ts', 'before': '', 'after': 'export const b = 1;',
+        'additions': 5, 'deletions': 0},
+    ];
+    await client.loadSessionDiffs('ses_alpha');
+    await tester.pump();
+
+    // 摘要头部：2 files + 总计 +8 / -1
+    expect(find.byKey(const Key('change-summary-header')), findsOneWidget);
+    expect(find.textContaining('Changes'), findsWidgets);
+    expect(find.text('2 files'), findsOneWidget);
+    expect(find.text('+8 / -1'), findsOneWidget);
+
+    // 点开文件列表
+    await tester.tap(find.byKey(const Key('change-summary-header')));
+    await tester.pump();
+    expect(find.byKey(const Key('change-file-src/a.ts')), findsOneWidget);
+    expect(find.byKey(const Key('change-file-src/b.ts')), findsOneWidget);
+
+    // 点文件行 → 展开 Before/After diff
+    await tester.tap(find.byKey(const Key('change-file-src/a.ts')));
+    await tester.pump();
+    expect(find.text('Before'), findsOneWidget);
+    expect(find.text('After'), findsOneWidget);
+    expect(find.textContaining('const a = 1;'), findsWidgets); // before 内容
+    expect(find.textContaining('const a = 2;'), findsWidgets); // after 内容
+
+    // 再点收起 diff
+    await tester.tap(find.byKey(const Key('change-file-src/a.ts')));
+    await tester.pump();
+    expect(find.text('Before'), findsNothing);
+    client.dispose();
   });
 
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {

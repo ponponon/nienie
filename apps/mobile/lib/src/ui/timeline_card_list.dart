@@ -167,6 +167,49 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
     });
   }
 
+  /// 6.3：diff Before/After 区块（mono 内滚动，轻底色区分）
+  Widget _buildDiffSection(String label, String content, bool isAfter) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: isAfter
+            ? _weTypeGreen.withValues(alpha: 0.06)
+            : const Color(0xFFEF4444).withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _borderSubtle),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+              color: isAfter ? _weTypeGreen : const Color(0xFFDC2626),
+            ),
+          ),
+          const SizedBox(height: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 180),
+            child: SingleChildScrollView(
+              child: Text(
+                content.isEmpty ? '—' : content,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                  color: _textSecondary,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 4.5：长按操作菜单——复制文本 / 引用追问 / 从这里重试（用户消息）
   void _showMessageActions(
     BuildContext context, {
@@ -1100,6 +1143,115 @@ class _SessionTimelineListState extends State<SessionTimelineList> {
             }),
 
           // File Diff Card
+          // 6.3：改动摘要卡——「本轮改动 N 文件 +X/-Y」→ 点开文件列表 → diff
+          ChangeSummaryCardItem() => Container(
+              key: Key('change-summary-${item.diffId}'),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF7F8FA),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _borderSubtle),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  InkWell(
+                    key: const Key('change-summary-header'),
+                    onTap: () => setState(() => item.expanded = !item.expanded),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          LucideIcons.fileDiff,
+                          size: 14.5,
+                          color: Color(0xFF2563EB),
+                        ),
+                        const SizedBox(width: 7),
+                        Text(
+                          widget.client.strings.changeSummaryLabel,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                            color: _textPrimary,
+                          ),
+                        ),
+                        const SizedBox(width: 7),
+                        Text(
+                          item.files.isEmpty
+                              ? widget.client.strings.changeNoChanges
+                              : widget.client.strings.changeFilesCount(item.files.length),
+                          style: const TextStyle(fontSize: 11, color: _textSecondary),
+                        ),
+                        const Spacer(),
+                        if (item.files.isNotEmpty)
+                          Text(
+                            '+${item.totalAdditions} / -${item.totalDeletions}',
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontFamily: 'monospace',
+                              fontWeight: FontWeight.w600,
+                              color: _weTypeGreen,
+                            ),
+                          ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          item.expanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                          size: 13,
+                          color: _textSecondary,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (item.expanded && item.files.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    for (final f in item.files) ...[
+                      InkWell(
+                        key: Key('change-file-${f.file}'),
+                        onTap: () => setState(() {
+                          item.expandedFile = item.expandedFile == f.file ? null : f.file;
+                        }),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 2),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  f.file,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 11.5,
+                                    fontFamily: 'monospace',
+                                    color: _textPrimary,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                '+${f.additions} / -${f.deletions}',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontFamily: 'monospace',
+                                  color: _textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (item.expandedFile == f.file) ...[
+                        const SizedBox(height: 4),
+                        _buildDiffSection(widget.client.strings.changeBeforeLabel, f.before, false),
+                        const SizedBox(height: 6),
+                        _buildDiffSection(widget.client.strings.changeAfterLabel, f.after, true),
+                        const SizedBox(height: 6),
+                      ],
+                    ],
+                  ],
+                ],
+              ),
+            ),
+
           FileDiffCardItem() => Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(

@@ -614,4 +614,41 @@ class NienieStrings {
         AppLanguage.ja => 'サマリーを閉じる',
         AppLanguage.ko => '요약 닫기',
       };
+
+  // ===== 6.3 改动摘要卡 =====
+
+  String get changeSummaryLabel => switch (lang) {
+        AppLanguage.zh => '本轮改动',
+        AppLanguage.en => 'Changes',
+        AppLanguage.ja => '今回合の変更',
+        AppLanguage.ko => '이번 변경',
+      };
+
+  String changeFilesCount(int n) => switch (lang) {
+        AppLanguage.zh => '$n 个文件',
+        AppLanguage.en => n == 1 ? '1 file' : '$n files',
+        AppLanguage.ja => '$n ファイル',
+        AppLanguage.ko => '$n개 파일',
+      };
+
+  String get changeNoChanges => switch (lang) {
+        AppLanguage.zh => '无改动',
+        AppLanguage.en => 'No changes',
+        AppLanguage.ja => '変更なし',
+        AppLanguage.ko => '변경 없음',
+      };
+
+  String get changeBeforeLabel => switch (lang) {
+        AppLanguage.zh => '修改前',
+        AppLanguage.en => 'Before',
+        AppLanguage.ja => '変更前',
+        AppLanguage.ko => '변경 전',
+      };
+
+  String get changeAfterLabel => switch (lang) {
+        AppLanguage.zh => '修改后',
+        AppLanguage.en => 'After',
+        AppLanguage.ja => '変更後',
+        AppLanguage.ko => '변경 후',
+      };
 }

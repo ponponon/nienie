@@ -219,6 +219,45 @@ class FileDiffCardItem extends SessionTimelineItem {
   });
 }
 
+/// 6.3：单文件改动条目（改动摘要卡内文件列表/展开 diff 用）
+class FileDiffEntry {
+  final String file;
+  final String before;
+  final String after;
+  final int additions;
+  final int deletions;
+
+  const FileDiffEntry({
+    required this.file,
+    required this.before,
+    required this.after,
+    required this.additions,
+    required this.deletions,
+  });
+}
+
+/// 6.3：改动摘要卡——「本轮改动 N 文件 +X/-Y」汇总卡 → 点开文件列表 → diff
+class ChangeSummaryCardItem extends SessionTimelineItem {
+  final String diffId;
+  final List<FileDiffEntry> files;
+
+  /// 文件列表展开/收起
+  bool expanded;
+
+  /// 当前展开 diff 的文件（点文件行切换）
+  String? expandedFile;
+
+  ChangeSummaryCardItem({
+    required this.diffId,
+    required this.files,
+    this.expanded = false,
+    this.expandedFile,
+  });
+
+  int get totalAdditions => files.fold(0, (sum, f) => sum + f.additions);
+  int get totalDeletions => files.fold(0, (sum, f) => sum + f.deletions);
+}
+
 class ScreenCaptureCardItem extends SessionTimelineItem {
   final String frameId;
   final String displayId;

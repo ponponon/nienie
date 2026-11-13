@@ -924,9 +924,10 @@ class MobileBridgeClient extends ChangeNotifier {
     if (res['ok'] == true) {
       final data = res['data'] as Map<String, dynamic>;
       final items = _timelineBySession.putIfAbsent(sessionId, () => []);
-      // 重试去重（J0.6b-3.2）：重新加载前清掉旧差异卡与降级提示，不重复生成
+      // 重试去重（J0.6b-3.2）：重新加载前清掉旧差异卡/聚合卡与降级提示，不重复生成
       items.removeWhere((item) =>
           item is FileDiffCardItem ||
+          item is ChangeSummaryCardItem ||
           (item is ErrorCardItem && item.code == 'DIFF_UNAVAILABLE'));
       if (data['unavailable'] == true) {
         _diffUnavailableSessions.add(sessionId);
@@ -941,19 +942,26 @@ class MobileBridgeClient extends ChangeNotifier {
       }
       _diffUnavailableSessions.remove(sessionId);
       final diffs = data['diffs'] as List<dynamic>? ?? const [];
-      for (final raw in diffs) {
-        final map = Map<String, dynamic>.from(raw as Map);
-        items.add(
-          FileDiffCardItem(
-            diffId: map['diffId'] as String? ?? map['file'] as String? ?? '',
-            file: map['file'] as String? ?? '',
-            before: map['before'] as String? ?? '',
-            after: map['after'] as String? ?? '',
-            additions: map['additions'] as int? ?? 0,
-            deletions: map['deletions'] as int? ?? 0,
-          ),
-        );
-      }
+      // 6.3：改动摘要卡——单卡聚合「本轮改动 N 文件 +X/-Y」，点开文件列表 → diff
+      final entries = <FileDiffEntry>[
+        for (final raw in diffs)
+          () {
+            final map = Map<String, dynamic>.from(raw as Map);
+            return FileDiffEntry(
+              file: map['file'] as String? ?? '',
+              before: map['before'] as String? ?? '',
+              after: map['after'] as String? ?? '',
+              additions: map['additions'] as int? ?? 0,
+              deletions: map['deletions'] as int? ?? 0,
+            );
+          }(),
+      ];
+      items.add(ChangeSummaryCardItem(
+        diffId: 'diff_${DateTime.now().microsecondsSinceEpoch}',
+        files: entries,
+      ));
+      // 主动加载不是会话活动（不伪造活动时间），但可见内容变化要入水位
+      _bumpTimeline(sessionId, recordActivity: false);
       notifyListeners();
     }
   }
