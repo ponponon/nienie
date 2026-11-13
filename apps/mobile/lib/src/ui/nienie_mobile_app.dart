@@ -31,8 +31,8 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
   final TextEditingController _pairingCodeController = TextEditingController();
   final TextEditingController _qrUriController = TextEditingController();
   final TextEditingController _promptController = TextEditingController();
-  // 6.2：会话摘要条——被关闭的会话不再显示
-  String? _dismissedSummarySessionId;
+  // 6.2：会话摘要条——各会话独立关闭记录（A/B 互不覆盖）
+  final Set<String> _dismissedSummarySessionIds = {};
   final List<_Attachment> _attachments = [];
 
   static const Color _weTypeGreen = Color(0xFF17B378);
@@ -647,7 +647,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
 
   /// 6.2：会话摘要条——「上次：<最后消息> · <状态>」一句话恢复上下文
   Widget? _buildSessionSummary(MobileBridgeClient client, AgentSession active) {
-    if (_dismissedSummarySessionId == active.id) return null;
+    if (_dismissedSummarySessionIds.contains(active.id)) return null;
     final lastUser = client
         .timelineFor(active.id)
         .whereType<UserPromptItem>()
@@ -659,10 +659,11 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
         : status == 'failed'
             ? client.strings.toolStatusFailed
             : client.strings.sessionIdleLabel;
+    // Round2：Unicode 安全截断（不切开代理对/组合字符）
     final lastText = lastUser == null
         ? '…'
-        : (lastUser.message.length > 60
-            ? '${lastUser.message.substring(0, 60)}…'
+        : (lastUser.message.characters.length > 60
+            ? '${lastUser.message.characters.take(60)}…'
             : lastUser.message);
     return Container(
       key: const Key('session-summary-bar'),
@@ -679,7 +680,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
           const SizedBox(width: 7),
           Expanded(
             child: Text(
-              '${client.strings.summaryLastLabel}：$lastText · $statusLabel',
+              '${client.strings.summaryLastLabel}$lastText · $statusLabel',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 11.5, color: _textSecondary, height: 1.4),
@@ -693,7 +694,7 @@ class _NienieMobileAppState extends State<NienieMobileApp> {
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             icon: const Icon(LucideIcons.x, size: 14, color: _textMuted),
             onPressed: () {
-              setState(() => _dismissedSummarySessionId = active.id);
+              setState(() => _dismissedSummarySessionIds.add(active.id));
             },
           ),
         ],

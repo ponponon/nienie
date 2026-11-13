@@ -36,6 +36,8 @@ class FakeBridgeTransport implements BridgeTransport {
   final List<Map<String, String>> permissionReplies = [];
   final List<Map<String, String>> registeredPushes = [];
   Map<String, dynamic>? snapshotResponse;
+  /// Round2 测试钩子：下一次 session.load 失败（打开失败保留未读用）
+  bool failSessionLoadOnce = false;
   String? helloMachineId;
   bool omitHelloMachineId = false;
 
@@ -128,10 +130,28 @@ class FakeBridgeTransport implements BridgeTransport {
                 'createdAt': DateTime.now().subtract(const Duration(hours: 1)).toIso8601String(),
                 'updatedAt': DateTime.now().subtract(const Duration(minutes: 3)).toIso8601String(),
               },
+              {
+                'id': 'ses_beta',
+                'agentId': 'opencode',
+                'title': 'Fix login crash',
+                'projectPath': '/workspace/webapp',
+                'status': 'idle',
+                'createdAt': DateTime.now().subtract(const Duration(days: 1)).toIso8601String(),
+                'updatedAt': DateTime.now().subtract(const Duration(hours: 2)).toIso8601String(),
+              },
             ],
           },
         };
       case 'session.load':
+        if (failSessionLoadOnce) {
+          failSessionLoadOnce = false;
+          return {
+            'type': 'response',
+            'requestId': requestId,
+            'ok': false,
+            'error': {'code': 'LOAD_FAILED', 'message': 'session load failed'},
+          };
+        }
         return {
           'type': 'response',
           'requestId': requestId,
@@ -209,21 +229,10 @@ class FakeBridgeTransport implements BridgeTransport {
                 'capturedAt': '2026-11-10T00:00:00Z',
                 'complete': true,
                 'hasMore': false,
-                'totalParts': 1,
-                'parts': [
-                  {
-                    'kind': 'message',
-                    'partId': 'p1',
-                    'ordinal': 0,
-                    'revision': 1,
-                    'createdAt': '2026-11-10T00:00:00Z',
-                    'updatedAt': '2026-11-10T00:00:00Z',
-                    'role': 'assistant',
-                    'content': [
-                      {'type': 'text', 'text': 'Snapshot content'},
-                    ],
-                  },
-                ],
+                // 默认空快照（openSession 统一恢复后不污染既有测试时间线；
+                // 需要快照内容的测试显式设置 snapshotResponse）
+                'totalParts': 0,
+                'parts': [],
               },
         };
       case 'session.cancel':

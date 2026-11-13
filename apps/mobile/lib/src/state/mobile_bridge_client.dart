@@ -105,6 +105,7 @@ class MobileBridgeClient extends ChangeNotifier {
   void _bumpTimeline(String sessionId) {
     _timelineVersionBySession[sessionId] =
         (_timelineVersionBySession[sessionId] ?? 0) + 1;
+    _lastActivityBySession[sessionId] = DateTime.now(); // 6.1：活动时间随内容变化
     _markUnreadIfBackground(sessionId); // 6.1：后台会话可见变化 → 未读
   }
 
@@ -195,10 +196,16 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   String statusFor(String sessionId) {
+    // Round2：回退到**该会话自身**的模型状态（不得串到活跃会话的状态）
     return _sessionStatusBySession[sessionId] ??
-        activeSession?.status ??
+        _findSession(sessionId)?.status ??
         'idle';
   }
+
+  // ===== 6.1 活动时间：会话实际活动（水位 bump）时记录，卡片相对时间取最新 =====
+  final Map<String, DateTime> _lastActivityBySession = {};
+
+  DateTime? lastActivityFor(String sessionId) => _lastActivityBySession[sessionId];
 
   Future<void> refreshSavedMachines() async {
     savedMachines = await credentialStore.listMachines();
@@ -318,9 +325,9 @@ class MobileBridgeClient extends ChangeNotifier {
       await refreshAgents();
       await refreshSessions();
       if (activeSession == null && sessions.isNotEmpty) {
-        activeSession = sessions.first;
-        selectedAgentId = activeSession!.agentId;
-        await loadModels(selectedAgentId);
+        // Round2：冷启动/重连自动选中也走 openSession 统一恢复入口——
+        // 历史回放/快照恢复，摘要条才有数据（此前 Timeline 空导致摘要条永不显示）
+        await openSession(sessions.first);
       }
       notifyListeners();
     } catch (e) {
@@ -757,7 +764,10 @@ class MobileBridgeClient extends ChangeNotifier {
       }
     }
     _timelineBySession[sessionId] = nextTimeline;
-    _bumpTimeline(sessionId); // 5.2：快照安装也是可见内容变化
+    // 空快照装入不算可见变化（不误更新活动时间/未读）
+    if (nextTimeline.isNotEmpty || existingItems.isNotEmpty) {
+      _bumpTimeline(sessionId); // 5.2：快照安装也是可见内容变化
+    }
     _lastSequenceBySession.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
     if (epoch.isNotEmpty) _lastSequenceBySession['$sessionId#$epoch'] = watermark;
     _pendingEventsByEpoch.removeWhere((k, _) => k == sessionId || k.startsWith('$sessionId#'));
@@ -803,6 +813,8 @@ class MobileBridgeClient extends ChangeNotifier {
       title: newTitle,
       projectPath: session.projectPath,
       status: session.status,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
     );
     final idx = sessions.indexWhere((s) => s.id == session.id);
     if (idx >= 0) {
@@ -1162,7 +1174,6 @@ class MobileBridgeClient extends ChangeNotifier {
   }
 
   Future<void> openSession(AgentSession session) async {
-    _unreadSessionIds.remove(session.id); // 6.1：打开即读
     selectedAgentId = session.agentId;
     await loadModels(session.agentId);
     final res = await transport.sendRequest({
@@ -1171,17 +1182,27 @@ class MobileBridgeClient extends ChangeNotifier {
       'agentId': session.agentId,
       'sessionId': session.id,
     });
-    if (res['ok'] == true) {
-      final sessionMap = (res['data'] as Map<String, dynamic>)['session'] as Map;
-      activeSession = AgentSession.fromJson(Map<String, dynamic>.from(sessionMap));
-    } else {
+    if (res['ok'] != true) {
+      // Round2：打开失败——保留未读、不进入恢复流程
       activeSession = session;
+      errorMessage = '打开会话失败，已保留当前记录';
+      notifyListeners();
+      return;
     }
+    final sessionMap = (res['data'] as Map<String, dynamic>)['session'] as Map;
+    activeSession = AgentSession.fromJson(Map<String, dynamic>.from(sessionMap));
     if ((_timelineBySession[session.id] ?? const []).isEmpty) {
+      // Round2：统一恢复入口——快照恢复（历史）+ 事件回放（补缺口），
+      // 冷启动自动选中与手动打开走同一路径，摘要条才有数据源
+      try {
+        await loadSessionSnapshot(session.id);
+      } catch (_) {}
       try {
         await replayMissedEvents(session.id);
       } catch (_) {}
     }
+    // Round2：未读清除放在成功进入后（覆盖「打开期间又收到事件」竞态）
+    _unreadSessionIds.remove(session.id);
     notifyListeners();
   }
 

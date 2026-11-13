@@ -595,10 +595,10 @@ class NienieStrings {
   // ===== 6.2 会话摘要条 =====
 
   String get summaryLastLabel => switch (lang) {
-        AppLanguage.zh => '上次',
-        AppLanguage.en => 'Last',
-        AppLanguage.ja => '前回',
-        AppLanguage.ko => '마지막',
+        AppLanguage.zh => '上次：',
+        AppLanguage.en => 'Last: ',
+        AppLanguage.ja => '前回：',
+        AppLanguage.ko => '마지막: ',
       };
 
   String get sessionIdleLabel => switch (lang) {

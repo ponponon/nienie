@@ -467,7 +467,14 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
     final projectName = session.projectPath.isNotEmpty
         ? session.projectPath.split('/').where((s) => s.isNotEmpty).lastOrNull ?? ''
         : '';
-    final time = session.updatedAt ?? session.createdAt;
+    // Round2：实时状态（events 驱动），不读静态模型字段
+    final liveStatus = client.statusFor(session.id);
+    // Round2：活动时间随会话实际活动更新（本地乐观时间，权威时间到达后自然更旧/更新）
+    final modelTime = session.updatedAt ?? session.createdAt;
+    final lastActivity = client.lastActivityFor(session.id);
+    final time = (modelTime != null && lastActivity != null && modelTime.isAfter(lastActivity))
+        ? modelTime
+        : (lastActivity ?? modelTime);
     return InkWell(
       key: Key('session-item-${session.id}'),
       borderRadius: BorderRadius.circular(9),
@@ -489,12 +496,11 @@ class _KelivoWorkspaceDrawerState extends State<KelivoWorkspaceDrawer> {
               children: [
                 // 状态点（运行中/idle）
                 Container(
+                  key: Key('session-status-dot-${session.id}'),
                   width: 7,
                   height: 7,
                   decoration: BoxDecoration(
-                    color: session.status == 'running'
-                        ? _accentGreen
-                        : _textMuted,
+                    color: liveStatus == 'running' ? _accentGreen : _textMuted,
                     shape: BoxShape.circle,
                   ),
                 ),

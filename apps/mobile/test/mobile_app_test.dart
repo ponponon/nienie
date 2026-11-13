@@ -3343,6 +3343,184 @@ void main() {
     expect(find.byKey(const Key('session-summary-bar')), findsNothing);
   });
 
+  testWidgets('Round2 状态点实时：running 绿/idle 灰，A running 不串到 B', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.tap(find.byKey(const Key('btn-open-drawer')));
+    await tester.pumpAndSettle();
+    Color dotColor(String id) => (tester
+            .widget<Container>(find.byKey(Key('session-status-dot-$id')))
+            .decoration! as BoxDecoration)
+        .color!;
+
+    const green = Color(0xFF17B378);
+    const gray = Color(0xFF989CA5);
+    // 初始 idle
+    expect(dotColor('ses_alpha'), gray);
+    expect(dotColor('ses_beta'), gray);
+
+    // ses_alpha running → 绿（事件驱动实时状态）
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'st1', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'running'},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(dotColor('ses_alpha'), green);
+    expect(dotColor('ses_beta'), gray); // A running 不串到 B
+
+    // 回 idle → 灰
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'st2', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 2, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'idle'},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(dotColor('ses_alpha'), gray);
+    client.dispose();
+  });
+
+  testWidgets('Round2 真实事件驱动未读：后台 B 红点、活跃 A 无', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+    final transport = client.transport as FakeBridgeTransport;
+
+    await tester.tap(find.byKey(const Key('btn-open-drawer')));
+    await tester.pumpAndSettle();
+
+    // B（后台）收到可见内容 → 真实链路（事件→水位→未读）→ 红点
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'un1', 'streamEpoch': 'ep1', 'sessionId': 'ses_beta',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {'delta': 'B 的新回复', 'partId': 'p_b', 'partRevision': 1},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('unread-dot-ses_beta')), findsOneWidget);
+    expect(find.byKey(const Key('unread-dot-ses_alpha')), findsNothing); // 活跃 A 无
+
+    // A（活跃）收到内容 → 仍无红点
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'un2', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'text_delta',
+      'payload': {'delta': 'A 的新回复', 'partId': 'p_a', 'partRevision': 1},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('unread-dot-ses_alpha')), findsNothing);
+    client.dispose();
+  });
+
+  test('Round2 打开失败保留未读（清除时机在成功进入后）', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions();
+    client.markSessionUnreadForTest('ses_alpha');
+    expect(client.isSessionUnread('ses_alpha'), isTrue);
+
+    transport.failSessionLoadOnce = true;
+    await client.openSession(client.sessions.firstWhere((x) => x.id == 'ses_alpha'));
+    // load 失败走了 fallback（activeSession=原对象）仍算进入成功？——设计：load 失败保留未读
+    // openSession 的 session.load 失败分支 activeSession=session 且继续 replay；
+    // 此处验证：失败响应下未读不被误清（清除发生在成功进入后）
+    expect(client.isSessionUnread('ses_alpha'), isTrue);
+    client.dispose();
+  });
+
+  testWidgets('Round2 A/B 分别关闭摘要，切换后均不重新出现', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final client = tester.widget<NienieMobileApp>(find.byType(NienieMobileApp)).client;
+
+    // A 发消息 → 摘要条 → 关闭
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'A 的上下文');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-summary-bar')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('btn-close-session-summary')));
+    await tester.pumpAndSettle();
+
+    // 切到 B → 发消息 → 摘要条 → 关闭
+    final b = client.sessions.firstWhere((x) => x.id == 'ses_beta');
+    await client.openSession(b);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), 'B 的上下文');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-summary-bar')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('btn-close-session-summary')));
+    await tester.pumpAndSettle();
+
+    // 回 A → 关闭记录独立保留，不重新出现
+    await client.openSession(client.sessions.firstWhere((x) => x.id == 'ses_alpha'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-summary-bar')), findsNothing);
+    client.dispose();
+  });
+
+  test('Round2 冷启动自动选中会话后恢复 Timeline（摘要条有数据源）', () async {
+    final transport = FakeBridgeTransport();
+    final t0 = DateTime.now().subtract(const Duration(minutes: 10));
+    transport.snapshotResponse = {
+      'schemaVersion': 1,
+      'snapshotId': 'snap_cold',
+      'sessionId': 'ses_alpha',
+      'agentId': 'opencode',
+      'streamEpoch': 'ep1',
+      'watermark': 1,
+      'capturedAt': DateTime.now().toIso8601String(),
+      'complete': true,
+      'hasMore': false,
+      'totalParts': 1,
+      'parts': [
+        {
+          'kind': 'message', 'ordinal': 0, 'partId': 'm1', 'revision': 1,
+          'createdAt': t0.toIso8601String(), 'updatedAt': t0.toIso8601String(),
+          'role': 'user',
+          'content': [{'type': 'text', 'text': '冷启动前的最后一条消息'}],
+        },
+      ],
+    };
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions();
+    // 模拟连接后自动选中（统一恢复入口 openSession——含历史/快照恢复）
+    await client.openSession(client.sessions.first);
+    // Timeline 已恢复 → 摘要条数据源存在
+    final lastUser = client
+        .timelineFor(client.sessions.first.id)
+        .whereType<UserPromptItem>()
+        .lastOrNull;
+    expect(lastUser?.message, '冷启动前的最后一条消息');
+    client.dispose();
+  });
+
+  test('Round2 活动时间随发送更新（卡片相对时间反映最新活动）', () async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await client.refreshSessions();
+    final session = client.sessions.firstWhere((x) => x.id == 'ses_alpha');
+    final before = client.lastActivityFor('ses_alpha');
+    client.connectionState = BridgeConnectionState.connected;
+    client.activeSession = session;
+    await client.sendMessage('新活动');
+    final after = client.lastActivityFor('ses_alpha');
+    expect(after, isNotNull);
+    if (before != null) {
+      expect(after!.isAfter(before), isTrue);
+    }
+    client.dispose();
+  });
+
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
     await pumpToSession(tester);
     final transport = tester
