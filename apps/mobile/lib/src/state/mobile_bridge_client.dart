@@ -1475,13 +1475,17 @@ class MobileBridgeClient extends ChangeNotifier {
         }
         if (status == 'idle') {
           // 回复结束：收起「等待中」占位，并把思考过程折叠（不占屏幕空间）
+          // 收尾：只在**实际**可见变化时递增（无占位/无未折叠思考的普通 idle 不算）
+          final hadPending = items.any((i) => i is PendingResponseItem);
+          var collapsedAny = false;
           _resolvePending(event.sessionId);
           for (final item in items) {
-            if (item is StreamingTextItem && item.isThinking) {
+            if (item is StreamingTextItem && item.isThinking && !item.collapsed) {
               item.collapsed = true;
+              collapsedAny = true;
             }
           }
-          changed = true; // 可见变化（占位消失/思考折叠）
+          changed = hadPending || collapsedAny;
         }
         final permissionId = event.payload['permissionId'] as String?;
         if (status == 'waiting' && permissionId != null) {
@@ -1585,6 +1589,7 @@ class MobileBridgeClient extends ChangeNotifier {
                 claimed.revision = partRevision ?? 0;
                 claimed.message = delta;
                 if (attachments.isNotEmpty) claimed.attachments = attachments;
+                changed = true; // 认领对账是可见变化
               } else {
                 items.add(UserPromptItem(delta,
                     partId: partId,
@@ -1716,22 +1721,37 @@ class MobileBridgeClient extends ChangeNotifier {
         }
         if (existing != null) {
           final card = existing;
+          var touched = false;
+          // Round3 收尾：只有实际字段变化才算可见变化（重复 tool_use 不递增水位）
           // Round 4：timingKnown=false（历史回放）不伪造执行时间
-          if (event.payload['timingKnown'] != false) {
-            card.startedAt ??= eventTime; // 4.4：开始时间（首次 tool_use，重复事件不重置）
+          if (event.payload['timingKnown'] != false && card.startedAt == null) {
+            card.startedAt = eventTime; // 4.4：开始时间（首次 tool_use，重复事件不重置）
+            touched = true;
           }
           // 状态机：pending→running 允许升级；running→pending 禁止降级；终态吸收
           if (card.status == ToolCallStatus.pending || card.status == ToolCallStatus.running) {
-            if (requested == ToolCallStatus.running) card.status = ToolCallStatus.running;
+            if (requested == ToolCallStatus.running &&
+                card.status != ToolCallStatus.running) {
+              card.status = ToolCallStatus.running;
+              touched = true;
+            }
           }
           // 结果先于声明时占位卡信息补齐：真实工具名覆盖占位名，input 只补缺失字段
-          if (card.name == 'tool' && name != 'tool') card.name = name;
-          input.forEach((key, value) => card.input.putIfAbsent(key, () => value));
+          if (card.name == 'tool' && name != 'tool') {
+            card.name = name;
+            touched = true;
+          }
+          input.forEach((key, value) {
+            if (!card.input.containsKey(key)) {
+              card.input[key] = value;
+              touched = true;
+            }
+          });
           if (partId != null) card.partId = partId;
           if (partRevision != null && partRevision > card.revision) {
             card.revision = partRevision;
           }
-          changed = true;
+          changed = touched;
         } else {
           items.add(
             ToolCallCardItem(

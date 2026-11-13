@@ -1078,3 +1078,10 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - **事故一**：脚本里偷懒用只含 `assert old in s` 的简版 rep（无 count==1 断言），`s.replace` 全局替换把 5 处快照 map 的 `'totalParts': 1,` 一并删除 → 4 个无关快照测试静默变红，排查方向被带偏。
 - **事故二**：用 `git stash` + `git checkout stash@{0} -- <file>` 二分定位回归后忘记恢复其余文件，stash drop 前工作区只剩部分改动（message-restore/state-store/protocol/测试回到 HEAD），测试计数异常才发现。
 - **教训/预防**：①批量替换一律用带 `count==1` 断言的 rep 或 edit 工具；②git stash 二分流程固定为「checkout 参与文件→跑测→立即 checkout 全部改动文件回来→验证 diff 文件数→再 drop stash」，drop 前先 `git diff HEAD --stat` 核对文件清单；③测试计数（125→124）这类「数不对」的异常就是文件残缺的信号。
+
+### 2026-11-12 testWidgets 假时钟区内 await 真实文件 I/O 死锁
+
+- **事故**：testWidgets 用例直接 `await FileCredentialStore(...).saveQuickCommands(...)`（真实磁盘 I/O）→ 10 分钟 TimeoutException 死锁；`tester.runAsync` 包住「假时钟区已启动的文件 Future」同样死锁。
+- **根因**：AutomatedTestWidgetsFlutterBinding 的 FakeAsync 控制微任务/定时器——假时钟区内启动的真实文件 I/O，其续体挂在假区域微任务队列上无法推进；runAsync 等待该 Future 时假区域被冻结 → 互锁。
+- **修复**：真实 I/O **全部**在 `tester.runAsync(() async {...})` 回调内发起并 await（回调整体运行在真实事件循环），再 pumpWidget；预加载优于 pumpAndSettle 后补加载（后者同样等不到任意 Future）。
+- **预防**：testWidgets 内磁盘/网络测试一律 runAsync 包裹 I/O；纯数据链路测试优先用 `test()`（真实区域）而非 testWidgets。

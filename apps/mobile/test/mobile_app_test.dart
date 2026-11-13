@@ -3119,6 +3119,79 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('Round3 收尾：普通 idle（无占位/无折叠）不浮出「有新回复」', (WidgetTester tester) async {
+    await pumpToSession(tester);
+    final transport = tester
+        .widget<NienieMobileApp>(find.byType(NienieMobileApp))
+        .client
+        .transport as FakeBridgeTransport;
+
+    for (var i = 1; i <= 8; i++) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'q$i', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+        'sequence': i, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'text_delta',
+        'payload': {
+          'delta': '内容 $i\n\n${List.filled(12, '行').join('\n\n')}',
+          'partId': 'p$i', 'partRevision': 1,
+        },
+      });
+    }
+    await tester.pumpAndSettle();
+    await tester.drag(find.byKey(const Key('session-timeline-list')), const Offset(0, 3000));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // 普通 idle：无等待占位、无未折叠思考 → 不算可见变化
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'q_idle', 'streamEpoch': 'ep1', 'sessionId': 'ses_alpha',
+      'sequence': 9, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'idle'},
+    });
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byKey(const Key('btn-jump-to-latest')), findsNothing);
+  });
+
+  testWidgets('Round3 收尾：FileCredentialStore→QuickCommandsBar 组合恢复（真实磁盘）', (WidgetTester tester) async {
+    final dir = Directory.systemTemp.createTempSync('nie_qc3');
+    final file = File('${dir.path}/state.json');
+    // 全新 store + 全新 client + 真实 QuickCommandsBar（生产重启链路）
+    final client = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: FileCredentialStore(file),
+    );
+    // 真实磁盘 I/O 必须全部在真实事件循环（runAsync）完成——
+    // 假时钟区内 await 文件 Future 会死锁（10min 超时）
+    await tester.runAsync(() async {
+      await FileCredentialStore(file).saveQuickCommands('codex', ['磁盘恢复指令']);
+      await client.loadQuickCommandsFor('codex');
+    });
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: QuickCommandsBar(client: client, agentId: 'codex', onUse: (_) {}),
+      ),
+    ));
+    await tester.pump();
+    expect(find.byKey(const Key('quick-command-磁盘恢复指令')), findsOneWidget);
+    client.dispose();
+    dir.deleteSync(recursive: true);
+  });
+
+  test('Round3 收尾：加载失败清理状态可重试（异常不外泄、默认降级）', () async {
+    final store = _FlakyCredentialStore(failures: 1);
+    final client = MobileBridgeClient(
+      transport: FakeBridgeTransport(),
+      credentialStore: store,
+    );
+    // 第一次加载失败：不抛出、默认指令降级、不卡死
+    await client.ensureQuickCommandsLoaded('codex');
+    expect(client.quickCommandsFor('codex'), isNull); // 保持默认语义
+
+    // 清理 in-flight 后重试成功
+    await client.ensureQuickCommandsLoaded('codex');
+    expect(client.quickCommandsFor('codex'), ['重试成功指令']);
+    client.dispose();
+  });
+
   testWidgets('F3 error 事件终止 Thinking 计时并置失败（不依赖后续 status 事件）', (WidgetTester tester) async {
     await pumpToSession(tester);
     final transport = tester
@@ -3282,4 +3355,20 @@ class _GatedCredentialStore implements DeviceCredentialStore {
   Future<AppLanguage?> loadLanguage() => inner.loadLanguage();
   @override
   Future<void> clear() => inner.clear();
+}
+
+/// 测试辅助：前 N 次加载抛异常（失败恢复/重试测试用）
+class _FlakyCredentialStore extends InMemoryCredentialStore {
+  int failures;
+  _FlakyCredentialStore({required this.failures});
+
+  @override
+  Future<List<String>?> loadQuickCommands(String scope) async {
+    if (failures > 0) {
+      failures -= 1;
+      throw Exception('disk io error');
+    }
+    await saveQuickCommands(scope, ['重试成功指令']);
+    return super.loadQuickCommands(scope);
+  }
 }
