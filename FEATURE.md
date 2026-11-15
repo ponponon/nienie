@@ -809,3 +809,9 @@
 
 - 超时卡改**真实路径**构造（sendMessage+假时钟超时 45s 阈值→timedOut 占位渲染断言）；360dp 测试恢复 `takeException()==null` 真实验证 85px 溢出关闭；FailureExperience 更新「已定位已修」（此前 heredoc&&链未落盘）。
 - mobile 115。
+
+### 2026-11-15 macOS DMG 发布链路指南（规划文档落盘）
+
+- 新增 `docs/distribution/macos-dmg-release.md`：桌面端打包 DMG 安装包的完整操作指南——Apple 开发者后台（CSR → Developer ID Application 证书 → .p12 导出 → App Store Connect API Key → Team ID）→ GitHub Secrets（CSC_LINK/CSC_KEY_PASSWORD/APPLE_API_KEY 三件套）→ electron-builder 配置（hardenedRuntime + entitlements + notarize）→ release.yml（tag 触发、arm64/x64 matrix、签名公证三连验证、GH Release 上传）。
+- 记录本项目特殊约束：`@matrixai/quic` 原生绑定必须 asarUnpack、pnpm 符号链接 node_modules 需真实拷贝、不做 universal 包、私有仓库 macOS runner 计费提醒。
+- 状态：**指南已就绪，打包配置与 workflow 尚未实施**（待用户完成证书申请后按文档第 3、4 节落码）。
