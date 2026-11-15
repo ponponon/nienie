@@ -38,6 +38,19 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // 只打 arm64-v8a：现代 Android 机器（2016 年后）均为 64 位，
+        // 砍掉 armeabi-v7a / x86_64 三份 Flutter 引擎后 APK 体积可降 50% 以上。
+        ndk {
+            abiFilters.clear()
+            abiFilters.add("arm64-v8a")
+        }
+    }
+
+    // 让 .so 在 APK 内以压缩形式存放（仅影响独立 APK，不影响 App Bundle）
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     signingConfigs {
@@ -66,6 +79,26 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+// 发布构建（assembleRelease / bundleRelease）必须使用正式密钥：
+// 缺少 key.properties 时直接失败，避免把 debug 签名的包发给用户。
+tasks.configureEach {
+    if (name == "bundleRelease" || name == "assembleRelease") {
+        doFirst {
+            if (!keystorePropertiesFile.exists()) {
+                throw GradleException(
+                    "Release signing is not configured. Create apps/mobile/android/key.properties " +
+                        "(local) or let CI inject it from Secrets; see docs/distribution/macos-dmg-release.md."
+                )
+            }
+            val storeFilePath = keystoreProperties.getProperty("storeFile")
+                ?: throw GradleException("Missing storeFile in key.properties")
+            if (!file(storeFilePath).isFile) {
+                throw GradleException("Keystore not found: $storeFilePath")
+            }
+        }
     }
 }
 

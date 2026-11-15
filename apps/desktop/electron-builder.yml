@@ -40,6 +40,9 @@ mac:
 dmg:
   title: Nienie
   icon: nienie.icns
+  # 默认 false；不签名的 DMG 会被 Gatekeeper 判为 "no usable signature"。
+  # 顺序要求：先生成并签名 DMG → 再公证 → 再 staple（由 package-mac.mjs 的 [4/5] 完成）
+  sign: true
   contents:
     - x: 130
       y: 220
