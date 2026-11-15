@@ -1103,3 +1103,27 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 - **症状链**：`flutter build apk --release` 零输出超时（多次）→ 查明 ① bash tool timeout 会杀整个进程组（nohup 不豁免；**python `subprocess.Popen(start_new_session=True)` 才真正脱离**）② 被杀进程残留 `bin/cache/lockfile` 使后续 flutter 命令启动即挂 ③ gradle daemon registry 因强杀损坏（FileIntegrityViolation）④ 最终真实构建错误=**GeneratedPluginRegistrant stale**（file_picker 的 `com.mr.flutter.plugin.filepicker.FilePickerPlugin` 符号丢失）⑤ `flutter clean` 亦零输出挂起。
 - **假超时陷阱**：`flutter build | tail` 管道中 gradle daemon 继承 stdout fd → tail 永不 EOF → tool timeout 判挂但构建其实在跑/或已 exit 0；判断构建状态要看产物目录与进程 CPU（0% 空转=互锁，非编译）。
 - **待办**：APK 构建需在干净环境重试（重启 Android Studio 释放 SDK 锁 / `flutter clean` 成功后 `pub get` 重建 registrant / 或换 CI 机器构建内测包）；产品代码与测试基线（116 mobile+275 vitest）不受影响。
+
+## 2026-11-15 浏览器自动化下载 App Store Connect .p8 密钥被 Chrome 静默拦截
+
+### 问题
+
+用 kimi-webbridge（浏览器自动化）在 App Store Connect 生成 API Key 后，点击「下载」按钮（含确认弹窗的二次「下载」）均返回 success，但 .p8 文件始终不落地：`~/Downloads` 无文件、Chrome downloads 历史无记录、无 .crdownload 残留。而密钥的下载入口是一次性的，点过即消失，导致该密钥（6BR8554C37）直接作废。
+
+### 根因
+
+自动化工具的 `click` 是 DOM 合成事件（`isTrusted=false`），不构成 Chrome 的「用户手势（user activation）」。Chrome 对无用户手势触发的下载会静默拦截（不报错、不落盘、不进下载历史），页面按钮状态却正常翻转，形成「看起来下载成功、实际什么都没发生」的假象。developer.apple.com 的证书 .cer 下载能成功是因为它走的是 `<a href>` 真实导航式下载，而 App Store Connect 的 .p8 下载走的是 JS blob/programmatic 下载路径，受手势策略约束。
+
+### 影响
+
+一次性凭据（只能下载一次的 .p8 私钥）被浪费，只能撤销重建；若发生在无法撤销的场景（如某些只给一次下载机会的注册证书）则损失不可恢复。
+
+### 修复
+
+不依赖浏览器下载通道，改用网络抓包直取内容：`network start` → 触发下载 → `network detail` 取 `GET /iris/v1/apiKeys/{keyId}?fields[apiKeys]=privateKey` 的响应体（JSON 里 `data.attributes.privateKey` 是 base64 的 .p8 PEM），解码落盘即可。重建密钥 8ZBV7KZM96 用此法一次成功。
+
+### 预防措施
+
+1. **自动化场景下凡涉及「一次性下载凭据」（.p8 / .p12 / 私钥 / 恢复码），先开网络抓包再点下载**，从响应体直接提取内容，绝不依赖浏览器下载落地。
+2. 生成此类凭据后立即验证内容完整性（PEM 头、openssl 可解析），确认无误再离开页面——一次性入口关了就没了。
+3. 判断下载是否真的成功，以「文件系统出现文件 + 下载历史有记录」为准，不能以按钮点击返回 success 为准。
