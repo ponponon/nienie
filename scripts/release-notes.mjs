@@ -1,29 +1,26 @@
 #!/usr/bin/env node
 /**
- * 生成 GitHub Release 说明，格式对齐 ponponon/openctrlc：
+ * 生成 GitHub Release 说明，英文正文，结构对齐 ponponon/openctrlc 与 ponponon/aivplayer：
  *
- *   <手写亮点，来自 docs/release-notes/<tag>.md>
+ *   ## Features / ## Known Limitations   ← 手写，来自 docs/release-notes/<tag>.md
  *
  *   ## Downloads
  *
- *   ### Desktop
+ *   ### macOS
  *
- *   #### macOS
- *
- *   - [Apple Silicon DMG](url) | [Apple Silicon ZIP](url)
+ *   - [Apple Silicon DMG](url) (137.2 MB)
  *
  *   ### Android
  *
- *   - [ARM64 APK](url)
+ *   - [ARM64 APK](url) (14.7 MB)
  *
- *   ## Full Changelog
- *
- *   [Compare changes](compare-url)
+ *   **Full Changelog**: <compare-url>
  *
  * 用法：
- *   node scripts/release-notes.mjs --tag v0.1.0 --dir release-assets [--out notes.md]
+ *   node scripts/release-notes.mjs --tag v0.1.0 [--dir release-assets] [--download-base <url>] [--out notes.md]
  *
- * --dir 里的文件按扩展名归组；若目录里没有某平台的产物，该分组整段省略。
+ * --download-base 省略时用 GitHub Release 资产链接；传 R2 公共基址则改指向镜像。
+ * 正文出现中日韩字符会直接失败（与 aivplayer 的 check-release-notes-language 同一条规则）。
  */
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -31,84 +28,77 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const REPO = 'ponponon/nienie';
+const DEFAULT_R2_DOWNLOAD_BASE = 'https://nienie-releases.quniv.cn/nienie/releases';
+
+// 中日韩统一表意文字 + 假名 + 谚文，用于拒绝非英文正文
+const CJK_PATTERN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 
 // ---------- 参数 ----------
 function parseArgs(argv) {
-  const out = { tag: '', dir: '', out: '' };
+  const out = { tag: '', dir: '', out: '', downloadBase: '', r2: false };
   const rest = argv.slice(2);
   for (let i = 0; i < rest.length; i += 1) {
     const m = /^--([^=]+)(?:=(.*))?$/.exec(rest[i]);
     if (!m) continue;
     const [, key, inlineValue] = m;
+    if (key === 'r2') {
+      out.r2 = true;
+      continue;
+    }
     // 同时支持 --tag=v0.1.0 与 --tag v0.1.0
     const value = inlineValue ?? rest[i + 1] ?? '';
     if (inlineValue === undefined && value && !value.startsWith('--')) i += 1;
     if (key === 'tag') out.tag = value;
     else if (key === 'dir') out.dir = value;
     else if (key === 'out') out.out = value;
+    else if (key === 'download-base') out.downloadBase = value;
   }
   return out;
 }
 
 // ---------- 产物归类 ----------
-// 返回 { groupKey, groupTitle, platformTitle, label, order }
+// 返回 { platform, label, order }
 function classify(fileName) {
   const lower = fileName.toLowerCase();
 
-  if (lower.endsWith('.dmg')) {
+  if (lower.endsWith('.dmg') || (lower.endsWith('.zip') && lower.includes('mac'))) {
+    const isZip = lower.endsWith('.zip');
     const label = lower.includes('arm64')
-      ? 'Apple Silicon DMG'
+      ? `Apple Silicon ${isZip ? 'ZIP' : 'DMG'}`
       : lower.includes('x64')
-        ? 'Intel DMG'
-        : 'DMG';
-    return { group: 'desktop', groupTitle: 'Desktop', platform: 'macOS', label, order: 10 };
-  }
-  if (lower.endsWith('.zip') && lower.includes('mac')) {
-    const label = lower.includes('arm64')
-      ? 'Apple Silicon ZIP'
-      : lower.includes('x64')
-        ? 'Intel ZIP'
-        : 'ZIP';
-    return { group: 'desktop', groupTitle: 'Desktop', platform: 'macOS', label, order: 11 };
+        ? `Intel ${isZip ? 'ZIP' : 'DMG'}`
+        : isZip
+          ? 'ZIP'
+          : 'DMG';
+    return { platform: 'macOS', label, order: isZip ? 11 : 10 };
   }
   if (lower.endsWith('.exe')) {
-    return { group: 'desktop', groupTitle: 'Desktop', platform: 'Windows', label: 'Installer', order: 12 };
+    const label = lower.includes('arm64') ? 'ARM64 Installer' : 'x64 Installer';
+    return { platform: 'Windows', label, order: 20 };
   }
-  if (lower.endsWith('.appimage')) {
-    return { group: 'desktop', groupTitle: 'Desktop', platform: 'Linux', label: 'AppImage', order: 13 };
-  }
-  if (lower.endsWith('.deb')) {
-    return { group: 'desktop', groupTitle: 'Desktop', platform: 'Linux', label: 'DEB', order: 14 };
+  if (lower.endsWith('.deb') || lower.endsWith('.appimage') || lower.endsWith('.rpm')) {
+    return { platform: 'Linux', label: fileName, order: 30 };
   }
   if (lower.endsWith('.apk')) {
     const label = lower.includes('arm64') || lower.includes('android') ? 'ARM64 APK' : 'APK';
-    return { group: 'android', groupTitle: 'Android', platform: null, label, order: 20 };
+    return { platform: 'Android', label, order: 40 };
   }
-  if (lower.endsWith('.aab')) {
-    return { group: 'android', groupTitle: 'Android', platform: null, label: 'AAB', order: 21 };
-  }
-  // 校验和等辅助文件不进 Downloads
+  // .aab / .sha256 / SHA256SUMS 等不进 Downloads：AAB 不供直接安装，校验和不是下载项
   return null;
 }
 
 // ---------- Downloads 区块 ----------
-function renderDownloads(files, tag) {
-  const base = `https://github.com/${REPO}/releases/download/${tag}`;
-  const groups = new Map();
+function renderDownloads(files, tag, downloadBase) {
+  const githubBase = `https://github.com/${REPO}/releases/download/${tag}`;
+  const version = tag.replace(/^v/, '');
+  const base = downloadBase ? `${downloadBase.replace(/\/+$/, '')}/${version}` : githubBase;
 
+  const platforms = new Map();
   for (const { name, size } of files) {
     const meta = classify(name);
     if (!meta) continue;
-    const groupKey = meta.group;
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, { title: meta.groupTitle, order: meta.order, platforms: new Map() });
-    }
-    const group = groups.get(groupKey);
-    const platformKey = meta.platform ?? '';
-    if (!group.platforms.has(platformKey)) {
-      group.platforms.set(platformKey, { title: meta.platform, order: meta.order, items: [] });
-    }
-    group.platforms.get(platformKey).items.push({
+    if (!platforms.has(meta.platform)) platforms.set(meta.platform, { order: meta.order, items: [] });
+    platforms.get(meta.platform).items.push({
       label: meta.label,
       order: meta.order,
       size,
@@ -116,24 +106,16 @@ function renderDownloads(files, tag) {
     });
   }
 
-  if (groups.size === 0) return '';
+  if (platforms.size === 0) return '';
 
   const lines = ['## Downloads', ''];
-
-  for (const group of [...groups.values()].sort((a, b) => a.order - b.order)) {
-    lines.push(`### ${group.title}`, '');
-    for (const platform of [...group.platforms.values()].sort((a, b) => a.order - b.order)) {
-      if (platform.title) lines.push(`#### ${platform.title}`, '');
-      const links = platform.items
-        .sort((a, b) => a.order - b.order)
-        .map((item) => {
-          const size = item.size ? ` (${formatSize(item.size)})` : '';
-          return `[${item.label}](${item.url})${size}`;
-        });
-      lines.push(`- ${links.join(' | ')}`, '');
-    }
+  for (const [platform, group] of [...platforms.entries()].sort((a, b) => a[1].order - b[1].order)) {
+    lines.push(`### ${platform}`, '');
+    const links = group.items
+      .sort((a, b) => a.order - b.order)
+      .map((item) => `[${item.label}](${item.url})${item.size ? ` (${formatSize(item.size)})` : ''}`);
+    lines.push(`- ${links.join(' | ')}`, '');
   }
-
   return lines.join('\n').trimEnd();
 }
 
@@ -162,7 +144,7 @@ function renderChangelog(tag) {
   const url = prev
     ? `https://github.com/${REPO}/compare/${prev}...${tag}`
     : `https://github.com/${REPO}/commits/${tag}`;
-  return ['## Full Changelog', '', `[Compare changes](${url})`].join('\n');
+  return `**Full Changelog**: ${url}`;
 }
 
 // ---------- 产物来源 ----------
@@ -207,7 +189,7 @@ function collectAssets(tag, dir) {
 const args = parseArgs(process.argv);
 
 if (!args.tag) {
-  console.error('缺少 --tag，例如 --tag v0.1.0');
+  console.error('missing --tag, e.g. --tag v0.1.0');
   process.exit(1);
 }
 
@@ -215,15 +197,24 @@ if (!args.tag) {
 const headPath = join('docs', 'release-notes', `${args.tag}.md`);
 const head = existsSync(headPath) ? readFileSync(headPath, 'utf8').trim() : '';
 
+if (head && CJK_PATTERN.test(head)) {
+  console.error(
+    `release notes must be English only; found CJK characters in ${headPath}.\n` +
+      'Move localized copy to README or the website instead of the GitHub Release body.',
+  );
+  process.exit(1);
+}
+
 // 2. 产物清单：Release 上已有的资产 ∪ 本次构建产物
 const files = collectAssets(args.tag, args.dir);
 
-const sections = [head, renderDownloads(files, args.tag), renderChangelog(args.tag)].filter(Boolean);
+const downloadBase = args.downloadBase || (args.r2 ? DEFAULT_R2_DOWNLOAD_BASE : '');
+const sections = [head, renderDownloads(files, args.tag, downloadBase), renderChangelog(args.tag)].filter(Boolean);
 const body = `${sections.join('\n\n')}\n`;
 
 if (args.out) {
   writeFileSync(args.out, body, 'utf8');
-  console.error(`已写入 ${args.out}（${body.split('\n').length} 行）`);
+  console.error(`wrote ${args.out} (${body.split('\n').length} lines)`);
 } else {
   process.stdout.write(body);
 }

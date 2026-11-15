@@ -849,3 +849,14 @@
 - 已验证 UDBZ 不影响分发链路：重新 `codesign` → `notarytool submit --wait`（**Accepted**，1m35s）→ `stapler staple/validate` → `spctl -a -t open`（`accepted / source=Notarized Developer ID`）全部通过。
 - `v0.1.0` Release 说明已按新格式重写并写回线上。
 - 体积结构实测（供后续判断）：`Nienie.app` 272 MB = `Contents/Frameworks` 252 MB（其中 `Electron Framework` 单文件 206 MB、Framework/Resources 34 MB，含 `resources.pak` 13 MB + `icudtl.dat` 10 MB）+ `Contents/Resources` 20 MB（`app.asar.unpacked` 9 MB、`LICENSES.chromium.html` 5.3 MB、`app.asar` 3.3 MB、`icon.icns` 2.1 MB）。`Contents/Resources/*.lproj` 共 109 个但**全是 0 字节**，删了不省空间；真正占体积的 220 个 locale `.pak` 在 `Electron Framework.framework/Versions/A/Resources/*.lproj`（合计 8.7 MB，只留 en + zh_CN 可省 ~8.5 MB）。
+
+### 2026-11-15 Release 说明改英文 + 官网下载迁到 Cloudflare R2
+
+- Release 说明改为**英文单一正文**（对齐 aivplayer 的 `docs/RELEASE.md` 约定：同一条 Release 不放中文翻译，本地化信息去 README / 官网）。`scripts/release-notes.mjs` 的结构改为 `## Features` / `## Known Limitations` / `## Downloads`（`### macOS`、`### Android` 平铺）/ `**Full Changelog**: <url>`，并加中日韩字符守卫，手写部分含 CJK 直接退出 1。`v0.1.0` 线上 body 已按新格式重写。
+- 新增 `scripts/publish-r2.mjs`（移植自 openctrlc 的 `script/publish-release-downloads.mjs`）：把**最新一个** GitHub Release 的安装包镜像到 R2，`retention: 1`，同步后删除所有非本次对象并二次列目录确认；只接受最新正式 Release，tag 不符直接报错；下载时校验 GitHub `digest`（SHA-256）；单文件超 300 MB 自动回退 GitHub 直链；顺带应用只读 CORS。
+- 新增 `.github/workflows/sync-downloads.yml`：`release: published` 自动触发 + 手动 dispatch，`CLOUDFLARE_API_TOKEN`（secret）与 `CLOUDFLARE_ACCOUNT_ID`（variable），跑完把 R2 对象清单打到 job summary。
+- 拓扑沿用 openctrlc 的「一 bucket 一自定义域」：bucket `nienie-releases`、前缀 `nienie/releases`、域名 `https://nienie-releases.quniv.cn`。额外加 `latest/` 稳定别名（`Nienie-android.apk`、`Nienie-mac-arm64.dmg`，5 分钟缓存），解决「版本化 URL 一变、静态二维码就废」的问题；R2 常驻约 272 MB ≈ $0.004/月。
+- 官网 `website/index.html` 全部下载链接从 `file.quniv.cn` 换成 R2 `latest/` 别名，顺带修掉两个陈旧信息：APK 写的是 66.5 MB（实际 14.7 MB）、macOS 给的是 `macos-arm64.zip`（Release 里根本没这个文件，实际是 DMG）；页脚与下载区补「历史版本 → GitHub Releases」入口。版本号与体积改由 `download-manifest.json` 自动填充，不再手改。
+- `website/scripts/main.js` 加两个兜底：下载链接 HEAD 探测失败时回退 `releases/latest`（避免 R2 未就绪时出现死链）；清单拉取失败则保留静态文案。
+- 重新生成 `website/assets/apk-qr.svg`（指向 R2 别名，39 模块 / version 5），并用 `cv2.QRCodeDetector` 反解验证内容一致。
+- 新增 `docs/distribution/r2-mirror.md`（拓扑、存储成本、同步方式、官网消费、排查表）。

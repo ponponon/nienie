@@ -57,13 +57,13 @@
           Nienie（捏捏）让你通过手机随时查看、继续和控制运行在电脑上的 OpenCode、Codex、Claude Code、MiMo Code 与 DeepSeek Harness。无需上传 API 密钥，项目上下文始终留在你的本地电脑。
         </p>
         <div data-slot="hero-actions">
-          <a href="https://file.quniv.cn/resource/nienie/Nienie-v0.1.0-android.apk" download data-slot="primary-button">
+          <a href="https://nienie-releases.quniv.cn/nienie/releases/latest/Nienie-android.apk" data-download="apk" download data-slot="primary-button">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
             <span data-i18n="btnDownloadAndroid">下载 Android 手机端 (.apk)</span>
           </a>
-          <a href="https://file.quniv.cn/resource/nienie/Nienie-v0.1.0-macos-arm64.zip" download data-slot="secondary-button">
+          <a href="https://nienie-releases.quniv.cn/nienie/releases/latest/Nienie-mac-arm64.dmg" data-download="mac" download data-slot="secondary-button">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
-            <span data-i18n="btnDownloadMac">下载 macOS 电脑端 (.zip)</span>
+            <span data-i18n="btnDownloadMac">下载 macOS 电脑端 (.dmg)</span>
           </a>
         </div>
         <div data-slot="platform-note">
@@ -197,10 +197,10 @@
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#17B378" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" x2="12.01" y1="18" y2="18"/></svg>
               <div>
                 <div class="dl-row-name">Android 安装包 (ARM64 / Universal)</div>
-                <div class="dl-row-meta">Nienie-v0.1.0-android.apk · 66.5 MB</div>
+                <div class="dl-row-meta" data-download-meta="apk">Nienie-v0.1.0-android.apk · 14.7 MB</div>
               </div>
             </div>
-            <a class="dl-btn" href="https://file.quniv.cn/resource/nienie/Nienie-v0.1.0-android.apk" download>
+            <a class="dl-btn" href="https://nienie-releases.quniv.cn/nienie/releases/latest/Nienie-android.apk" data-download="apk" download>
               <span data-i18n="dlBtnText">直接下载 APK</span>
             </a>
           </div>
@@ -231,13 +231,18 @@
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
               <div>
                 <div class="dl-row-name">macOS 桌面端 (Apple Silicon M1–M5)</div>
-                <div class="dl-row-meta">Nienie-v0.1.0-macos-arm64.zip · 116 MB</div>
+                <div class="dl-row-meta" data-download-meta="mac">Nienie-0.1.0-arm64.dmg · 137.2 MB</div>
               </div>
             </div>
-            <a class="dl-btn" href="https://file.quniv.cn/resource/nienie/Nienie-v0.1.0-macos-arm64.zip" download>
+            <a class="dl-btn" href="https://nienie-releases.quniv.cn/nienie/releases/latest/Nienie-mac-arm64.dmg" data-download="mac" download>
               <span data-i18n="dlMacBtnText">下载 macOS 版</span>
             </a>
           </div>
+
+          <p style="font-size:12.5px;color:var(--page-muted);margin:14px 0 0;line-height:1.6;">
+            <span data-i18n="dlHistoryHint">官网只镜像当前版本（下载更快）。需要旧版本请到</span>
+            <a href="https://github.com/ponponon/nienie/releases" target="_blank" rel="noopener" data-i18n="dlHistoryLink">GitHub Releases 历史版本</a>。
+          </p>
 
           <div style="margin-top:auto;">
             <div style="font-size:12.5px;font-weight:600;color:var(--page-muted);margin-bottom:8px;" data-i18n="cliStartLabel">
@@ -356,9 +361,11 @@
       <div>
         <a href="https://github.com/ponponon/nienie" target="_blank" rel="noopener">GitHub</a>
         &nbsp;·&nbsp;
-        <a href="https://file.quniv.cn/resource/nienie/Nienie-v0.1.0-android.apk">Android APK</a>
+        <a href="https://nienie-releases.quniv.cn/nienie/releases/latest/Nienie-android.apk" data-download="apk">Android APK</a>
         &nbsp;·&nbsp;
-        <a href="https://file.quniv.cn/resource/nienie/Nienie-v0.1.0-macos-arm64.zip">macOS App</a>
+        <a href="https://nienie-releases.quniv.cn/nienie/releases/latest/Nienie-mac-arm64.dmg" data-download="mac">macOS App</a>
+        &nbsp;·&nbsp;
+        <a href="https://github.com/ponponon/nienie/releases" target="_blank" rel="noopener" data-i18n="footerAllReleases">历史版本</a>
       </div>
       <div>Copyright © 2026 ponponon. MIT Licensed.</div>
     </footer>

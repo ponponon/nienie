@@ -1,84 +1,85 @@
 # Release 说明格式
 
-格式对齐 `ponponon/openctrlc`，由 `scripts/release-notes.mjs` 统一渲染，
-CI 的 `release-notes` job 在两端资产上传完成后自动写回 body。
+英文单一正文，结构对齐 `ponponon/openctrlc` 与 `ponponon/aivplayer`。
+手写部分放 `docs/release-notes/<tag>.md`，Downloads 与 Full Changelog 由
+`scripts/release-notes.mjs` 生成，CI 的 `release-notes` job 写回 Release body。
 
 ## 1. 结构
 
 ```markdown
-<一段话概述这一版是什么>
+## Features
 
-## 亮点
+- **一句话结论。** 做了什么、带来什么可感知的变化。
 
-- **一句话结论。** 具体做了什么、带来什么可感知的变化。
-- ...
-
-## 已知限制
+## Known Limitations
 
 - ...
 
 ## Downloads
 
-### Desktop
+### macOS
 
-#### macOS
-
-- [Apple Silicon DMG](下载链接) (137.2 MB)
+- [Apple Silicon DMG](下载链接) (121.2 MB)
 
 ### Android
 
 - [ARM64 APK](下载链接) (14.7 MB)
 
-## Full Changelog
-
-[Compare changes](https://github.com/ponponon/nienie/compare/v上一版...v本版)
+**Full Changelog**: https://github.com/ponponon/nienie/compare/v上一版...v本版
 ```
-
-约定：
 
 | 区块 | 谁写 | 说明 |
 | --- | --- | --- |
-| 概述 + 亮点 + 已知限制 | **人写** | 放在 `docs/release-notes/<tag>.md`，随 tag 一起提交 |
-| `## Downloads` | 脚本自动 | 按产物扩展名归组，含体积 |
-| `## Full Changelog` | 脚本自动 | 取 git tag 排序里的上一个版本作 compare |
+| `## Features` / `## Known Limitations` | **人写** | `docs/release-notes/<tag>.md`，随 tag 一起提交 |
+| `## Downloads` | 脚本 | 按扩展名归组成 `### macOS` / `### Windows` / `### Linux` / `### Android`，带体积 |
+| `**Full Changelog**` | 脚本 | git tag 排序里的上一版做 compare，没有上一版则指向 commits |
 
-Downloads 的分组规则（`classify()`）：`.dmg`/`.zip`/`.exe`/`.deb`/`.AppImage` → `### Desktop`，
-`.apk`/`.aab` → `### Android`；`.sha256`、`SHA256SUMS` 等辅助文件不进 Downloads。
-同一平台多个产物用 ` | ` 分隔成一行，和 openctrlc 一致。
+## 2. 英文唯一正文（硬性要求）
+
+Release 正文**只写英文**，同一条 Release 里不重复放中文翻译。需要本地化就放到
+README 或官网对应语言页面。`scripts/release-notes.mjs` 会检查手写部分是否含中日韩字符，
+命中直接失败并退出：
+
+```
+release notes must be English only; found CJK characters in docs/release-notes/v0.2.0.md.
+```
+
+历史和已有版本不回溯改写，新增文案一律遵守。
 
 体积用**十进制 MB**（1 MB = 1000²B），和 GitHub 资产列表显示的口径一致——
 用 MiB 会出现「说明写 130.8 MB、页面显示 137 MB」的错位。
 
-## 2. 发版流程
+Downloads 里不列 `.aab`（不能直接安装）和 `SHA256SUMS`（不是下载项）。
+
+## 3. 发版流程
 
 ```bash
-# 1. 写亮点（必须先提交，CI 里读的是仓库里的文件）
+# 1. 写英文亮点（必须先提交，CI 读的是仓库里的文件）
 $EDITOR docs/release-notes/v0.2.0.md
 
-# 2. 打 tag 即发版，说明会自动生成
+# 2. 打 tag 即发版
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
 CI 里 `release-notes` job 的行为：
 
 1. `needs: [macos-dmg, android-apk]`，两端跑完才执行（`always()` + 至少一端成功）；
-2. `actions/download-artifact` 拉全部产物到 `release-assets/`；
-3. 渲染时取 **Release API 上的真实资产列表 ∪ 本地产物目录** 的并集——
-   所以只重跑单端（比如只重打 APK）也不会把另一端的下载链接弄丢；
+2. 下载全部 artifact 到 `release-assets/`；
+3. 渲染时取 **Release API 真实资产 ∪ 本地产物目录** 的并集——只重跑单端也不会丢另一端的链接；
 4. `gh release edit <tag> --notes-file` 写回 body，并把最终 body 打到 job summary。
 
-## 3. 本地预览与补救
+## 4. 本地预览与补救
 
 ```bash
-# 只渲染不发布（读 Release API 上已有的资产）
+# 下载链接指向 GitHub（默认）
 node scripts/release-notes.mjs --tag v0.1.0 --out /tmp/notes.md
 
-# 带上本地刚构建的产物一起算（同名以本地为准）
-node scripts/release-notes.mjs --tag v0.2.0 --dir /path/to/artifacts --out /tmp/notes.md
+# 下载链接指向 R2 镜像（R2 同步完成后再用这版）
+node scripts/release-notes.mjs --tag v0.1.0 --r2 --out /tmp/notes.md
 
-# 改完说明线上写回
+# 线上写回
 gh release edit v0.1.0 --notes-file /tmp/notes.md
 ```
 
-产物文件名要和 Release 上的资产名一致，否则生成的下载链接会 404。
-CI 里由 workflow 的改名步骤保证（`Nienie-v<version>-android.apk` 等）。
+产物文件名必须和 Release 上的资产名一致，否则链接 404。CI 里由改名步骤保证
+（`Nienie-<version>-arm64.dmg`、`Nienie-v<version>-android.apk`）。

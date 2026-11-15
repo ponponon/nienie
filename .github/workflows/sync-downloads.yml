@@ -1,0 +1,80 @@
+name: Sync Downloads to R2
+
+# 把「最新一个」GitHub Release 的安装包镜像到 Cloudflare R2，供官网直接下载。
+# 历史版本不进 R2，仍然走 GitHub Release。
+#
+# 需要的仓库配置：
+#   secret   CLOUDFLARE_API_TOKEN   （R2 读写权限）
+#   variable CLOUDFLARE_ACCOUNT_ID
+#
+# 触发：发布 Release 时自动跑一次；也可以手动 Run workflow 补跑。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要同步的 tag（留空 = 最新的正式 Release）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-downloads
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: github.repository == 'ponponon/nienie'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Mirror latest release to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: node scripts/publish-r2.mjs --repository "${{ github.repository }}"
+
+      - name: Report mirrored objects
+        if: always()
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          BUCKET="nienie-releases"
+          PREFIX="nienie/releases"
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "缺少 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，跳过对象列表" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "### R2 对象清单（$BUCKET/$PREFIX）" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| key | size |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | --- |" >> "$GITHUB_STEP_SUMMARY"
+          curl -sS \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$BUCKET/objects?prefix=$PREFIX&per_page=1000" \
+            | node -e '
+              const chunks = [];
+              process.stdin.on("data", (c) => chunks.push(c));
+              process.stdin.on("end", () => {
+                const payload = JSON.parse(Buffer.concat(chunks).toString());
+                if (!payload.success) { console.log("list failed:", JSON.stringify(payload.errors ?? [])); return; }
+                for (const item of payload.result ?? []) {
+                  console.log(`| ${item.key} | ${(item.size / 1_000_000).toFixed(1)} MB |`);
+                }
+              });
+            ' >> "$GITHUB_STEP_SUMMARY"
