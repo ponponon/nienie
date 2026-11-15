@@ -19,6 +19,13 @@ files:
 # 不走 npm 安装，跳过原生模块重建
 npmRebuild: false
 
+# DMG 的压缩算法由 compression 决定（见 dmg-builder/out/dmg.js:127）：
+#   normal(默认) → UDZO，zlib
+#   maximum      → UDBZ，bzip2
+# 实测同一份 Nienie.app：UDZO 137.2 MB → UDBZ 121.2 MB（省 11.7%），
+# 代价是封装多约 20 秒、用户挂载多约 5 秒。签名/公证/staple 对 UDBZ 同样有效。
+compression: maximum
+
 # @matrixai/quic 的 napi 绑定必须以真实文件存在（dlopen 不走 asar），
 # 整包 unpack 也规避 quiche.js 的 import.meta.url 相对定位
 asarUnpack:

@@ -839,3 +839,13 @@
 - `release.yml` 新增 `android-apk` job：Java 17 + Flutter 3.47.9 → 解 Secret 建 key.properties → 构建 APK/AAB → `apksigner` 验签（debug 签名直接失败）→ 产物体积表写入 job summary → 挂同一 GitHub Release。
 - 本地产物 `Nienie-v0.1.0-android.apk`（14.7 MB，SHA256 `b9746f21…ce40f3d`）已挂到 `v0.1.0` Release，与 macOS DMG 并列。
 - 新增 `docs/distribution/android-apk-release.md`（签名三件套、瘦身手段表、构建验证命令、CI 流程、与 Google Play 的关系）。
+
+### 2026-11-15 Release 说明模板化 + DMG 换 bzip2 压缩
+
+- 新增 `scripts/release-notes.mjs`：按 openctrlc 的格式渲染 Release 说明——手写亮点（`docs/release-notes/<tag>.md`）+ 自动 `## Downloads`（按扩展名归组成 Desktop/macOS、Android）+ `## Full Changelog`（取 git tag 排序里的上一版做 compare）。资产清单取 **Release API 真实资产 ∪ 本地产物目录** 的并集，只重跑单端也不会丢另一端的链接；体积用十进制 MB 口径，与 GitHub 页面显示一致。
+- `release.yml` 新增 `release-notes` job：`needs: [macos-dmg, android-apk]` + `always()` + 至少一端成功，下载全部 artifact 后 `gh release edit --notes-file` 写回 body。打 tag 即自动产出 formatted notes，不再依赖手写。
+- 新增 `docs/distribution/release-notes.md`：结构约定、谁写哪段、发版流程、本地预览与补救命令。
+- `apps/desktop/electron-builder.yml` 加 `compression: maximum`。electron-builder 的 DMG 算法跟 compression 绑定（`dmg-builder/out/dmg.js:127`：normal→UDZO/zlib，maximum→UDBZ/bzip2）。同一份 `Nienie.app` 实测 **137.2 MB → 121.2 MB（-11.7%）**，封装多约 20 秒、挂载多约 5 秒。
+- 已验证 UDBZ 不影响分发链路：重新 `codesign` → `notarytool submit --wait`（**Accepted**，1m35s）→ `stapler staple/validate` → `spctl -a -t open`（`accepted / source=Notarized Developer ID`）全部通过。
+- `v0.1.0` Release 说明已按新格式重写并写回线上。
+- 体积结构实测（供后续判断）：`Nienie.app` 272 MB = `Contents/Frameworks` 252 MB（其中 `Electron Framework` 单文件 206 MB、Framework/Resources 34 MB，含 `resources.pak` 13 MB + `icudtl.dat` 10 MB）+ `Contents/Resources` 20 MB（`app.asar.unpacked` 9 MB、`LICENSES.chromium.html` 5.3 MB、`app.asar` 3.3 MB、`icon.icns` 2.1 MB）。`Contents/Resources/*.lproj` 共 109 个但**全是 0 字节**，删了不省空间；真正占体积的 220 个 locale `.pak` 在 `Electron Framework.framework/Versions/A/Resources/*.lproj`（合计 8.7 MB，只留 en + zh_CN 可省 ~8.5 MB）。

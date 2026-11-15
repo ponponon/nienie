@@ -351,3 +351,22 @@ hdiutil attach -nobrowse -readonly Nienie-*.dmg && ls /Volumes/Nienie/
 - GUI 验收不要直接 `./Nienie.app/Contents/MacOS/Nienie`：环境里若存在 `ELECTRON_RUN_AS_NODE=1`
   会让 Electron 以纯 Node 运行而"静默假死"。用 `open Nienie.app` 走真实启动路径，
   以「4100/4101 监听 + 预览页 200 + `~/Library/Application Support/Nienie` 生成」三项判断成功。
+
+### 8.4 包体（实测，arm64）
+
+| 项 | 体积 |
+| --- | --- |
+| `Nienie.app`（解包） | 272 MB |
+| DMG · UDZO（zlib，默认） | 137.2 MB |
+| DMG · UDBZ（bzip2，`compression: maximum`） | **121.2 MB** |
+
+`electron-builder.yml` 里已设 `compression: maximum`，DMG 走 UDBZ。算法选择不是显式配置项，
+而是由 `compression` 推导的（`dmg-builder/out/dmg.js`：`normal→UDZO`、`maximum→UDBZ`、`store→UDRO`）。
+代价：封装多约 20 秒、用户挂载多约 5 秒；签名/公证/staple 对 UDBZ 完全有效（已实测公证 `Accepted`）。
+
+内部构成（继续瘦身时先看这张表，别乱删）：
+
+- `Contents/Frameworks` 252 MB —— `Electron Framework` 单文件就 206 MB，是 Electron 的固有成本
+- `Electron Framework.framework/Versions/A/Resources` 34 MB —— `resources.pak` 13 MB、`icudtl.dat` 10 MB（删了 `Intl` 全崩）、220 个 locale `.pak` 合计 8.7 MB
+- `Contents/Resources` 20 MB —— `app.asar.unpacked` 9 MB（`@matrixai/quic` 原生绑定，必须真实文件）、`LICENSES.chromium.html` 5.3 MB、`app.asar` 3.3 MB、`icon.icns` 2.1 MB
+- `Contents/Resources/*.lproj` 有 109 个目录但**全是 0 字节**（`electronLanguages` 省不到空间）；要省语言包只能动 Framework 里那 220 个
