@@ -21,6 +21,10 @@ dist-release/
 .env
 .env.*
 !.env.example
+# Android release 签名材料（keystore 与密码走 Secrets / 本地 ~/.nienie-signing）
+apps/mobile/android/key.properties
+*.jks
+*.keystore
 # Runtime data
 .nienie/
 .workbuddy/

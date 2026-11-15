@@ -1,35 +1,42 @@
-name: Release macOS DMG
+name: Release (macOS DMG + Android APK)
 
 # 触发方式：
-#   git tag v0.2.0 && git push origin v0.2.0   → 自动出签名 + 公证的 DMG 并挂到 Release
-#   或手动 Run workflow（可选 arm64 / x64）
+#   git tag v0.2.0 && git push origin v0.2.0        → 同时出 macOS DMG 与 Android APK，挂在同一个 Release
+#   手动 Run workflow                                  → 可只跑其中一端，也可指定挂到某个已有 Release tag
 #
 # 需要的仓库 Secrets（Settings → Secrets and variables → Actions）：
-#   CSC_LINK            Developer ID .p12 的 base64
-#   CSC_KEY_PASSWORD    .p12 的密码
-#   APPLE_API_KEY       AuthKey_XXXX.p8 内容（PEM，或 base64）
-#   APPLE_API_KEY_ID    Key ID
-#   APPLE_API_ISSUER    Issuer ID
-#   APPLE_TEAM_ID       Team ID
+#   macOS 签名：(CSC_LINK / CSC_KEY_PASSWORD) + (APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER / APPLE_TEAM_ID)
+#   Android 签名：(ANDROID_KEYSTORE_BASE64 / ANDROID_STORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD)
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
+      targets:
+        description: '构建目标'
+        required: true
+        default: both
+        type: choice
+        options: [both, macos, android]
       arch:
-        description: '目标架构'
+        description: 'macOS 目标架构'
         required: true
         default: arm64
         type: choice
         options: [arm64, x64]
+      release_tag:
+        description: '挂到指定 Release tag（如 v0.1.0）；留空则只上传 artifact'
+        required: false
+        default: ''
 
 permissions:
   contents: write
 
 jobs:
   macos-dmg:
-    name: Build · Sign · Notarize · Publish
+    name: macOS · Build · Sign · Notarize
+    if: github.event_name == 'push' || inputs.targets != 'android'
     # macos-15 是 Apple 芯片 runner；x64 请改用 macos-15-intel
     runs-on: ${{ inputs.arch == 'x64' && 'macos-15-intel' || 'macos-15' }}
     env:
@@ -87,16 +94,102 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nienie-dmg
+          name: nienie-macos-dmg
           path: |
             apps/desktop/dist-release/out/*.dmg
             apps/desktop/dist-release/out/*.sha256
 
       - name: Publish to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           files: |
             apps/desktop/dist-release/out/*.dmg
             apps/desktop/dist-release/out/*.sha256
-          generate_release_notes: true
+
+  android-apk:
+    name: Android · Build · Sign APK/AAB
+    if: github.event_name == 'push' || inputs.targets != 'macos'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.9'
+          cache: true
+
+      - name: Install Flutter dependencies
+        working-directory: apps/mobile
+        run: flutter pub get
+
+      - name: Configure release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，APK 将以 debug 签名产出（不可用于正式分发）"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/android"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android/release.jks"
+          cat > apps/mobile/android/key.properties <<EOF
+          storeFile=$RUNNER_TEMP/android/release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          echo "已写入 key.properties（alias=$KEY_ALIAS）"
+
+      - name: Build release APK and AAB
+        working-directory: apps/mobile
+        run: |
+          flutter build apk --release
+          flutter build appbundle --release
+
+      - name: Verify signing and rename artifacts
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version: *\([0-9][0-9.]*\)+.*/\1/p' apps/mobile/pubspec.yaml)
+          echo "app version: $VERSION"
+          APK=$(ls apps/mobile/build/app/outputs/flutter-apk/app-release.apk)
+          AAB=$(ls apps/mobile/build/app/outputs/bundle/release/app-release.aab)
+          APKSIGNER=$(ls -d "${ANDROID_HOME}"/build-tools/*/apksigner | tail -1)
+          "$APKSIGNER" verify --print-certs "$APK" | tee /tmp/apk-certs.txt
+          if grep -q 'Android Debug' /tmp/apk-certs.txt; then
+            echo "::error::APK 仍是 debug 签名，请检查 Secrets 配置"
+            exit 1
+          fi
+          mkdir -p apps/mobile/build/artifacts
+          cp "$APK" "apps/mobile/build/artifacts/Nienie-v${VERSION}-android.apk"
+          cp "$AAB" "apps/mobile/build/artifacts/Nienie-v${VERSION}-android.aab"
+          shasum -a 256 apps/mobile/build/artifacts/*.apk apps/mobile/build/artifacts/*.aab | tee apps/mobile/build/artifacts/SHA256SUMS
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nienie-android
+          path: apps/mobile/build/artifacts/*
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          files: |
+            apps/mobile/build/artifacts/Nienie-*-android.apk
+            apps/mobile/build/artifacts/Nienie-*-android.aab
+            apps/mobile/build/artifacts/SHA256SUMS
