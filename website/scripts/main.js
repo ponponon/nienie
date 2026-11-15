@@ -59,16 +59,23 @@ function wireLanguageSwitcher() {
 const GITHUB_LATEST_RELEASE = 'https://github.com/ponponon/nienie/releases/latest';
 const R2_BASE_URL = 'https://nienie-releases.quniv.cn/nienie/releases/latest';
 const R2_DEV_BASE_URL = 'https://pub-12775a075761492a81c649227f63c1dd.r2.dev/nienie/releases/latest';
-const DOWNLOAD_MANIFEST_URL = 'https://nienie-releases.quniv.cn/nienie/releases/download-manifest.json';
+const MANIFEST_URLS = [
+  'https://nienie-releases.quniv.cn/nienie/releases/download-manifest.json',
+  'https://pub-12775a075761492a81c649227f63c1dd.r2.dev/nienie/releases/download-manifest.json',
+];
 
 // 版本号与体积跟着清单走，避免每次发版都得手改 HTML
 async function syncDownloadMeta() {
   const targets = [...document.querySelectorAll('[data-download-meta]')];
   if (!targets.length) return;
 
-  const manifest = await fetch(DOWNLOAD_MANIFEST_URL, { cache: 'no-store' })
-    .then((response) => (response.ok ? response.json() : undefined))
-    .catch(() => undefined);
+  let manifest;
+  for (const url of MANIFEST_URLS) {
+    manifest = await fetch(url, { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : undefined))
+      .catch(() => undefined);
+    if (manifest) break;
+  }
 
   const release = manifest?.releases?.[0];
   const assets = release?.assets;
