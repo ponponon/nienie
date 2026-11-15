@@ -3,6 +3,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'src/i18n/app_strings.dart';
+import 'src/demo/demo_mode.dart';
 import 'src/state/mobile_bridge_client.dart';
 import 'src/storage/credential_store.dart';
 import 'src/transport/bridge_transport.dart';
@@ -42,6 +43,21 @@ Future<File> _resolveStateFile() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 商店截图 / 演示构建：--dart-define=NIE_DEMO=true 时用种子数据跑真实 UI，
+  // 正式构建该常量为 false，demo 链路（含 FakeBridgeTransport）不会进入调用图。
+  const demo = bool.fromEnvironment('NIE_DEMO');
+  if (demo) {
+    // 截图语言跟随 --dart-define=NIE_DEMO_LANG=en（美区商店）/ zh（本地预览）
+    const demoLang = String.fromEnvironment('NIE_DEMO_LANG', defaultValue: 'zh');
+    final demoStore = InMemoryCredentialStore();
+    await demoStore.saveAiConsent(true);
+    final demoClient = await createDemoClient(
+      credentialStore: demoStore,
+      language: demoLang == 'en' ? AppLanguage.en : AppLanguage.zh,
+    );
+    runApp(NienieMobileApp(client: demoClient));
+    return;
+  }
   final credentialStore = FileCredentialStore(await _resolveStateFile());
   final client = MobileBridgeClient(
     transport: IoBridgeTransport(),
