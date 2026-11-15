@@ -51,9 +51,14 @@ function wireLanguageSwitcher() {
   }
 }
 
-// 下载地址指向 R2 的 latest/ 稳定别名。镜像还没就绪（或 R2 未配置 CORS）时，
-// 退回 GitHub Release 页——宁可多一次跳转，也不给用户一个 404。
+// 下载地址指向 R2 的 latest/ 稳定别名。按优先级探测可用地址：
+//   1. 自定义域（生产地址，HTML 里写的就是它）
+//   2. bucket 自带的 r2.dev 托管域（自定义域还没绑上时的可用后备）
+//   3. GitHub Release 页（镜像整体不可用时兜底）
+// 宁可多一次跳转，也不给用户一个 404。
 const GITHUB_LATEST_RELEASE = 'https://github.com/ponponon/nienie/releases/latest';
+const R2_BASE_URL = 'https://nienie-releases.quniv.cn/nienie/releases/latest';
+const R2_DEV_BASE_URL = 'https://pub-12775a075761492a81c649227f63c1dd.r2.dev/nienie/releases/latest';
 const DOWNLOAD_MANIFEST_URL = 'https://nienie-releases.quniv.cn/nienie/releases/download-manifest.json';
 
 // 版本号与体积跟着清单走，避免每次发版都得手改 HTML
@@ -79,33 +84,32 @@ async function syncDownloadMeta() {
   }
 }
 
+function isReachable(url) {
+  return fetch(url, { method: 'HEAD', cache: 'no-store' })
+    .then((response) => response.ok)
+    .catch(() => false);
+}
+
 async function resolveDownloadMirror() {
   const links = [...document.querySelectorAll('a[data-download]')];
   if (!links.length) return;
 
-  const reachable = new Map();
-  const probe = (url) => {
-    if (!reachable.has(url)) {
-      reachable.set(
-        url,
-        fetch(url, { method: 'HEAD', cache: 'no-store' })
-          .then((response) => response.ok)
-          .catch(() => false),
-      );
-    }
-    return reachable.get(url);
-  };
+  // 按 host 去重探测：同一个基址只探一次
+  const bases = [R2_BASE_URL, R2_DEV_BASE_URL];
+  const liveBase = (await Promise.all(bases.map(async (base) => ((await isReachable(`${base}/Nienie-android.apk`)) ? base : null)))).find(Boolean);
 
-  await Promise.all(
-    links.map(async (link) => {
-      const url = link.getAttribute('href');
-      if (!url) return;
-      if (await probe(url)) return;
-      link.setAttribute('href', GITHUB_LATEST_RELEASE);
-      link.removeAttribute('download');
-      link.dataset.mirror = 'github-fallback';
-    }),
-  );
+  for (const link of links) {
+    const url = link.getAttribute('href');
+    if (!url) continue;
+    const fileName = url.split('/').pop();
+    if (liveBase) {
+      link.setAttribute('href', `${liveBase}/${fileName}`);
+      continue;
+    }
+    link.setAttribute('href', GITHUB_LATEST_RELEASE);
+    link.removeAttribute('download');
+    link.dataset.mirror = 'github-fallback';
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

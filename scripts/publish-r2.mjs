@@ -19,12 +19,11 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createReadStream } from 'node:fs';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 
 export const DEFAULT_R2_BUCKET = 'nienie-releases';
 export const DEFAULT_R2_RELEASE_PREFIX = 'nienie/releases';
@@ -62,14 +61,6 @@ function encodePath(value) {
   return value.split('/').map((part) => encodeURIComponent(part)).join('/');
 }
 
-function githubHeaders(token) {
-  return {
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-}
-
 async function readJsonResponse(response, label) {
   const body = await response.text();
   let payload;
@@ -100,12 +91,23 @@ function r2ListUrl({ accountId, bucket, prefix, cursor }) {
 }
 
 // ---------- GitHub 侧 ----------
+// 一律走 curl：Node 原生 fetch 不读 HTTPS_PROXY，在需要代理的机器上连 GitHub 会直接失败
+function githubJson(url, token) {
+  const args = ['-fsSL', '--connect-timeout', '20', '--retry', '3', '--retry-delay', '2'];
+  if (token) args.push('-H', `Authorization: Bearer ${token}`);
+  args.push('-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28', url);
+  try {
+    return JSON.parse(execFileSync('curl', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
+  } catch (error) {
+    throw new Error(`GitHub API request failed: ${url} (${error instanceof Error ? error.message.slice(0, 200) : error})`);
+  }
+}
+
 async function fetchLatestRelease({ repository, githubToken, tag }) {
   const endpoint = tag
     ? `${GITHUB_API_BASE_URL}/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`
     : `${GITHUB_API_BASE_URL}/repos/${repository}/releases/latest`;
-  const response = await fetch(endpoint, { headers: githubHeaders(githubToken) });
-  const payload = await readJsonResponse(response, tag ? `GitHub release ${tag}` : 'Latest GitHub release');
+  const payload = githubJson(endpoint, githubToken);
   if (payload.draft || payload.prerelease) {
     throw new Error(`Release ${payload.tag_name} is ${payload.draft ? 'a draft' : 'a prerelease'}; refusing to mirror it.`);
   }
@@ -113,10 +115,7 @@ async function fetchLatestRelease({ repository, githubToken, tag }) {
 }
 
 async function fetchLatestPublishedTag({ repository, githubToken }) {
-  const response = await fetch(`${GITHUB_API_BASE_URL}/repos/${repository}/releases/latest`, {
-    headers: githubHeaders(githubToken),
-  });
-  const payload = await readJsonResponse(response, 'Latest GitHub release');
+  const payload = githubJson(`${GITHUB_API_BASE_URL}/repos/${repository}/releases/latest`, githubToken);
   return payload.tag_name;
 }
 
@@ -130,19 +129,46 @@ function selectMirroredAssets(release) {
 }
 
 async function downloadAsset(asset, destination, githubToken) {
-  const response = await fetch(asset.browser_download_url, {
-    headers: githubToken && new URL(asset.browser_download_url).hostname.endsWith('github.com')
-      ? { Authorization: `Bearer ${githubToken}` }
-      : undefined,
-    redirect: 'follow',
-  });
-  if (!response.ok || !response.body) {
-    throw new Error(`Download failed (${response.status}) for ${asset.name}`);
+  // 必须用 curl：Node 原生 fetch（undici）不读 HTTPS_PROXY，
+  // 在需要代理的机器上会从 GitHub 拉包时卡死（实测 6 分钟只下 2.6 MB）。
+  // curl 默认读 http_proxy/https_proxy，CI 与本地行为一致。
+  const headers = [];
+  if (githubToken && new URL(asset.browser_download_url).hostname.endsWith('github.com')) {
+    headers.push('-H', `Authorization: Bearer ${githubToken}`);
   }
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(destination));
+  execFileSync(
+    'curl',
+    [
+      '-fSL',
+      '--retry', '3',
+      '--retry-delay', '2',
+      '--connect-timeout', '20',
+      ...headers,
+      '-o', destination,
+      asset.browser_download_url,
+    ],
+    { stdio: ['ignore', 'ignore', 'inherit'] },
+  );
+
+  return hashFile(destination);
+}
+
+async function hashFile(filePath) {
   const hash = createHash('sha256');
-  for await (const chunk of createReadStream(destination)) hash.update(chunk);
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk);
   return hash.digest('hex');
+}
+
+// 本地已有同名产物时直接复用，避免再走一次 GitHub 下载（本机直连 GitHub 常常卡死）
+async function existingArtifact(artifactsDir, assetName) {
+  if (!artifactsDir) return null;
+  const candidate = join(artifactsDir, assetName);
+  try {
+    const info = await stat(candidate);
+    return info.isFile() ? candidate : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------- R2 侧 ----------
@@ -269,6 +295,7 @@ function parseOptions(argv) {
     if (argument === '--bucket') options.bucket = value;
     if (argument === '--release-prefix') options.releasePrefix = value;
     if (argument === '--public-base-url') options.publicBaseUrl = value;
+    if (argument === '--artifacts-dir') options.artifactsDir = value;
     index += 1;
   }
   return options;
@@ -284,6 +311,7 @@ export async function publishReleaseDownloads(options = {}) {
   const bucket = options.bucket ?? process.env.R2_BUCKET ?? DEFAULT_R2_BUCKET;
   const releasePrefix = options.releasePrefix ?? process.env.R2_RELEASE_PREFIX ?? DEFAULT_R2_RELEASE_PREFIX;
   const publicBaseUrl = options.publicBaseUrl ?? process.env.R2_PUBLIC_BASE_URL ?? DEFAULT_R2_PUBLIC_BASE_URL;
+  const artifactsDir = options.artifactsDir ?? process.env.ARTIFACTS_DIR;
 
   if (!repository || !/^[^/]+\/[^/]+$/.test(repository)) {
     throw new Error('GITHUB_REPOSITORY or --repository must be owner/name');
@@ -333,12 +361,15 @@ export async function publishReleaseDownloads(options = {}) {
         continue;
       }
 
-      const filePath = join(temporaryDirectory, basename(asset.name));
-      const sha256 = await downloadAsset(asset, filePath, githubToken);
+      const localPath = await existingArtifact(artifactsDir, asset.name);
+      const filePath = localPath ?? join(temporaryDirectory, basename(asset.name));
+      // 本地文件同样对齐 GitHub 的 digest，防止把错的包推上镜像
+      const sha256 = localPath ? await hashFile(localPath) : await downloadAsset(asset, filePath, githubToken);
       if (asset.digest && sha256 !== String(asset.digest).replace(/^sha256:/, '')) {
         throw new Error(`SHA-256 mismatch for ${asset.name}`);
       }
       metadata.sha256 = sha256;
+      if (localPath) console.log(`Using local artifact: ${localPath}`);
 
       const versionedKey = `${releaseRoot}/${asset.name}`;
       await uploadR2File({

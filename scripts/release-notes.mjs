@@ -57,20 +57,14 @@ function parseArgs(argv) {
 }
 
 // ---------- 产物归类 ----------
+// macOS 只发 DMG（安装式，拖进 Applications 即可），不做 zip 免安装包。
 // 返回 { platform, label, order }
 function classify(fileName) {
   const lower = fileName.toLowerCase();
 
-  if (lower.endsWith('.dmg') || (lower.endsWith('.zip') && lower.includes('mac'))) {
-    const isZip = lower.endsWith('.zip');
-    const label = lower.includes('arm64')
-      ? `Apple Silicon ${isZip ? 'ZIP' : 'DMG'}`
-      : lower.includes('x64')
-        ? `Intel ${isZip ? 'ZIP' : 'DMG'}`
-        : isZip
-          ? 'ZIP'
-          : 'DMG';
-    return { platform: 'macOS', label, order: isZip ? 11 : 10 };
+  if (lower.endsWith('.dmg')) {
+    const arch = lower.includes('arm64') ? 'Apple Silicon' : lower.includes('x64') ? 'Intel' : '';
+    return { platform: 'macOS', label: `${arch} DMG`.trim(), order: 10 };
   }
   if (lower.endsWith('.exe')) {
     const label = lower.includes('arm64') ? 'ARM64 Installer' : 'x64 Installer';
@@ -83,7 +77,8 @@ function classify(fileName) {
     const label = lower.includes('arm64') || lower.includes('android') ? 'ARM64 APK' : 'APK';
     return { platform: 'Android', label, order: 40 };
   }
-  // .aab / .sha256 / SHA256SUMS 等不进 Downloads：AAB 不供直接安装，校验和不是下载项
+  // .zip / .aab / .sha256 / SHA256SUMS 等不进 Downloads：
+  // 不发 zip 免安装包，AAB 不供直接安装，校验和不是下载项
   return null;
 }
 

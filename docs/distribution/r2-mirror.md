@@ -59,8 +59,15 @@ gh workflow run sync-downloads.yml
 ```bash
 CLOUDFLARE_ACCOUNT_ID=xxx CLOUDFLARE_API_TOKEN=yyy \
   GITHUB_TOKEN=$(gh auth token) \
-  node scripts/publish-r2.mjs --repository ponponon/nienie
+  node scripts/publish-r2.mjs --repository ponponon/nienie --artifacts-dir /path/to/artifacts
 ```
+
+`--artifacts-dir` 指向已构建好的产物目录（文件名必须和 Release 资产名一致），
+命中本地文件就直接上传，不再走 GitHub 下载。CI 上不传，走下载路径。
+
+**网络注意**：脚本里所有 GitHub 调用（API 元数据 + 资产下载）一律用 `curl`，
+因为 Node 原生 fetch（undici）不读 `HTTPS_PROXY`，在需要代理的机器上会直接失败或卡死。
+Cloudflare API 走 Node fetch 是直连可达的。
 
 脚本行为：
 
@@ -87,6 +94,23 @@ CLOUDFLARE_ACCOUNT_ID=xxx CLOUDFLARE_API_TOKEN=yyy \
 | 现象 | 原因 |
 | --- | --- |
 | 官网链接跳到了 GitHub | R2 未同步、域名未绑、或 bucket 缺 CORS（看 `main.js` 探测结果） |
+| 官网链接走到 `pub-*.r2.dev` | 自定义域还没绑，走了 `main.js` 的第二优先级后备地址 |
 | `403` on custom domain | 自定义域还没生效，或 DNS 未指向 R2 |
 | 下载到旧版本 | `latest/` 有 5 分钟缓存，等一会儿或加时间戳验证 |
 | 同步报 `Only the latest GitHub release` | 该 tag 不是最新正式 Release，先确认没有更新的版本 |
+| 同步报 `fetch failed` 或下载卡在 0% | Node fetch 不走代理导致，确认脚本里 GitHub 调用走的是 curl |
+
+### 关于自定义域绑定
+
+R2 的自定义域绑定要求 Token 具备 **Zone 作用域**（`Zone → Zone → Read` + `Zone → DNS → Edit`）。
+只有 R2 权限的 Token 会拿到 `GET /zones` 空列表，绑定接口返回
+`10040 The JSON you provided was not well formed`（其实是权限不够，报错文案有误导性）。
+两条路：
+
+1. 建一个带 Zone 权限的 Token，我用 API 绑；
+2. Cloudflare 后台 → R2 → `nienie-releases` → Settings → Custom Domains → Connect Domain
+   → 填 `nienie-releases.quniv.cn`（30 秒）。
+
+在绑好之前，官网自动用 bucket 自带的 r2.dev 托管域
+`pub-12775a075761492a81c649227f63c1dd.r2.dev`（Cloudflare 明确说它不适合生产、有限流），
+绑好后 `main.js` 会自动切回自定义域，不用改代码。

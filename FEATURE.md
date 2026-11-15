@@ -860,3 +860,11 @@
 - `website/scripts/main.js` 加两个兜底：下载链接 HEAD 探测失败时回退 `releases/latest`（避免 R2 未就绪时出现死链）；清单拉取失败则保留静态文案。
 - 重新生成 `website/assets/apk-qr.svg`（指向 R2 别名，39 模块 / version 5），并用 `cv2.QRCodeDetector` 反解验证内容一致。
 - 新增 `docs/distribution/r2-mirror.md`（拓扑、存储成本、同步方式、官网消费、排查表）。
+
+### 2026-11-15 R2 镜像落地实测 + macOS 只留 DMG
+
+- R2 上传实测通过：bucket `nienie-releases` 已有 5 个对象（版本化 DMG/APK + `latest/` 别名 + `download-manifest.json`），r2.dev 全部 200，SHA-256 与 GitHub Release 的 digest 逐字节一致；CORS `Access-Control-Allow-Origin: *`、版本化 `immutable`、别名 `max-age=300, must-revalidate` 都验证过。
+- **Node 原生 fetch 不读 `HTTPS_PROXY`** 是本轮最大的坑：脚本里 GitHub 的 API 与资产下载用 fetch 会直接 `fetch failed` 或卡死（6 分钟只下 2.6 MB）。已把 GitHub 侧全部改成 `curl`（curl 会读代理），Cloudflare API 继续走 Node fetch（直连可达）。`scripts/publish-r2.mjs` 另加 `--artifacts-dir`，本地已有产物时直接上传，不再绕 GitHub。
+- 自定义域绑定被网关拒：只有 R2 作用域的 Token 拿到 `GET /zones` 空列表，绑域名接口返回 `10040 JSON not well formed`（实际是缺 Zone 权限）。已开启 bucket 的 r2.dev 托管域 `pub-12775a075761492a81c649227f63c1dd.r2.dev` 作过渡；官网 `main.js` 按「自定义域 → r2.dev → GitHub Release 页」三级探测，绑好域名后自动切回，不用改代码。
+- GitHub 仓库已配 `CLOUDFLARE_API_TOKEN`(secret) + `CLOUDFLARE_ACCOUNT_ID`(variable)，`sync-downloads.yml` 可自动跑。
+- macOS 只发 DMG，不再发 zip（安装式更符合用户预期）。`release-notes.mjs` 的 classify 去掉 mac `.zip` 分支，官网文案统一 `.dmg`。
