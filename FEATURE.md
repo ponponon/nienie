@@ -815,3 +815,12 @@
 - 新增 `docs/distribution/macos-dmg-release.md`：桌面端打包 DMG 安装包的完整操作指南——Apple 开发者后台（CSR → Developer ID Application 证书 → .p12 导出 → App Store Connect API Key → Team ID）→ GitHub Secrets（CSC_LINK/CSC_KEY_PASSWORD/APPLE_API_KEY 三件套）→ electron-builder 配置（hardenedRuntime + entitlements + notarize）→ release.yml（tag 触发、arm64/x64 matrix、签名公证三连验证、GH Release 上传）。
 - 记录本项目特殊约束：`@matrixai/quic` 原生绑定必须 asarUnpack、pnpm 符号链接 node_modules 需真实拷贝、不做 universal 包、私有仓库 macOS runner 计费提醒。
 - 状态：**指南已就绪，打包配置与 workflow 尚未实施**（待用户完成证书申请后按文档第 3、4 节落码）。
+
+### 2026-11-15 macOS DMG 打包链路落地（签名 + 公证 + 出包实测通过）
+
+- 新增 `apps/desktop/electron-builder.yml`：appId `cn.quniv.nienie`、`hardenedRuntime: true`、entitlements、`notarize: true`、dmg 目标（架构由 CLI 决定）、`asarUnpack: @matrixai/** + **/*.node`、`npmRebuild: false`。
+- 新增 `apps/desktop/build/entitlements.mac.plist` 与 `entitlements.mac.inherit.plist`（allow-jit / allow-unsigned-executable-memory / disable-library-validation）。
+- 新增 `scripts/package-mac.mjs`：esbuild 生产构建 → staging 组装（dist/assets 真实拷贝 + `@matrixai/quic` 依赖闭包解引用 pnpm 符号链接 + ts-custom-error + 精确 electron 版本）→ electron-builder 签名/公证出 DMG；支持 `--arch=`、`--skip-notarize`；凭据本地回落 `~/.nienie-signing/`，CI 走环境变量同一套脚本。
+- 修复打包后资源定位：`electron-main.ts` / `preview-server.ts` 的 `bundleDir` 改为 `__dirname` 优先（esbuild CJS 产物里 `import.meta` 为空对象）；资源、数据目录、热更新路径按 `app.isPackaged` 分流，Finder 启动不再依赖 `process.cwd()`。
+- 根 `devDependencies` 增加 `electron-builder@^26.18.0`；`.gitignore` 补 `dist-release/` 并放行 `apps/desktop/build/`（entitlements 必须进 git 供 CI 使用）。
+- 实测产物 `Nienie-0.1.0-arm64.dmg`（131 MB）：`codesign --verify --deep --strict`、`spctl -a`（`source=Notarized Developer ID`）、`stapler validate` 全部通过；挂载后 app 启动正常——Bridge 监听 `:4100`、预览服务 `127.0.0.1:4101` 返回 200（`Nienie Bridge 控制台`），userData 正确落到 `~/Library/Application Support/Nienie`。

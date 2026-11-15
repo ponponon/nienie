@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createDesktopPreloadApi,
   DESKTOP_PRELOAD_METHODS,
@@ -20,6 +20,16 @@ export type DesktopPreviewServerOptions = {
   port?: number | undefined;
   liveRendererPath?: string | undefined;
 };
+
+// bundle 产物目录（esbuild 输出所在目录）：开发时 = apps/desktop/dist，
+// 打包后 = Nienie.app/Contents/Resources/app.asar/dist。资源查找以它为锚点，
+// 不依赖 process.cwd()（Finder 启动 .app 时 cwd 是 `/`，不可控）。
+// 注意：electron-main 会被 esbuild 打成 CJS（import.meta 为空对象），
+// 必须优先用 __dirname；仅在 ESM 直跑（vitest/tsx）时回落 import.meta.url。
+const bundleDir =
+  typeof __dirname !== 'undefined'
+    ? __dirname
+    : dirname(fileURLToPath(import.meta.url));
 
 export class DesktopPreviewServer {
   private readonly csrfToken = randomBytes(24).toString('hex');
@@ -218,6 +228,7 @@ export class DesktopPreviewServer {
 
     if (req.method === 'GET' && url.pathname === '/assets/desktop-client.js') {
       const candidates = [
+        resolve(bundleDir, 'desktop-client.js'),
         resolve(process.cwd(), 'apps/desktop/dist/desktop-client.js'),
         resolve(process.cwd(), 'dist/desktop-client.js'),
       ];
@@ -234,6 +245,7 @@ export class DesktopPreviewServer {
 
     if (req.method === 'GET' && url.pathname === '/assets/nienie-logo.png') {
       const candidates = [
+        resolve(bundleDir, '../assets/nienie-logo.png'),
         resolve(process.cwd(), 'apps/desktop/assets/nienie-logo.png'),
         resolve(process.cwd(), 'assets/branding/nienie-logo-512.png'),
       ];
@@ -250,6 +262,7 @@ export class DesktopPreviewServer {
 
     if (req.method === 'GET' && url.pathname === '/assets/wechat-appreciate.jpg') {
       const candidates = [
+        resolve(bundleDir, '../assets/wechat-appreciate.jpg'),
         resolve(process.cwd(), 'apps/desktop/assets/wechat-appreciate.jpg'),
         resolve(process.cwd(), 'assets/wechat-appreciate.jpg'),
       ];

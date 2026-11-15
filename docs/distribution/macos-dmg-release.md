@@ -295,3 +295,58 @@ xcrun notarytool log <submission-id> --key ~/.appstoreconnect/private_keys/AuthK
    **私有仓库 macOS runner 按分钟计费（约 $0.08/分钟）**，比 Linux 贵很多。
    建议此仓库保持 public，或仅在打 tag 时构建（上面 workflow 已按此设计）。
 5. `.p12`/`.p8`/密码绝不能进 git，只进 GitHub Secrets。本地留底建议放密码管理器。
+
+---
+
+## 7. 公证凭据的两条路（常见疑问：还要不要 Apple ID 专用密码？）
+
+notarytool 支持两种认证方式，**二选一即可**：
+
+| 方式 | 需要什么 | 在哪里生成 | 适用场景 |
+| --- | --- | --- | --- |
+| **App Store Connect API Key（本仓库采用）** | `.p8` 私钥 + Key ID + Issuer ID | App Store Connect → 用户和访问 → 集成 → App Store Connect API | CI 首选，可轮换、不绑定个人密码 |
+| Apple ID + App 专用密码 | Apple ID、App 专用密码、Team ID | appleid.apple.com → 登录与安全 → App 专用密码 | 个人临时脚本；需要把账号密码类凭据放进环境变量 |
+
+本项目 2026-11-15 已按**第一条**完成：`APPLE_API_KEY`（.p8）、`APPLE_API_KEY_ID`（8ZBV7KZM96）、
+`APPLE_API_ISSUER`、`APPLE_TEAM_ID`（GZR99DMBA2）。**因此不需要再去普通 Apple 账号生成 App 专用密码。**
+
+> 记住分工：developer.apple.com 出的是**签名证书**（Developer ID Application → .p12），
+> App Store Connect 出的是**公证凭据**（API Key → .p8）。两者缺一不可，但都不涉及 Apple ID 密码。
+
+---
+
+## 8. 落地实录（2026-11-15 实测通过）
+
+### 8.1 本地一键出包
+
+```bash
+node scripts/package-mac.mjs --arch=arm64              # 签名 + 公证 + DMG
+node scripts/package-mac.mjs --arch=arm64 --skip-notarize   # 只验证打包链路
+```
+
+凭据优先级：环境变量 → `~/.nienie-signing/`（`nienie-developer-id.p12` + `p12-password.txt` +
+`AuthKey_*.p8` + `issuer-id.txt` + `team-id.txt`）。CI 上只用环境变量，同一条脚本可直接复用。
+
+产物：`apps/desktop/dist-release/out/Nienie-<version>-<arch>.dmg`（arm64 约 131 MB）。
+
+### 8.2 验收三连（缺一不可）
+
+```bash
+codesign --verify --deep --strict --verbose=2 Nienie.app      # 签名完整
+spctl -a -vvv -t exec Nienie.app                              # 期望 source=Notarized Developer ID
+xcrun stapler validate Nienie.app                             # 票根已钉入
+spctl -a -vvv -t open --context context:primary-signature Nienie-*.dmg
+hdiutil attach -nobrowse -readonly Nienie-*.dmg && ls /Volumes/Nienie/
+```
+
+### 8.3 实测耗时与注意
+
+- 首包完整链路约 30–40 分钟：esbuild + staging 秒级，**签名嵌套 framework 约 15–20 分钟**，
+  **首次公证 40 分钟**（团队首次提交 Apple 会慢，之后同一 App 的提交约 1 分钟）。
+- `.app` 先公证 + staple，再打 DMG；**DMG 本身也要单独签名 + 公证 + staple**，否则用户首次挂载仍可能被拦。
+- 生成 `.p12` 时必须加 `-macalg SHA1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES`
+  （OpenSSL 4 默认 SHA256 MAC + PBES2 会被 macOS `security` 以 "wrong password" 拒绝，
+  详见 `FailureExperience.md` 2026-11-15 条目）。
+- GUI 验收不要直接 `./Nienie.app/Contents/MacOS/Nienie`：环境里若存在 `ELECTRON_RUN_AS_NODE=1`
+  会让 Electron 以纯 Node 运行而"静默假死"。用 `open Nienie.app` 走真实启动路径，
+  以「4100/4101 监听 + 预览页 200 + `~/Library/Application Support/Nienie` 生成」三项判断成功。

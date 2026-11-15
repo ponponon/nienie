@@ -1,12 +1,22 @@
 import { existsSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow } from 'electron';
 import {
   createDesktopWindowOptions,
   DesktopBridgeController,
   DesktopPreviewServer,
 } from './bridge.js';
+
+// bundle 产物目录（开发时 = apps/desktop/dist，打包后 = Nienie.app/Contents/Resources/app.asar/dist）。
+// Finder 启动 .app 时 cwd 是 `/`，所有资源定位必须以 bundleDir 为锚点，不得依赖 process.cwd()。
+// 注意：本入口被 esbuild 打成 CJS（import.meta 为空对象），必须优先用 __dirname；
+// 仅在 ESM 直跑（vitest/tsx）时回落 import.meta.url。
+const bundleDir =
+  typeof __dirname !== 'undefined'
+    ? __dirname
+    : dirname(fileURLToPath(import.meta.url));
 
 function detectLanIp(): string | undefined {
   const nets = networkInterfaces();
@@ -22,19 +32,24 @@ function detectLanIp(): string | undefined {
 
 let controller: DesktopBridgeController | undefined;
 let preview: DesktopPreviewServer | undefined;
-const appIconPath = resolve(process.cwd(), 'apps/desktop/assets/nienie-logo.png');
+const appIconPath = resolve(bundleDir, '../assets/nienie-logo.png');
 
 async function bootstrap() {
   const host = process.env.NIENIE_BRIDGE_HOST ?? '0.0.0.0';
   const bridgePort = Number(process.env.NIENIE_BRIDGE_PORT ?? 4100);
   const previewPort = Number(process.env.NIENIE_PREVIEW_PORT ?? 4101);
 
+  // 打包后 cwd 是 `/`（不可写），偏好/配对数据落到用户数据目录；开发时保持仓库内 `.nienie/`。
+  const dataDir = app.isPackaged ? join(app.getPath('userData'), '.nienie') : resolve(process.cwd(), '.nienie');
+  // 初始工作区会话的项目路径：打包后同理不能用 cwd，退到用户主目录。
+  const defaultProjectPath = app.isPackaged ? app.getPath('home') : process.cwd();
+
   controller = new DesktopBridgeController({
     ...(process.env.NIENIE_MACHINE_ID ? { machineId: process.env.NIENIE_MACHINE_ID } : {}),
     host,
     port: bridgePort,
     includeExtendedAgents: true,
-    preferencesFilePath: resolve(process.cwd(), '.nienie/desktop-preferences.json'),
+    preferencesFilePath: join(dataDir, 'desktop-preferences.json'),
   });
 
   const state = await controller.startBridge();
@@ -46,7 +61,7 @@ async function bootstrap() {
     if (adapter?.createSession) {
       await adapter.createSession({
         title: `${adapter.name} Workspace`,
-        projectPath: process.cwd(),
+        projectPath: defaultProjectPath,
       });
     }
   }
@@ -55,7 +70,10 @@ async function bootstrap() {
     controller,
     host: '127.0.0.1',
     port: previewPort,
-    liveRendererPath: resolve(process.cwd(), 'apps/desktop/dist/renderer-live.mjs'),
+    // 生产模式不启用热更新 watcher（renderer-live.mjs 是开发产物）
+    liveRendererPath: app.isPackaged
+      ? undefined
+      : resolve(process.cwd(), 'apps/desktop/dist/renderer-live.mjs'),
   });
   const previewAddr = await preview.start();
   const lanIp = detectLanIp();

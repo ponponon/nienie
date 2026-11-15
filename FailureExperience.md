@@ -1127,3 +1127,91 @@ Android 资源名 `niebie-launch-image.png` 含 `-` 不合法（Android 资源�
 1. **自动化场景下凡涉及「一次性下载凭据」（.p8 / .p12 / 私钥 / 恢复码），先开网络抓包再点下载**，从响应体直接提取内容，绝不依赖浏览器下载落地。
 2. 生成此类凭据后立即验证内容完整性（PEM 头、openssl 可解析），确认无误再离开页面——一次性入口关了就没了。
 3. 判断下载是否真的成功，以「文件系统出现文件 + 下载历史有记录」为准，不能以按钮点击返回 success 为准。
+
+## 2026-11-15 OpenSSL 4 导出的 .p12 被 macOS security 拒绝（误报 wrong password）
+
+### 问题
+
+`security import nienie-developer-id.p12 -P <正确密码>` 报 `MAC verification failed during PKCS12 import (wrong password?)`，但同一密码用 `openssl pkcs12 -in ... -passin file:` 能正常解析，且密码 sha256 与 electron-builder 实际传入的完全一致。
+
+### 根因
+
+Homebrew OpenSSL 4.1 的 `pkcs12 -export` 默认用 **SHA256 MAC + PBES2(AES-256-CBC)**，macOS `security` 的 PKCS#12 解析器不兼容该组合，错误文案却指向"密码错误"，形成误导。
+
+### 影响
+
+electron-builder 签名阶段直接失败（`/usr/bin/security process failed`），打包中断；若按报错去改密码会越改越乱。
+
+### 修复
+
+用兼容参数重导出（同一私钥/证书/密码）：
+
+```bash
+openssl pkcs12 -export -inkey nienie-dev-id.key -in developerID_application.pem \
+  -out nienie-developer-id.p12 -name "Developer ID Application: ..." \
+  -macalg SHA1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES \
+  -passout file:p12-password.txt
+```
+
+重导出后 `security import` 一次通过；同时更新 GitHub Secret `CSC_LINK`（旧 p12 的 base64 已作废）。
+
+### 预防措施
+
+1. 导出 `.p12` 后立刻用临时钥匙串 `security create-keychain` + `security import` 验一次，别等打包才发现。
+2. 遇到 "wrong password" 先校验密码本身：`printf '%s' "$PW" | shasum -a 256` 与工具日志里显示的哈希比对，排除"密码真的错"再改导出参数。
+
+## 2026-11-15 esbuild 打 CJS 时 import.meta.url 为空导致主进程崩溃
+
+### 问题
+
+`esbuild --format=cjs` 打包 `electron-main.ts` 后，`dirname(fileURLToPath(import.meta.url))` 抛 `ERR_INVALID_ARG_TYPE: path argument must be of type string or URL. Received undefined`。
+
+### 根因
+
+CJS 输出格式下 esbuild 把 `import.meta` 替换成空对象（warning: `empty-import-meta`），`import.meta.url` 为 `undefined`。
+
+### 影响
+
+桌面端主进程启动即崩（开发链路 `scripts/start-mac.mjs` 与生产打包都是 CJS 产物，两条路同时中招）。
+
+### 修复
+
+```ts
+const bundleDir =
+  typeof __dirname !== 'undefined'
+    ? __dirname
+    : dirname(fileURLToPath(import.meta.url));
+```
+
+CJS 产物走 `__dirname`（= 产物所在目录），ESM/tsx/vitest 直跑回落 `import.meta.url`；打包命令加 `--log-override:empty-import-meta=debug` 降噪。
+
+### 预防措施
+
+1. 凡会被 esbuild 打成 CJS 的入口，禁止把 `import.meta.url` 当资源锚点。
+2. `empty-import-meta` 这条 warning 出现即代表有代码在 CJS 下会拿到 `undefined`，不要只看它"只是 warning"。
+
+## 2026-11-15 打包与 GUI 验收的环境双坑：文件代理拦截 + ELECTRON_RUN_AS_NODE 假死
+
+### 问题
+
+1. electron-builder 解压 Electron 发行包时报 `Brokered file token refused: modify backup failed`、`broker denied delete`。
+2. 直接执行 `Nienie.app/Contents/MacOS/Nienie` 既无启动日志也无监听端口，日志里出现 `Node.js v24.22.2` 且无任何 JS 报错——看起来像"打包产物启动失败"。
+
+### 根因
+
+1. 工具沙箱的 safe-delete / 文件代理拦截了构建工具在 `dist-release/` 下的删除与流式写入。
+2. 环境里存在 `ELECTRON_RUN_AS_NODE=1`，Electron 二进制被当成纯 Node 运行，`require('electron')` 返回路径字符串，主进程在 `app.whenReady()` 就抛 `Cannot read properties of undefined`；同时 shell 里有 `HTTP_PROXY`，`curl 127.0.0.1` 被代理拦成 502，进一步误导"端口没起来"的判断。
+
+### 影响
+
+差点误判为打包配置错误而去改 electron-builder / asar 配置，浪费整轮排查。
+
+### 修复
+
+1. 会产生大量删除/写入的构建命令在非沙箱模式执行。
+2. GUI 验收统一用 `env -u ELECTRON_RUN_AS_NODE open Nienie.app`（走 launchd，等价用户双击）；本地端口探测统一加 `curl --noproxy '*'`。
+
+### 预防措施
+
+1. 判断 GUI 应用是否真的启动：以「端口监听（lsof）+ 业务 HTTP 200 + userData 目录生成」三项为准，不看单一 stdout。
+2. 从 IDE/自动化环境启动 Electron 类应用前，先 `env | grep -i electron` 排除 `ELECTRON_RUN_AS_NODE`。

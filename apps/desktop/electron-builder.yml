@@ -1,0 +1,49 @@
+appId: cn.quniv.nienie
+productName: Nienie
+copyright: Copyright © 2026 ponponon
+
+directories:
+  # 打包脚本 scripts/package-mac.mjs 先把 esbuild 产物 + @matrixai 运行时闭包
+  # 真实拷贝（解引用 pnpm 符号链接）到 staging 目录，再由 electron-builder 打包
+  app: dist-release/app
+  output: dist-release/out
+  buildResources: assets
+
+files:
+  - dist/**
+  - assets/**
+  - node_modules/**
+  - package.json
+
+# staging 的 node_modules 是打包脚本手工组装的（pnpm 符号链接已解引用），
+# 不走 npm 安装，跳过原生模块重建
+npmRebuild: false
+
+# @matrixai/quic 的 napi 绑定必须以真实文件存在（dlopen 不走 asar），
+# 整包 unpack 也规避 quiche.js 的 import.meta.url 相对定位
+asarUnpack:
+  - '**/node_modules/@matrixai/**'
+  - '**/*.node'
+
+mac:
+  category: public.app-category.developer-tools
+  icon: nienie.icns
+  # 架构由 CLI 决定（package-mac.mjs 传 --arm64 / --x64），不在这里写死
+  target:
+    - dmg
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  notarize: true
+
+dmg:
+  title: Nienie
+  icon: nienie.icns
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

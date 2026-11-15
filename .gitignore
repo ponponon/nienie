@@ -9,9 +9,13 @@ build/
 # Electron / Node.js
 node_modules/
 dist/
+dist-release/
 .webpack/
 .vite/
 *.log
+
+# 签名 entitlements 在 apps/desktop/build/ 下，必须进 git（CI 打包要用）
+!apps/desktop/build/
 
 # Local configuration and credentials
 .env
