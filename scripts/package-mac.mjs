@@ -81,7 +81,7 @@ const quicExternals = [
   '--external:@matrixai/*',
 ];
 
-console.log('[1/4] esbuild 生产构建 …');
+console.log('[1/5] esbuild 生产构建 …');
 mkdirSync(distDir, { recursive: true });
 execFileSync(
   esbuildBin,
@@ -117,7 +117,7 @@ execFileSync(
 // ---------------------------------------------------------------------------
 // 2. staging：dist / assets / @matrixai 运行时闭包（解引用符号链接）
 // ---------------------------------------------------------------------------
-console.log('[2/4] 组装 staging 目录 …');
+console.log('[2/5] 组装 staging 目录 …');
 rmSync(releaseDir, { recursive: true, force: true });
 mkdirSync(join(stageDir, 'dist'), { recursive: true });
 mkdirSync(join(stageDir, 'node_modules'), { recursive: true });
@@ -176,7 +176,7 @@ writeFileSync(join(stageDir, 'package.json'), `${JSON.stringify(stagedPkg, null,
 // ---------------------------------------------------------------------------
 // 3. electron-builder：签名 + 公证 + DMG
 // ---------------------------------------------------------------------------
-console.log('[3/4] electron-builder 打包（签名 + 公证）…');
+console.log('[3/5] electron-builder 打包（签名 + 公证 .app）…');
 const env = {
   ...process.env,
   // 国内网络：electron 发行包走 npmmirror（CI 上同样可达）
@@ -203,11 +203,47 @@ execFileSync(join(rootDir, 'node_modules/.bin/electron-builder'), builderArgs, {
 });
 
 // ---------------------------------------------------------------------------
-// 4. 完成
+// 4. DMG 本体补公证 + staple
+//    electron-builder 只公证 .app；DMG 是后打的容器，必须单独公证，
+//    否则用户首次挂载 DMG 时 Gatekeeper 仍可能拦（staple 让离线验签也通过）。
 // ---------------------------------------------------------------------------
-console.log('[4/4] 完成。产物：');
 const outMac = join(releaseDir, 'out');
-for (const f of readdirSync(outMac)) {
+const dmgFiles = existsSync(outMac)
+  ? readdirSync(outMac).filter((f) => f.endsWith('.dmg'))
+  : [];
+
+if (!skipNotarize && env.APPLE_API_KEY && dmgFiles.length > 0) {
+  console.log('[4/5] DMG 公证 + staple …');
+  for (const f of dmgFiles) {
+    const dmgPath = join(outMac, f);
+    execFileSync(
+      'xcrun',
+      [
+        'notarytool',
+        'submit',
+        dmgPath,
+        '--key',
+        env.APPLE_API_KEY,
+        '--key-id',
+        env.APPLE_API_KEY_ID,
+        '--issuer',
+        env.APPLE_API_ISSUER,
+        '--wait',
+      ],
+      { cwd: desktopDir, stdio: 'inherit' },
+    );
+    execFileSync('xcrun', ['stapler', 'staple', dmgPath], { cwd: desktopDir, stdio: 'inherit' });
+    execFileSync('xcrun', ['stapler', 'validate', dmgPath], { cwd: desktopDir, stdio: 'inherit' });
+  }
+} else {
+  console.log('[4/5] 跳过 DMG 公证（--skip-notarize 或未配置公证凭据）');
+}
+
+// ---------------------------------------------------------------------------
+// 5. 完成
+// ---------------------------------------------------------------------------
+console.log('[5/5] 完成。产物：');
+for (const f of existsSync(outMac) ? readdirSync(outMac) : []) {
   if (f.endsWith('.dmg') || f.endsWith('.app')) {
     console.log(`  ${join(outMac, f)}`);
   }

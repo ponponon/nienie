@@ -824,3 +824,9 @@
 - 修复打包后资源定位：`electron-main.ts` / `preview-server.ts` 的 `bundleDir` 改为 `__dirname` 优先（esbuild CJS 产物里 `import.meta` 为空对象）；资源、数据目录、热更新路径按 `app.isPackaged` 分流，Finder 启动不再依赖 `process.cwd()`。
 - 根 `devDependencies` 增加 `electron-builder@^26.18.0`；`.gitignore` 补 `dist-release/` 并放行 `apps/desktop/build/`（entitlements 必须进 git 供 CI 使用）。
 - 实测产物 `Nienie-0.1.0-arm64.dmg`（131 MB）：`codesign --verify --deep --strict`、`spctl -a`（`source=Notarized Developer ID`）、`stapler validate` 全部通过；挂载后 app 启动正常——Bridge 监听 `:4100`、预览服务 `127.0.0.1:4101` 返回 200（`Nienie Bridge 控制台`），userData 正确落到 `~/Library/Application Support/Nienie`。
+
+### 2026-11-15 GitHub Release 发布链路（首次发版 + 自动化 workflow）
+
+- 新增 `.github/workflows/release.yml`：tag `v*` 触发（或手动 dispatch 选 arm64/x64），macOS runner 上跑 `scripts/package-mac.mjs` → 校验签名/公证/staple → 上传 artifact 并挂到 GitHub Release；公证凭据从 Secrets 注入，`.p8` 兼容 raw PEM 与 base64 两种存法。
+- `scripts/package-mac.mjs` 增加 `[4/5]` 步骤：electron-builder 出 DMG 后自动 `notarytool submit --wait` + `stapler staple/validate`，本地与 CI 同一条命令，不再需要手工补公证。
+- 发布 `v0.1.0`：`Nienie-0.1.0-arm64.dmg`（131 MB）挂载到 Releases，供官网直链下载。

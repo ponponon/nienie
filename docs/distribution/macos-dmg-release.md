@@ -343,7 +343,8 @@ hdiutil attach -nobrowse -readonly Nienie-*.dmg && ls /Volumes/Nienie/
 
 - 首包完整链路约 30–40 分钟：esbuild + staging 秒级，**签名嵌套 framework 约 15–20 分钟**，
   **首次公证 40 分钟**（团队首次提交 Apple 会慢，之后同一 App 的提交约 1 分钟）。
-- `.app` 先公证 + staple，再打 DMG；**DMG 本身也要单独签名 + 公证 + staple**，否则用户首次挂载仍可能被拦。
+- `.app` 先公证 + staple，再打 DMG；**DMG 本体也要单独签名 + 公证 + staple**，否则用户首次挂载仍可能被拦。
+  `scripts/package-mac.mjs` 的 `[4/5]` 步骤已自动化这一环（不依赖手工）。
 - 生成 `.p12` 时必须加 `-macalg SHA1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES`
   （OpenSSL 4 默认 SHA256 MAC + PBES2 会被 macOS `security` 以 "wrong password" 拒绝，
   详见 `FailureExperience.md` 2026-11-15 条目）。
