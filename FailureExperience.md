@@ -1215,3 +1215,36 @@ CJS 产物走 `__dirname`（= 产物所在目录），ESM/tsx/vitest 直跑回�
 
 1. 判断 GUI 应用是否真的启动：以「端口监听（lsof）+ 业务 HTTP 200 + userData 目录生成」三项为准，不看单一 stdout。
 2. 从 IDE/自动化环境启动 Electron 类应用前，先 `env | grep -i electron` 排除 `ELECTRON_RUN_AS_NODE`。
+
+## 2026-11-15 Flutter 3.47 Built-in Kotlin 导致 Android 构建失败（GeneratedPluginRegistrant cannot find symbol）
+
+### 问题
+
+CI 上 `flutter build apk --release` 在 `:app:compileReleaseJavaWithJavac` 失败：
+`GeneratedPluginRegistrant.java:29: error: cannot find symbol`（第 29 行正是 `file_picker` 的 `FilePickerPlugin`）。
+
+### 根因
+
+Flutter 3.47 的 Gradle 插件改为 **Built-in Kotlin**（不再给 app 应用 KGP）。构建日志里有明确警告：
+`Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): device_info_plus, file_picker`。
+这些老版本插件自己 apply KGP，在新的 Built-in Kotlin 体系下它们的 Kotlin 源码没有被编译，
+Java 写的插件注册文件自然找不到对应类。这与 2026-11-13 记录的 "GeneratedPluginRegistrant stale"
+是同一现象的不同成因（那次是本地缓存/注册表损坏，这次是工具链版本跃迁）。
+
+### 影响
+
+Android 端完全无法出包，官网只能继续分发旧的 debug 包；本机因同样原因也无法本地构建。
+
+### 修复
+
+把自带 KGP 的插件升级到支持 Built-in Kotlin 的版本：
+`file_picker 11.0.3 → 13.3.3`、`device_info_plus 11.0.0 → 13.3.0`（两者对 `win32` 的约束冲突，
+必须同时升级到 13.x 才解得开）。顺带适配 file_picker 13 的 API 变化
+（`pickFiles` 返回 `List<PlatformFile>`、没有 `allowMultiple`、平台实现缺失时抛 `UnimplementedError`）。
+
+### 预防措施
+
+1. 构建日志里出现 `applies Kotlin Gradle Plugin (KGP)` 警告时，视为「即将编译失败」的信号，优先升级插件。
+2. 升级插件后必须跑一次 widget 测试：平台接口在新版本里可能从"返回空"变成"抛异常"，
+   `AttachmentPicker` 这类包装层要 try/catch 降级，否则 UI 因选择器故障崩溃。
+3. 判断 APK 构建是否真失败，看 `compileReleaseJavaWithJavac` 与产物目录，不看 `tail` 管道的假超时。

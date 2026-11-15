@@ -157,15 +157,17 @@ jobs:
       - name: Build release APK and AAB
         working-directory: apps/mobile
         run: |
-          # 体积优化三件套：只编 arm64 + 代码混淆 + 分离调试符号
+          # 体积优化：只编 arm64 + 代码混淆 + 分离调试符号 + 剥离 ELF DWARF
           flutter build apk --release \
             --target-platform android-arm64 \
             --obfuscate \
-            --split-debug-info=build/symbols
+            --split-debug-info=build/symbols \
+            --extra-gen-snapshot-options=--strip
           flutter build appbundle --release \
             --target-platform android-arm64 \
             --obfuscate \
-            --split-debug-info=build/symbols
+            --split-debug-info=build/symbols \
+            --extra-gen-snapshot-options=--strip
 
       - name: Verify signing and rename artifacts
         run: |

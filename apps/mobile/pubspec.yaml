@@ -12,8 +12,8 @@ dependencies:
   flutter_svg: ^2.3.2
   lucide_icons_flutter: ^4.0.2
   mobile_scanner: ^7.5.0
-  device_info_plus: ^11.0.0
-  file_picker: ^11.0.3
+  device_info_plus: ^13.3.0
+  file_picker: ^13.3.3
   app_links: ^6.4.0
   flutter_markdown: ^0.7.7
   markdown: ^7.3.1

@@ -830,3 +830,12 @@
 - 新增 `.github/workflows/release.yml`：tag `v*` 触发（或手动 dispatch 选 arm64/x64），macOS runner 上跑 `scripts/package-mac.mjs` → 校验签名/公证/staple → 上传 artifact 并挂到 GitHub Release；公证凭据从 Secrets 注入，`.p8` 兼容 raw PEM 与 base64 两种存法。
 - `scripts/package-mac.mjs` 增加 `[4/5]` 步骤：electron-builder 出 DMG 后自动 `notarytool submit --wait` + `stapler staple/validate`，本地与 CI 同一条命令，不再需要手工补公证。
 - 发布 `v0.1.0`：`Nienie-0.1.0-arm64.dmg`（131 MB）挂载到 Releases，供官网直链下载。
+
+### 2026-11-15 Android APK 签名、体积优化与同 Release 发布
+
+- 生成正式签名密钥 `~/.nienie-signing/nienie-release.jks`（PKCS12，alias `nienie`，RSA 2048，30 年），四个 Android Secret 入库；`build.gradle.kts` 接 `key.properties`，发布任务缺签名材料直接 `GradleException`，不再静默产出 debug 包。
+- 体积优化（参考 audio_cut）：`abiFilters` 仅 `arm64-v8a` + `jniLibs.useLegacyPackaging` + `--obfuscate --split-debug-info --extra-gen-snapshot-options=--strip`，APK 从 **66.5 MB → 14.7 MB（-78%）**。
+- 升级插件以适配 Flutter 3.47 的 Built-in Kotlin：`file_picker 11.0.3 → 13.3.3`、`device_info_plus 11.0.0 → 13.3.0`；`AttachmentPicker` 适配新 API 并在选择器不可用时优雅降级返回空。
+- `release.yml` 新增 `android-apk` job：Java 17 + Flutter 3.47.9 → 解 Secret 建 key.properties → 构建 APK/AAB → `apksigner` 验签（debug 签名直接失败）→ 产物体积表写入 job summary → 挂同一 GitHub Release。
+- 本地产物 `Nienie-v0.1.0-android.apk`（14.7 MB，SHA256 `b9746f21…ce40f3d`）已挂到 `v0.1.0` Release，与 macOS DMG 并列。
+- 新增 `docs/distribution/android-apk-release.md`（签名三件套、瘦身手段表、构建验证命令、CI 流程、与 Google Play 的关系）。

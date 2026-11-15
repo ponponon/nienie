@@ -13,11 +13,17 @@ class AttachmentPicker {
       debugOverrideFiles = null;
       return override;
     }
-    final result = await FilePicker.pickFiles(type: type, allowMultiple: true);
-    if (result == null) return [];
-    return [
-      for (final f in result.files)
-        if (f.path != null) (name: f.name, path: f.path!),
-    ];
+    // file_picker 13.x：pickFiles 直接返回 List<PlatformFile>（默认支持多选，无 allowMultiple 参数）
+    try {
+      final files = await FilePicker.pickFiles(type: type);
+      return [
+        for (final f in files)
+          if (f.path != null) (name: f.name, path: f.path!),
+      ];
+    } catch (_) {
+      // 平台实现缺失（widget 测试环境）或系统选择器异常一律视作“用户取消”，
+      // 不让 UI 因选择器故障崩溃。
+      return [];
+    }
   }
 }
