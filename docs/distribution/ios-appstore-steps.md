@@ -13,6 +13,9 @@
 
 | 步骤 | 结论 |
 | --- | --- |
+| 0.1 会员状态 | ✅ **有效**：Apple Developer Program，**个人**账号，Team ID `GZR99DMBA2`，续订日 **2027-09-20**，年费 RMB 688 |
+| 0.2 协议 | ✅ **无阻塞**：`Apple Developer Program License Agreement`（2026-10-30 签发 / **2026-11-15 已接受**）、`Apple Developer Agreement`（2026-09-18 已接受）。《付费应用程序协议》未接受，但**免费 App 不需要**，将来要 IAP 再接受 |
+| 0.3 角色 | ✅ **足额**：`ponponon_dev@foxmail.com`（叶建成）= **账户持有人 + 管理**，范围「所有 App」。个人账号唯一成员，无权限缺口 |
 | 0.4 工具链 | **Xcode 27.1**（满足 2026-04-28 起 Xcode 26 + iOS 26 SDK 强制要求）、Flutter 3.47.8 |
 | 0.5 Bundle ID | **定稿保持 `cn.quniv.nienieMobile`**。Apple 规定 Bundle ID 只能含字母数字、连字符、句点，**不允许下划线**，所以 Android 的 `cn.quniv.nienie_mobile` 在 iOS 上非法；且 Bundle ID 上传后不可更改 |
 | 0.6 商店名 | 美区暂无同名 App；**中国大陆已有一个「捏捏 · Nienie」**（`com.whalejay.nienie`，Entertainment，仅中国大陆/中国澳门）。首版只发美区不冲突，建议名称用 **`Nienie Mobile`**，建记录时以 App Store Connect 实时校验为准 |
@@ -26,7 +29,8 @@
 
 ### 待人工完成
 
-- [ ] 0.1–0.3 网页操作：App Store Connect 确认会员有效 → Account Holder 接受最新协议 → 确认自己有 Admin / App Manager 角色
+> ⚠️ **个人账号的商店署名**：注册身份是「个人」，App Store 产品页的「开发者/销售方」会显示**实名「叶建成」**，无法显示品牌名。若要用公司名署名，需另注册组织账号（要 D-U-N-S，1–2 周）。首版只发美区时可先接受实名署名。
+
 - [ ] 1.5 在 macOS 上构建一次后用 Xcode → Product → Generate Privacy Report 复核各插件隐私清单
 - [ ] 1.10 真机自测（冷启动、扫码配对、断网、权限弹窗、重启后凭据仍在）
 
