@@ -100,6 +100,34 @@ Cloudflare API 走 Node fetch 是直连可达的。
 | 同步报 `Only the latest GitHub release` | 该 tag 不是最新正式 Release，先确认没有更新的版本 |
 | 同步报 `fetch failed` 或下载卡在 0% | Node fetch 不走代理导致，确认脚本里 GitHub 调用走的是 curl |
 
+### 自定义域绑定（已完成）
+
+`nienie-releases.quniv.cn` 已在 Cloudflare 后台绑定到 bucket `nienie-releases`，
+`Minimum TLS version = TLS 1.2`（与 `releases.quniv.cn` 一致）。Cloudflare 自动加了一条
+代理 CNAME 并签发证书，状态 `Initializing → Active`。
+
+**不要手工指 IP 或自己建 CNAME**：R2 自定义域是 Host 头路由 + 自动证书，
+手建 DNS 记录是无效路径（官方明确不支持指向 r2.dev 的 CNAME）。
+
+绑定入口（记一下，换 bucket 时照做）：
+Cloudflare 后台 → R2 → 选 bucket → **Settings** → **Public access > Custom Domains**
+→ **Connect Domain** → 填域名 → **Continue** → 确认 DNS 记录 → **Connect Domain**
+→ 等 `Initializing` 变 `Active`（几分钟）。
+
+r2.dev 托管域仍保留作第二后备（Cloudflare 标注它限流、不建议生产用），
+官网 `main.js` 只在自定义域不可达时才会回落到它。
+
+## 5. 排查
+
+| 现象 | 原因 |
+| --- | --- |
+| 官网链接跳到了 GitHub | R2 未同步、域名未绑、或 bucket 缺 CORS（看 `main.js` 探测结果） |
+| 官网链接走到 `pub-*.r2.dev` | 自定义域还没绑，走了 `main.js` 的第二优先级后备地址 |
+| `403` on custom domain | 自定义域还没生效，或 DNS 未指向 R2 |
+| 下载到旧版本 | `latest/` 有 5 分钟缓存，等一会儿或加时间戳验证 |
+| 同步报 `Only the latest GitHub release` | 该 tag 不是最新正式 Release，先确认没有更新的版本 |
+| 同步报 `fetch failed` 或下载卡在 0% | Node fetch 不走代理导致，确认脚本里 GitHub 调用走的是 curl |
+
 ### 关于自定义域绑定
 
 R2 的自定义域绑定要求 Token 具备 **Zone 作用域**（`Zone → Zone → Read` + `Zone → DNS → Edit`）。

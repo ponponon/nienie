@@ -868,3 +868,4 @@
 - 自定义域绑定被网关拒：只有 R2 作用域的 Token 拿到 `GET /zones` 空列表，绑域名接口返回 `10040 JSON not well formed`（实际是缺 Zone 权限）。已开启 bucket 的 r2.dev 托管域 `pub-12775a075761492a81c649227f63c1dd.r2.dev` 作过渡；官网 `main.js` 按「自定义域 → r2.dev → GitHub Release 页」三级探测，绑好域名后自动切回，不用改代码。
 - GitHub 仓库已配 `CLOUDFLARE_API_TOKEN`(secret) + `CLOUDFLARE_ACCOUNT_ID`(variable)，`sync-downloads.yml` 可自动跑。
 - macOS 只发 DMG，不再发 zip（安装式更符合用户预期）。`release-notes.mjs` 的 classify 去掉 mac `.zip` 分支，官网文案统一 `.dmg`。
+- 自定义域 `nienie-releases.quniv.cn` 已绑定（minTLS 1.2，与 `releases.quniv.cn` 一致），验收全绿：5 个对象 200、`latest/` 别名 `max-age=300, must-revalidate`、APK 从生产域名下载后 SHA-256 与 GitHub digest 完全一致。R2 自定义域不需要填 IP，Cloudflare 自动加代理 CNAME + 签证书；手建 DNS 是无效路径。
