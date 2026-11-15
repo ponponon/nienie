@@ -7,6 +7,31 @@
 
 ---
 
+## 执行进度（2026-11-16 已核对）
+
+### 已完成（代码侧全部落地）
+
+| 步骤 | 结论 |
+| --- | --- |
+| 0.4 工具链 | **Xcode 27.1**（满足 2026-04-28 起 Xcode 26 + iOS 26 SDK 强制要求）、Flutter 3.47.8 |
+| 0.5 Bundle ID | **定稿保持 `cn.quniv.nienieMobile`**。Apple 规定 Bundle ID 只能含字母数字、连字符、句点，**不允许下划线**，所以 Android 的 `cn.quniv.nienie_mobile` 在 iOS 上非法；且 Bundle ID 上传后不可更改 |
+| 0.6 商店名 | 美区暂无同名 App；**中国大陆已有一个「捏捏 · Nienie」**（`com.whalejay.nienie`，Entertainment，仅中国大陆/中国澳门）。首版只发美区不冲突，建议名称用 **`Nienie Mobile`**，建记录时以 App Store Connect 实时校验为准 |
+| 1.1–1.3 | `Info.plist` 已补 `NSLocalNetworkUsageDescription`、`NSAppTransportSecurity`(`NSAllowsLocalNetworking`)、`ITSAppUsesNonExemptEncryption=false`（App 自身只用系统 TLS/WSS；若后续链接专有加密 SDK 需改 YES 并申请 code） |
+| 1.4 | `ios/Runner/PrivacyInfo.xcprivacy` 已建并挂入 Runner 的 Resources（UserDefaults `CA92.1` / FileTimestamp `C617.1` / DiskSpace `E174.1` / SystemBootTime `35F9.1`；申报 Device ID、User Content 用于 App Functionality、不追踪） |
+| 1.6 | AI 数据外发同意弹窗：`lib/src/ui/ai_consent_gate.dart`（4 语言文案），同意状态持久化在 `DeviceCredentialStore`，未同意时不进入主界面 |
+| 1.7 | 版本号 `1.0.0+1` |
+| 1.8 | `TARGETED_DEVICE_FAMILY = 1`（首版仅 iPhone，免交 iPad 截图） |
+| 1.9 | 凭据迁移到应用支持目录（`path_provider`），旧 `systemTemp/nienie_mobile_state.json` 首启自动迁移并删除 |
+| 自检 | `flutter analyze` 0 问题；`flutter test` **116 项全通过**。注意：本机 `HTTP_PROXY` 会拦 `flutter_tester` 的本地 WebSocket，跑测试需带 `NO_PROXY=localhost,127.0.0.1` |
+
+### 待人工完成
+
+- [ ] 0.1–0.3 网页操作：App Store Connect 确认会员有效 → Account Holder 接受最新协议 → 确认自己有 Admin / App Manager 角色
+- [ ] 1.5 在 macOS 上构建一次后用 Xcode → Product → Generate Privacy Report 复核各插件隐私清单
+- [ ] 1.10 真机自测（冷启动、扫码配对、断网、权限弹窗、重启后凭据仍在）
+
+---
+
 ## Phase 0 · 账号侧检查（0.5 天）⏳ 等待项优先
 
 | # | 动作 | 怎么做 | 完成标志 |
