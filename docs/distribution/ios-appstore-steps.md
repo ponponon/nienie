@@ -25,7 +25,8 @@
 | 1.7 | 版本号 `1.0.0+1` |
 | 1.8 | `TARGETED_DEVICE_FAMILY = 1`（首版仅 iPhone，免交 iPad 截图） |
 | 1.9 | 凭据迁移到应用支持目录（`path_provider`），旧 `systemTemp/nienie_mobile_state.json` 首启自动迁移并删除 |
-| 自检 | `flutter analyze` 0 问题；`flutter test` **116 项全通过**。注意：本机 `HTTP_PROXY` 会拦 `flutter_tester` 的本地 WebSocket，跑测试需带 `NO_PROXY=localhost,127.0.0.1` |
+| 3.2 截图 | ✅ **两档成品已产出**（模拟器截图，Apple 接受）：`.workbuddy/screenshots/en_69_session.png`（1320×2868）、`en_63_session.png`（1206×2622），已去 alpha、全英文、一屏完整对话。截图走 demo 构建 `flutter build ios --simulator --dart-define=NIE_DEMO=true --dart-define=NIE_DEMO_LANG=en`（种子数据见 `lib/src/demo/demo_mode.dart`，正式构建不进调用图），模拟器 `simctl install/launch/status_bar override/screenshot` 后 ffmpeg `-pix_fmt rgb24` 去 alpha |
+| 自检 | `flutter analyze` 0 问题；`flutter test` **119 项全通过**。注意：本机 `HTTP_PROXY` 会拦 `flutter_tester` 的本地 WebSocket，跑测试需带 `NO_PROXY=localhost,127.0.0.1` |
 
 ### 待人工完成
 
@@ -82,7 +83,7 @@
 | # | 动作 | 产出 |
 | --- | --- | --- |
 | 3.1 | 写英文文案 | 名称、副标题（各 ≤30）、描述、关键词（≤100 字符） |
-| 3.2 | 做 iPhone 截图 3–5 张 | 真实界面，非营销合成图；首屏讲清「手机遥控电脑上的 AI 助手」。尺寸见下方速查 |
+| 3.2 | 做 iPhone 截图 3–5 张 | ✅ 两档成品在 `.workbuddy/screenshots/`（`en_69_session.png` 1320×2868、`en_63_session.png` 1206×2622，2026-11-16 模拟器产出）。需补 1–3 张不同界面凑齐 3–5 张；尺寸见下方速查 |
 | 3.3 | 🔴 建隐私政策页 | `website/` 新增可公开访问的 HTTPS 页面；内容可改写 `apps/desktop/src/i18n.ts` 的 `privacyContent`，但必须点名：收集哪些数据、发给哪些 AI 提供商、留存与删除、如何联系 |
 | 3.4 | 🔴 建支持页 | `website/` 新增 Support/Contact 页（邮箱或表单） |
 | 3.5 | 官网页脚加链接 | `website/index.html` 页脚挂上 Privacy / Support，并预留 App Store 下载按钮位 |
@@ -166,3 +167,4 @@
 | 拒审 2.1「无法测试」 | 审核员打不开 App，配对卡住 | 6.4 / 6.5 |
 | 拒审 5.1.2「数据未披露」 | AI 数据外发没有同意弹窗，或隐私政策没点名接收方 | 1.6 / 3.3 |
 | 找不到 build | 上传后还没处理完，或 build number 与历史重复 | 5.3 / 1.7 |
+| `xcodebuild: Could not resolve package dependencies: sandbox-exec: sandbox_apply: Operation not permitted` | 嵌套 seatbelt 沙箱冲突（如在沙箱化终端/CI 里构建）：SwiftPM 解析要再套一层 `sandbox-exec` 被内核拒 | 重跑时给 xcodebuild 加 `-IDEPackageSupportDisableManifestSandbox=1 -IDEPackageSupportDisablePluginExecutionSandbox=1`（或 `defaults write com.apple.dt.xcodebuild IDEPackageSupportDisableManifestSandbox -bool YES` 后 `flutter build ios` 即可透传生效） |
