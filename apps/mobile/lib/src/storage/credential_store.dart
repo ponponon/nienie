@@ -48,6 +48,12 @@ abstract class DeviceCredentialStore {
   /// 5.1：快捷指令自定义（scope=agentId）；null=该 scope 无自定义（用内置默认）
   Future<void> saveQuickCommands(String scope, List<String> commands);
   Future<List<String>?> loadQuickCommands(String scope);
+
+  /// Guideline 5.1.2(i)：用户是否已同意把内容发送给第三方 AI。
+  /// 默认 false——必须由用户显式同意后才允许外发。
+  Future<bool> loadAiConsent();
+  Future<void> saveAiConsent(bool accepted);
+
   Future<void> clear();
 }
 
@@ -91,6 +97,16 @@ class InMemoryCredentialStore implements DeviceCredentialStore {
   Future<AppLanguage?> loadLanguage() async => _savedLanguage;
 
   final Map<String, List<String>> _quickCommands = {};
+
+  bool _aiConsent = false;
+
+  @override
+  Future<bool> loadAiConsent() async => _aiConsent;
+
+  @override
+  Future<void> saveAiConsent(bool accepted) async {
+    _aiConsent = accepted;
+  }
 
   @override
   Future<void> saveQuickCommands(String scope, List<String> commands) async {
@@ -218,6 +234,19 @@ class FileCredentialStore implements DeviceCredentialStore {
     final all = state['quickCommands'] as Map?;
     if (all == null || all[scope] == null) return null;
     return (all[scope] as List).cast<String>();
+  }
+
+  @override
+  Future<bool> loadAiConsent() async {
+    final state = await _readState();
+    return state['aiConsent'] == true;
+  }
+
+  @override
+  Future<void> saveAiConsent(bool accepted) async {
+    final state = await _readState();
+    state['aiConsent'] = accepted;
+    await _writeState(state);
   }
 
   @override

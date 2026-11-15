@@ -825,4 +825,82 @@ class NienieStrings {
         AppLanguage.ja => '費用',
         AppLanguage.ko => '비용',
       };
+
+  // ===== 8.1 AI 数据外发同意（App Review Guideline 5.1.2(i)）=====
+
+  String get aiConsentTitle => switch (lang) {
+        AppLanguage.zh => '在继续之前：你的数据如何被使用',
+        AppLanguage.en => 'Before you continue: how your data is used',
+        AppLanguage.ja => '続行する前に：データの取り扱い',
+        AppLanguage.ko => '계속하기 전에: 데이터 사용 방식',
+      };
+
+  String get aiConsentLead => switch (lang) {
+        AppLanguage.zh =>
+          'Nienie 是你电脑上 AI 编程助手的遥控器。你发送的消息、附件与屏幕内容，会经你配对的电脑转发给 AI 服务。请先了解：',
+        AppLanguage.en =>
+          'Nienie is a remote console for the AI coding agent on your computer. Messages, attachments and screen content you send are forwarded through your paired computer to AI services. Please note:',
+        AppLanguage.ja =>
+          'Nienie はパソコン上の AI コーディングエージェント用リモコンです。送信したメッセージや添付ファイルは、ペアリングしたパソコン経由で AI サービスへ転送されます。',
+        AppLanguage.ko =>
+          'Nienie은 컴퓨터의 AI 코딩 에이전트를 위한 리모컨입니다. 보낸 메시지와 첨부 파일은 페어링된 컴퓨터를 통해 AI 서비스로 전달됩니다.',
+      };
+
+  List<String> get aiConsentBullets => switch (lang) {
+        AppLanguage.zh => [
+          '发送内容：你输入的消息、选择的文件、屏幕截图与会话上下文。',
+          '接收方：你电脑上配置的 AI 模型提供商，可能经中继服务传输。',
+          '用途：生成回复、执行你交给 Agent 的任务。',
+          '留存与删除：由你的电脑与所选 AI 服务商的策略决定，Nienie 不额外留存。',
+        ],
+        AppLanguage.en => [
+          'What is sent: your messages, selected files, screenshots and session context.',
+          'Who receives it: the AI model provider configured on your computer, possibly via a relay.',
+          'Why: to generate replies and run the tasks you give the agent.',
+          'Retention: governed by your computer and your AI provider\'s policy; Nienie keeps no extra copies.',
+        ],
+        AppLanguage.ja => [
+          '送信内容：入力したメッセージ、選択したファイル、画面キャプチャ、セッション文脈。',
+          '受信側：パソコンで設定した AI モデル提供者（中（中継サービス経由の場合あり）。',
+          '目的：返答の生成と、エージェントに任せたタスクの実行。',
+          '保存と削除：パソコンと AI 提供者のポリシーに従い、Nienie は追加保存しません。',
+        ],
+        AppLanguage.ko => [
+          '전송 내용: 입력한 메시지, 선택한 파일, 화면 캡처, 세션 맥락.',
+          '수신자: 컴퓨터에 설정된 AI 모델 제공자(중계 서비스 경유 가능).',
+          '목적: 답변 생성과 에이전트에게 맡긴 작업 수행.',
+          '보관·삭제: 컴퓨터와 AI 제공자 정책을 따르며 Nienie는 추가 보관하지 않습니다.',
+        ],
+      };
+
+  String get aiConsentAgreeBtn => switch (lang) {
+        AppLanguage.zh => '同意并继续',
+        AppLanguage.en => 'Agree and continue',
+        AppLanguage.ja => '同意して続行',
+        AppLanguage.ko => '동의하고 계속',
+      };
+
+  String get aiConsentDeclineBtn => switch (lang) {
+        AppLanguage.zh => '不同意',
+        AppLanguage.en => 'Disagree',
+        AppLanguage.ja => '同意しない',
+        AppLanguage.ko => '동의하지 않음',
+      };
+
+  String get aiConsentDeclinedNote => switch (lang) {
+        AppLanguage.zh => '未同意前无法使用远程控制功能。你可以随时回来重新查看说明。',
+        AppLanguage.en =>
+          'Remote control stays unavailable until you agree. You can review this notice again at any time.',
+        AppLanguage.ja =>
+          '同意するまでリモート操作は利用できません。いつでもこの案内を確認できます。',
+        AppLanguage.ko =>
+          '동의할 때까지 원격 제어를 사용할 수 없습니다. 언제든지 다시 확인할 수 있습니다.',
+      };
+
+  String get aiConsentReviewBtn => switch (lang) {
+        AppLanguage.zh => '重新查看说明',
+        AppLanguage.en => 'Review the notice again',
+        AppLanguage.ja => '案内をもう一度見る',
+        AppLanguage.ko => '안내 다시 보기',
+      };
 }

@@ -1,7 +1,7 @@
 name: nienie_mobile
 description: Nienie mobile-first control console for local coding agents.
 publish_to: 'none'
-version: 0.1.0+1
+version: 1.0.0+1
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  path_provider: ^2.1.5
   flutter_svg: ^2.3.2
   lucide_icons_flutter: ^4.0.2
   mobile_scanner: ^7.5.0

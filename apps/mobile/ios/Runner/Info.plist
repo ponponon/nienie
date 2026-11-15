@@ -6,6 +6,15 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan desktop pairing QR code to connect to your computer Bridge.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Nienie connects to the Bridge running on your computer over your local network to pair devices and control your coding agent.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

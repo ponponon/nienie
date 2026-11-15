@@ -4352,6 +4352,10 @@ class _GatedCredentialStore implements DeviceCredentialStore {
   @override
   Future<AppLanguage?> loadLanguage() => inner.loadLanguage();
   @override
+  Future<bool> loadAiConsent() => inner.loadAiConsent();
+  @override
+  Future<void> saveAiConsent(bool accepted) => inner.saveAiConsent(accepted);
+  @override
   Future<void> clear() => inner.clear();
 }
 
