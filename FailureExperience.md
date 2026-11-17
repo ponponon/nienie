@@ -1248,3 +1248,32 @@ Android 端完全无法出包，官网只能继续分发旧的 debug 包；本�
 2. 升级插件后必须跑一次 widget 测试：平台接口在新版本里可能从"返回空"变成"抛异常"，
    `AttachmentPicker` 这类包装层要 try/catch 降级，否则 UI 因选择器故障崩溃。
 3. 判断 APK 构建是否真失败，看 `compileReleaseJavaWithJavac` 与产物目录，不看 `tail` 管道的假超时。
+
+## 官网改了 .dmg 文案但线上还是 .zip：Pages 手动部署落在 Preview 环境（2026-11-18）
+
+### 现象
+
+官网下载按钮已改成「下载 macOS 电脑端 (.dmg)」并提交，但用户访问 `nienie-web.pages.dev`
+看到的仍是旧版 `.zip` 按钮。
+
+### 根因
+
+1. `nienie-web` 这个 Cloudflare Pages 项目**没有接 Git 自动部署**（Git Provider: No），
+   全靠手动 `wrangler pages deploy website --project-name=nienie-web`。代码 push 了不会自动上线，
+   必须手动部署。
+2. Pages 项目的**生产分支是 `main`**，而本仓库 git 分支是 `master`。不带 `--branch` 的
+   `wrangler pages deploy` 默认按当前 git 分支名（master）落到 **Preview 环境**，
+   生产域名继续指向上周的旧 Production 部署。表现为：部署命令显示成功、
+   `master.nienie-web.pages.dev` 已是新版，但 `nienie-web.pages.dev` 还是旧版。
+
+### 修复
+
+`wrangler pages deploy website --project-name=nienie-web --branch=main` 显式指定生产分支。
+
+### 预防措施
+
+1. 改完 website 后，push 远程之外**必须手动部署**才会生效；部署命令固定带 `--branch=main`。
+2. 验收不要看部署命令的 Success 输出，要直接 curl 生产域名核对关键文案；
+   `wrangler pages deployment list` 里确认新条目是 `Production` 而不是 `Preview`。
+3. 生产/预览双环境域名共用同一项目：`master.nienie-web.pages.dev` 是预览别名，
+   不代表生产已更新，排查时别被它误导。
