@@ -1268,12 +1268,16 @@ Android 端完全无法出包，官网只能继续分发旧的 debug 包；本�
 
 ### 修复
 
-`wrangler pages deploy website --project-name=nienie-web --branch=main` 显式指定生产分支。
+1. 先用 `wrangler pages deploy website --project-name=nienie-web --branch=main` 紧急把新版发到生产。
+2. 再把根因消掉：Pages API 把项目的 `production_branch` 从 `main` 改成 `master`（与 git 分支一致），
+   以后 `wrangler pages deploy website --project-name=nienie-web` 直接进生产，不再需要 `--branch`。
 
 ### 预防措施
 
-1. 改完 website 后，push 远程之外**必须手动部署**才会生效；部署命令固定带 `--branch=main`。
+1. 改完 website 后，push 远程之外**必须手动部署**才会生效（项目无 Git 集成）。
 2. 验收不要看部署命令的 Success 输出，要直接 curl 生产域名核对关键文案；
    `wrangler pages deployment list` 里确认新条目是 `Production` 而不是 `Preview`。
 3. 生产/预览双环境域名共用同一项目：`master.nienie-web.pages.dev` 是预览别名，
    不代表生产已更新，排查时别被它误导。
+4. Pages 的「生产分支」设置必须与 git 实际分支名一致（本仓库是 `master`）；
+   若再出现「部署 Success 但生产域名不变」，先查 `wrangler pages deployment list` 的 Environment 列。
