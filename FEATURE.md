@@ -880,3 +880,14 @@
 - `emitCodexThreadHistory(sessionId, threadId)` 明确区分两个 ID：**查库用 `threadId`，事件归属用 `sessionId`**。内存会话 id 是 `codex_ses_*`，若把 `threadId` 当 `sessionId` 发事件，手机端会收到挂在不存在的会话上的历史消息。
 - 回归测试（`packages/agent-adapters/codex/tests/history.test.ts`）：临时 `state_5.sqlite` 三套 schema（modern / legacy / minimal）各建一次，同项目混放 16 条线程（vscode / cli / custom atlas / custom chatgpt / subagent thread_spawn·review·compact / guardian / internal guardian·memory / exec / mcp / 未知 custom / unknown / 空内容 / archived），断言只返回 4 条交互式会话、且不出现 `Codex (` 兜底标题；另有「老 schema 用 first_user_message 过滤」「极老 schema 不缺列报错」「内存会话 threadId 去重」「`thread_history` 走注入的 codexHome」「`codex_ses_*` 回放用 threadId 查库但事件归属 sessionId」「历史库缺失不吞内存会话」六个用例。CI 里 `sqlite3` 不可用会直接失败（本地才允许跳过）。
 - 已知代价：Nienie 自己用 `codex exec` 建的会话在 Codex 侧也是 `exec` 来源，Bridge 重启后不再从 Codex 历史库恢复。后续计划：Bridge 自己持久化会话（`sessions.json`）并在 `listSessions()` 里与 Codex 交互式线程按 `threadId` 合并去重。
+
+### 2026-11-23 Codex 历史加载可靠性（重试退避 / 诊断 / CODEX_HOME）
+
+第三轮 code review 的可靠性收尾，仍是 Codex 会话列表这条链路：
+
+- 历史加载三态化：`loaded` / `not-ready` / `failed`。库还不存在（没装 Codex / 还没跑过）按「未就绪」每 60 秒看一眼，避免 Bridge 先启动、Codex 后装就永远发现不了；读取报错按 1s → 2s → 4s → … 上限 60s 指数退避，失败计数只用于诊断、永不停止重试。
+- `readTableColumns()` 不再吞异常：`PRAGMA` 成功但返回空集合才代表「确实没有这些列」，`sqlite3` 缺失 / 库被锁 / 文件不是 SQLite 属于读取失败，直接抛给外层计入诊断，避免紧接着再跑一次注定失败的主查询。
+- 历史回放改为「成功才标记已加载」：`emitCodexThreadHistory()` 返回布尔值，`thread_history` 还没落盘或暂时读失败时，下次打开会话会重新回放（回放本身有 `itemId` + 长度增量与稳定 `eventId`，重复调用不会重复插入）。
+- 数据目录遵循 Codex 约定：`codexHome` 选项 → `CODEX_HOME` 环境变量 → `~/.codex`。
+- 移除 `title === 'Guardian review'` 的硬编码过滤：标题不是身份，用户自己命名的同名会话不该被吃掉；guardian 线程已由来源白名单挡住。
+- 测试补到 10 个用例：损坏的 state 库写诊断且不影响内存会话、`CODEX_HOME` 生效、历史库晚于首次打开才出现时会重新回放、用户自建 `Guardian review` 会话正常展示。

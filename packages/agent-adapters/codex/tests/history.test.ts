@@ -50,7 +50,7 @@ type ThreadSeed = {
  * 来源白名单口径见 codex-rs `INTERACTIVE_SESSION_SOURCES`：
  * cli / vscode / custom("atlas") / custom("chatgpt")。
  */
-const INTERACTIVE_IDS = ['th_vscode', 'th_cli', 'th_chatgpt', 'th_atlas'];
+const INTERACTIVE_IDS = ['th_vscode', 'th_cli', 'th_chatgpt', 'th_atlas', 'th_user_guardian'];
 
 const SEEDS: ThreadSeed[] = [
   // Codex UI 会展示的交互式来源
@@ -63,6 +63,8 @@ const SEEDS: ThreadSeed[] = [
   { id: 'th_cli', title: '提交现有的未提交的代码', source: 'cli', updatedAt: 2500 },
   { id: 'th_chatgpt', title: 'Codex 桌面端会话', source: '{"custom":"chatgpt"}', updatedAt: 2000 },
   { id: 'th_atlas', title: 'Atlas 会话', source: '{"custom":"atlas"}', updatedAt: 1500 },
+  // 用户自己的会话恰好叫 Guardian review：标题不是身份，不该被硬编码过滤掉
+  { id: 'th_user_guardian', title: 'Guardian review', source: 'vscode', updatedAt: 1450 },
   // 交互式来源但没有任何用户内容（Codex 新建后没发过消息）：官方列表同样不展示
   {
     id: 'th_no_content',
@@ -356,5 +358,51 @@ describe('CodexAdapter 本地历史列表', () => {
 
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.id).toBe(created.id);
+  });
+
+  it.skipIf(!sqlite3Available)('state 库损坏时写诊断，且不影响内存会话', async () => {
+    const brokenHome = mkdtempSync(join(tmpdir(), 'nienie-codex-broken-'));
+    createdDirs.push(brokenHome);
+    // 名为 state_5.sqlite 但不是合法 SQLite 文件：PRAGMA 与主查询都会失败
+    execFileSync('sh', ['-c', `printf 'not a sqlite db' > ${join(brokenHome, 'state_5.sqlite')}`]);
+
+    const adapter = new CodexAdapter({ codexHome: brokenHome, defaultProjectPath: PROJECT });
+    const created = await adapter.createSession({ title: '手机端新建的会话', projectPath: PROJECT });
+    const sessions = await adapter.listSessions();
+
+    expect(sessions.map((session) => session.id)).toEqual([created.id]);
+    expect(adapter.getDiagnostics().historyRecoveryErrors.length).toBeGreaterThan(0);
+  });
+
+  it.skipIf(!sqlite3Available)('CODEX_HOME 环境变量可作为默认数据目录', async () => {
+    const codexHome = createCodexHome('modern');
+    const previous = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const adapter = new CodexAdapter({ defaultProjectPath: PROJECT });
+      const ids = (await adapter.listSessions()).map((session) => session.id);
+      expect(ids).toContain('th_vscode');
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previous;
+    }
+  });
+
+  it.skipIf(!sqlite3Available)('历史库晚于首次打开才出现时，下次打开会重新回放', async () => {
+    const codexHome = createCodexHome('modern');
+    const adapter = new CodexAdapter({ codexHome, defaultProjectPath: PROJECT });
+
+    const first: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => first.push(event));
+    await adapter.loadSession('th_vscode');
+    expect(textDeltas(first)).toHaveLength(0);
+
+    // Codex 这时才把历史落盘
+    seedThreadHistory(codexHome, 'th_vscode');
+
+    const second: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => second.push(event));
+    await adapter.loadSession('th_vscode');
+    expect(textDeltas(second).some((delta) => delta.includes('手机端发来的历史问题'))).toBe(true);
   });
 });

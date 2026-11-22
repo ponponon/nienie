@@ -118,6 +118,14 @@ export class CodexAdapter implements AgentAdapter {
   private readonly discoverLocalHistory: boolean;
   private readonly loadedHistoryThreads = new Set<string>();
   private historyLoaded = false;
+  /** 历史库暂不可用（未安装 / 还没建库）时的低频重试时间点。 */
+  private historyRetryAt = 0;
+  /** 历史库读取失败后的退避间隔（1s → 2s → 4s → … 上限 60s）。 */
+  private historyRetryDelayMs = 1_000;
+  /** 连续失败次数，只用于诊断，不用于「永久放弃」。 */
+  private historyFailureCount = 0;
+  private static readonly HISTORY_RETRY_MAX_MS = 60_000;
+  private static readonly HISTORY_NOT_READY_RETRY_MS = 60_000;
   /** itemId → 已回放文本长度，增量补发缺失后缀（幂等 + 捕获内容更新）。 */
   private readonly emittedTextLength = new Map<string, number>();
   /** 已回放的 tool（tool_use 只发一次）。 */
@@ -132,7 +140,9 @@ export class CodexAdapter implements AgentAdapter {
       options.executablePath ?? process.env.NIENIE_CODEX_BIN,
     );
     this.defaultProjectPath = options.defaultProjectPath ?? process.cwd();
-    this.codexHome = options.codexHome ?? join(homedir(), '.codex');
+    // 与 Codex 自己的约定一致：`CODEX_HOME` 覆盖默认的 `~/.codex`
+    const envCodexHome = process.env.CODEX_HOME?.trim();
+    this.codexHome = options.codexHome ?? (envCodexHome ? envCodexHome : join(homedir(), '.codex'));
     this.normalizer = new CodexEventNormalizer(options);
     this.discoverLocalHistory =
       options.discoverLocalHistory ?? (!options.spawnProcess && !options.detectVersion);
@@ -189,18 +199,43 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async listSessions(): Promise<AgentSession[]> {
-    if (this.discoverLocalHistory && !this.historyLoaded) {
-      // 读取失败不锁死：下一次 listSessions 还会重试（sqlite3 缺失 / schema 变化都能自愈）
-      this.historyLoaded = this.loadLocalCodexHistory();
+    if (this.discoverLocalHistory && !this.historyLoaded && Date.now() >= this.historyRetryAt) {
+      this.applyHistoryLoadResult(this.loadLocalCodexHistory());
     }
     return [...this.sessions.values()].map((record) => this.toAgentSession(record));
   }
 
-  /** 返回是否读取成功——失败留到诊断里，不静默吞成「空会话列表」。 */
-  private loadLocalCodexHistory(): boolean {
+  /**
+   * 历史库读取结果：
+   * - `loaded`：读到了（或者已经不需要再读）；
+   * - `not-ready`：库还不存在（没装 Codex / 还没跑过），低频重试，等它出现；
+   * - `failed`：读取报错（sqlite3 缺失 / schema 变化 / 库被锁），指数退避重试并写诊断。
+   */
+  private applyHistoryLoadResult(result: 'loaded' | 'not-ready' | 'failed'): void {
+    if (result === 'loaded') {
+      this.historyLoaded = true;
+      this.historyRetryAt = 0;
+      this.historyRetryDelayMs = 1_000;
+      this.historyFailureCount = 0;
+      return;
+    }
+    // 只给失败计数封顶（诊断用），永远不停止重试：Codex 可能稍后才安装 / 迁移完成
+    this.historyFailureCount = Math.min(this.historyFailureCount + 1, 100);
+    if (result === 'not-ready') {
+      this.historyRetryAt = Date.now() + CodexAdapter.HISTORY_NOT_READY_RETRY_MS;
+      return;
+    }
+    this.historyRetryAt = Date.now() + this.historyRetryDelayMs;
+    this.historyRetryDelayMs = Math.min(
+      this.historyRetryDelayMs * 2,
+      CodexAdapter.HISTORY_RETRY_MAX_MS,
+    );
+  }
+
+  private loadLocalCodexHistory(): 'loaded' | 'not-ready' | 'failed' {
     const sqlitePath = resolveLatestCodexStateDb(this.codexHome);
-    // 没有历史库（没装 Codex 或还没跑过）属于正常情况，不算失败
-    if (!sqlitePath) return true;
+    // 没装 Codex 或还没跑过 → 不是失败，但要保留「稍后再看一眼」的机会
+    if (!sqlitePath) return 'not-ready';
     try {
       // 只列 Codex UI 会展示的交互式会话（见 CODEX_INTERACTIVE_SOURCES_SQL）：
       // 子 Agent / guardian / exec 线程属于内部实现细节，不该出现在手机端的会话列表里。
@@ -230,7 +265,6 @@ export class CodexAdapter implements AgentAdapter {
       for (const row of rows) {
         if (!row.id || this.sessions.has(row.id) || knownThreadIds.has(row.id)) continue;
         const cleanTitle = (row.title ?? '').replace(/\s+/g, ' ').trim();
-        if (cleanTitle === 'Guardian review') continue;
         const createdIso = row.created_at
           ? new Date(row.created_at * 1000).toISOString()
           : new Date().toISOString();
@@ -248,13 +282,13 @@ export class CodexAdapter implements AgentAdapter {
           updatedAt: updatedIso,
         });
       }
-      return true;
+      return 'loaded';
     } catch (error) {
       // 不静默：sqlite3 缺失 / state 库 schema 变化都会让历史列表变空，必须能在 /diagnostics 里看到
       this.emitDiagnosticWarning(
         `codex history load failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return false;
+      return 'failed';
     }
   }
 
@@ -275,11 +309,13 @@ export class CodexAdapter implements AgentAdapter {
 
   async loadSession(sessionId: string): Promise<AgentSession> {
     if (this.discoverLocalHistory && !this.loadedHistoryThreads.has(sessionId)) {
-      this.loadedHistoryThreads.add(sessionId);
       // 内存会话的 id 是 Nienie 自己的（codex_ses_*），Codex 历史库按真实的 thread_id 建索引：
       // 查库用 threadId，事件仍归属 sessionId（否则手机端会收到挂错会话的消息）。
       const historyThreadId = this.sessions.get(sessionId)?.threadId ?? sessionId;
-      this.emitCodexThreadHistory(sessionId, historyThreadId);
+      // 只有真正回放成功才标记已加载：历史库还没落盘 / 暂时读失败时，下次打开会话要能重试
+      if (this.emitCodexThreadHistory(sessionId, historyThreadId)) {
+        this.loadedHistoryThreads.add(sessionId);
+      }
     }
     const existing = this.sessions.get(sessionId);
     if (existing) {
@@ -308,10 +344,11 @@ export class CodexAdapter implements AgentAdapter {
    * `threadId` 是 Codex 历史库（`thread_history.thread_items.thread_id`）的索引键。
    * 用 threadId 查库、用 sessionId 发事件——否则回放出来的消息会挂到手机端不存在的会话上。
    */
-  private emitCodexThreadHistory(sessionId: string, threadId: string = sessionId): void {
-    if (!/^[A-Za-z0-9_-]+$/.test(threadId)) return;
+  private emitCodexThreadHistory(sessionId: string, threadId: string = sessionId): boolean {
+    if (!/^[A-Za-z0-9_-]+$/.test(threadId)) return false;
     const historyDb = resolveLatestVersionedSqlite(this.codexHome, 'thread_history');
-    if (!historyDb) return;
+    // 历史库还没生成（新会话首次运行前）属于「暂时没有」，下次打开再试
+    if (!historyDb) return false;
 
     try {
       // 增量回放：按 itemId + 已回放长度补发缺失后缀，幂等且捕获内容更新。
@@ -432,8 +469,13 @@ export class CodexAdapter implements AgentAdapter {
           break;
         }
       }
-    } catch {
-      // Ignore sqlite history read errors
+      return true;
+    } catch (error) {
+      // 不静默：回放失败要让调用方知道（下次打开还能重试），也要能在 /diagnostics 里看到
+      this.emitDiagnosticWarning(
+        `codex history replay failed for ${threadId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return false;
     }
   }
 
@@ -756,22 +798,21 @@ function resolveCodexBinary(explicit?: string): string {
 
 /**
  * 读取某张表的列名，用于按 schema 版本降级拼 SQL。
- * 读不到（库被锁 / 不是 SQLite）时返回空集合，调用方按「没有该列」处理。
+ *
+ * 异常必须向外传播：`PRAGMA` 成功返回空集合表示「确实没有这些列」，可以降级；
+ * 而 `sqlite3` 不存在 / 库被锁 / 文件不是 SQLite 属于读取失败，不能当成「没有这些列」，
+ * 否则会紧接着再跑一次注定失败的主查询，还把一个真实的错误伪装成正常降级。
  */
 function readTableColumns(sqlitePath: string, table: string): Set<string> {
-  try {
-    const out = execFileSync('sqlite3', ['-json', sqlitePath, `PRAGMA table_info(${table});`], {
-      encoding: 'utf8',
-      timeout: 1500,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const columns = JSON.parse(out || '[]') as Array<{ name?: string }>;
-    return new Set(
-      columns.map((column) => column.name).filter((name): name is string => Boolean(name)),
-    );
-  } catch {
-    return new Set();
-  }
+  const out = execFileSync('sqlite3', ['-json', sqlitePath, `PRAGMA table_info(${table});`], {
+    encoding: 'utf8',
+    timeout: 1500,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const columns = JSON.parse(out || '[]') as Array<{ name?: string }>;
+  return new Set(
+    columns.map((column) => column.name).filter((name): name is string => Boolean(name)),
+  );
 }
 
 /**
