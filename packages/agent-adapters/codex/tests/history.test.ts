@@ -30,12 +30,18 @@ if (!sqlite3Available && (process.env.CI === 'true' || process.env.NIENIE_REQUIR
 
 const PROJECT = '/workspace/nienie';
 
+/** state 库 schema 代际：preview / first_user_message 两列的演进过程。 */
+type SchemaVariant = 'modern' | 'legacy' | 'minimal';
+
 type ThreadSeed = {
   id: string;
   title: string;
   source: string;
   archived?: number;
   updatedAt?: number;
+  /** 空字符串表示「没有可见预览内容」——Codex 自己的列表会把它排除。 */
+  preview?: string;
+  firstUserMessage?: string;
 };
 
 /**
@@ -57,6 +63,15 @@ const SEEDS: ThreadSeed[] = [
   { id: 'th_cli', title: '提交现有的未提交的代码', source: 'cli', updatedAt: 2500 },
   { id: 'th_chatgpt', title: 'Codex 桌面端会话', source: '{"custom":"chatgpt"}', updatedAt: 2000 },
   { id: 'th_atlas', title: 'Atlas 会话', source: '{"custom":"atlas"}', updatedAt: 1500 },
+  // 交互式来源但没有任何用户内容（Codex 新建后没发过消息）：官方列表同样不展示
+  {
+    id: 'th_no_content',
+    title: '没有内容的会话',
+    source: 'vscode',
+    updatedAt: 1400,
+    preview: '',
+    firstUserMessage: '',
+  },
   // Codex UI 从不展示的内部线程
   {
     id: 'th_subagent_spawn',
@@ -67,13 +82,23 @@ const SEEDS: ThreadSeed[] = [
   },
   { id: 'th_subagent_review', title: 'Review', source: '{"subagent":"review"}', updatedAt: 2940 },
   { id: 'th_subagent_compact', title: 'Compact', source: '{"subagent":"compact"}', updatedAt: 2930 },
-  { id: 'th_guardian', title: 'Guardian review', source: '{"subagent":{"other":"guardian"}}', updatedAt: 2800 },
+  {
+    id: 'th_guardian',
+    title: 'Guardian review',
+    source: '{"subagent":{"other":"guardian"}}',
+    updatedAt: 2800,
+  },
   { id: 'th_internal_guardian', title: '', source: '{"internal":{"guardian":{}}}', updatedAt: 2750 },
   { id: 'th_internal_memory', title: '', source: '{"internal":{"memory":{}}}', updatedAt: 2740 },
   { id: 'th_exec', title: '1+1等于几', source: 'exec', updatedAt: 2700 },
   { id: 'th_mcp', title: 'MCP 调用', source: 'mcp', updatedAt: 2650 },
   // 未知来源：未来第三方工具注册的 custom 名称，官方白名单不含，必须过滤
-  { id: 'th_unknown_custom', title: '未知工具会话', source: '{"custom":"some_future_agent"}', updatedAt: 2620 },
+  {
+    id: 'th_unknown_custom',
+    title: '未知工具会话',
+    source: '{"custom":"some_future_agent"}',
+    updatedAt: 2620,
+  },
   { id: 'th_unknown', title: '未知来源会话', source: 'unknown', updatedAt: 2610 },
   // 归档线程
   { id: 'th_archived', title: '已归档会话', source: 'vscode', archived: 1, updatedAt: 2600 },
@@ -99,17 +124,48 @@ function runSql(dbPath: string, statements: string[]): void {
   }
 }
 
-function createCodexHome(): string {
+function createThreadsTable(variant: SchemaVariant): string {
+  const base =
+    'CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT "", cwd TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, source TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0';
+  if (variant === 'modern') {
+    return `${base}, preview TEXT NOT NULL DEFAULT "", first_user_message TEXT NOT NULL DEFAULT "");`;
+  }
+  if (variant === 'legacy') {
+    return `${base}, first_user_message TEXT NOT NULL DEFAULT "");`;
+  }
+  return `${base});`;
+}
+
+function createCodexHome(variant: SchemaVariant = 'modern'): string {
   const dir = mkdtempSync(join(tmpdir(), 'nienie-codex-home-'));
   createdDirs.push(dir);
   const dbPath = join(dir, 'state_5.sqlite');
-  runSql(dbPath, [
-    'CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT "", cwd TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, source TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);',
-    ...SEEDS.map((seed) => {
-      const updatedAt = seed.updatedAt ?? 1000;
-      return `INSERT INTO threads (id, title, cwd, created_at, updated_at, source, archived) VALUES (${sqlText(seed.id)}, ${sqlText(seed.title)}, ${sqlText(PROJECT)}, ${updatedAt - 500}, ${updatedAt}, ${sqlText(seed.source)}, ${seed.archived ?? 0});`;
-    }),
-  ]);
+  const statements = [createThreadsTable(variant)];
+  for (const seed of SEEDS) {
+    const updatedAt = seed.updatedAt ?? 1000;
+    const columns = ['id', 'title', 'cwd', 'created_at', 'updated_at', 'source', 'archived'];
+    const values = [
+      sqlText(seed.id),
+      sqlText(seed.title),
+      sqlText(PROJECT),
+      String(updatedAt - 500),
+      String(updatedAt),
+      sqlText(seed.source),
+      String(seed.archived ?? 0),
+    ];
+    if (variant === 'modern') {
+      columns.push('preview');
+      values.push(sqlText(seed.preview ?? seed.title));
+    }
+    if (variant === 'modern' || variant === 'legacy') {
+      columns.push('first_user_message');
+      values.push(sqlText(seed.firstUserMessage ?? seed.title));
+    }
+    statements.push(
+      `INSERT INTO threads (${columns.join(', ')}) VALUES (${values.join(', ')});`,
+    );
+  }
+  runSql(dbPath, statements);
   return dir;
 }
 
@@ -151,12 +207,18 @@ function createFakeProcess(threadId: string): CodexProcessHandle {
   };
 }
 
+function textDeltas(events: CanonicalAgentEvent[]): string[] {
+  return events
+    .filter((event) => event.type === 'text_delta')
+    .map((event) => (event.payload as { delta?: string }).delta ?? '');
+}
+
 describe('CodexAdapter 本地历史列表', () => {
   it.skipIf(!sqlite3Available)(
-    '只列 Codex UI 展示的交互式会话，过滤 subagent / guardian / internal / mcp / exec / 未知来源 / 归档线程',
+    '只列 Codex UI 展示的交互式会话，过滤子 Agent / guardian / internal / mcp / exec / 未知来源 / 空内容 / 归档',
     async () => {
       const adapter = new CodexAdapter({
-        codexHome: createCodexHome(),
+        codexHome: createCodexHome('modern'),
         defaultProjectPath: PROJECT,
       });
 
@@ -178,6 +240,8 @@ describe('CodexAdapter 本地历史列表', () => {
       expect(ids).not.toContain('th_guardian');
       expect(ids).not.toContain('th_exec');
       expect(ids).not.toContain('th_archived');
+      // 交互式来源但没有任何用户内容：官方列表也不展示
+      expect(ids).not.toContain('th_no_content');
       // 空标题兜底（「Codex (nienie)」）不该再有机会出现
       expect(sessions.some((session) => session.title.startsWith('Codex ('))).toBe(false);
 
@@ -189,9 +253,35 @@ describe('CodexAdapter 本地历史列表', () => {
     },
   );
 
+  it.skipIf(!sqlite3Available)('老 schema 用 first_user_message 过滤空内容线程', async () => {
+    const adapter = new CodexAdapter({
+      codexHome: createCodexHome('legacy'),
+      defaultProjectPath: PROJECT,
+    });
+
+    const ids = (await adapter.listSessions()).map((session) => session.id);
+
+    expect(ids.sort()).toEqual([...INTERACTIVE_IDS].sort());
+    expect(ids).not.toContain('th_no_content');
+  });
+
+  it.skipIf(!sqlite3Available)('两个内容列都不存在的极老 schema 不会让查询整体失败', async () => {
+    const adapter = new CodexAdapter({
+      codexHome: createCodexHome('minimal'),
+      defaultProjectPath: PROJECT,
+    });
+
+    const ids = (await adapter.listSessions()).map((session) => session.id);
+
+    // 无法判定内容，只能按来源过滤：白名单四条都在，空内容线程也被放行（比整表读不到更好）
+    for (const id of INTERACTIVE_IDS) expect(ids).toContain(id);
+    expect(ids).toContain('th_no_content');
+    expect(ids).not.toContain('th_exec');
+  });
+
   it.skipIf(!sqlite3Available)('内存会话绑定的 threadId 不会被历史库重复列一遍', async () => {
     const adapter = new CodexAdapter({
-      codexHome: createCodexHome(),
+      codexHome: createCodexHome('modern'),
       defaultProjectPath: PROJECT,
       // 显式打开历史发现：注入假进程后默认会关闭，这里要同时验证两者共存
       discoverLocalHistory: true,
@@ -203,14 +293,14 @@ describe('CodexAdapter 本地历史列表', () => {
     await adapter.waitForRun(created.id);
 
     const sessions = await adapter.listSessions();
-    // th_vscode 已经被内存会话占用，历史库里的同一条不能又列一遍
+    // th_vscode 已被内存会话占用，历史库里的同一条不能又列一遍
     expect(sessions.some((session) => session.id === 'th_vscode')).toBe(false);
     expect(sessions.some((session) => session.id === created.id)).toBe(true);
     expect(sessions).toHaveLength(INTERACTIVE_IDS.length);
   });
 
   it.skipIf(!sqlite3Available)('历史回放读的是注入的 codexHome 下的 thread_history 库', async () => {
-    const codexHome = createCodexHome();
+    const codexHome = createCodexHome('modern');
     seedThreadHistory(codexHome, 'th_vscode');
     const adapter = new CodexAdapter({ codexHome, defaultProjectPath: PROJECT });
 
@@ -218,12 +308,43 @@ describe('CodexAdapter 本地历史列表', () => {
     adapter.onEvent((event) => events.push(event));
     await adapter.loadSession('th_vscode');
 
-    const deltas = events
-      .filter((event) => event.type === 'text_delta')
-      .map((event) => (event.payload as { delta?: string }).delta ?? '');
+    const deltas = textDeltas(events);
     expect(deltas.some((delta) => delta.includes('手机端发来的历史问题'))).toBe(true);
     expect(deltas.some((delta) => delta.includes('历史回答'))).toBe(true);
   });
+
+  it.skipIf(!sqlite3Available)(
+    '内存会话（codex_ses_*）回放历史时用真实 threadId 查库、事件仍归属 sessionId',
+    async () => {
+      const codexHome = createCodexHome('modern');
+      seedThreadHistory(codexHome, 'th_real_123');
+      const adapter = new CodexAdapter({
+        codexHome,
+        defaultProjectPath: PROJECT,
+        discoverLocalHistory: true,
+        spawnProcess: () => createFakeProcess('th_real_123'),
+      });
+
+      const created = await adapter.createSession({ title: '手机端新建的会话', projectPath: PROJECT });
+      await adapter.sendMessage(created.id, '你好');
+      await adapter.waitForRun(created.id);
+      expect(created.id.startsWith('codex_ses_')).toBe(true);
+
+      const events: CanonicalAgentEvent[] = [];
+      adapter.onEvent((event) => events.push(event));
+      await adapter.loadSession(created.id);
+
+      // 查库用 threadId：能读到 th_real_123 的历史内容
+      const deltas = textDeltas(events);
+      expect(deltas.some((delta) => delta.includes('手机端发来的历史问题'))).toBe(true);
+      // 事件归属仍是手机端 sessionId，否则手机会收到挂在不存在的会话上的消息
+      const replayed = events.filter((event) => event.type === 'text_delta');
+      expect(replayed.length).toBeGreaterThan(0);
+      for (const event of replayed) {
+        expect(event.sessionId).toBe(created.id);
+      }
+    },
+  );
 
   it.skipIf(!sqlite3Available)('历史库不存在时不影响内存会话列表', async () => {
     const emptyHome = mkdtempSync(join(tmpdir(), 'nienie-codex-empty-'));

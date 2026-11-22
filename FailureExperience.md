@@ -1342,3 +1342,38 @@ Codex Desktop 走的是 app-server 的 `listThreads`，默认 `allowed_sources =
 5. 外部依赖（`sqlite3` CLI）的测试跳过条件不能在 CI 生效：本地方便，CI 必须硬失败。
 6. 注意副作用边界：过滤掉 `exec` 来源后，Nienie 自己创建的会话在 Bridge 重启后不再自动恢复，
    需要 Bridge 侧自持久化（已记入 FEATURE.md 后续计划），别把它当成「顺手就能改」的小改动。
+
+## 2026-11-23 历史回放把 sessionId 和 threadId 当成同一个东西
+
+### 问题
+
+为了让 Nienie 内存会话（`codex_ses_*`）也能从 Codex 历史库回放消息，`loadSession()` 改成用绑定后的
+真实 `threadId` 去查 `thread_history`。写法是把 `threadId` 直接传进 `emitCodexThreadHistory(sessionId)`：
+查库对了，但函数内部所有事件的 `sessionId` 也一起变成了 `threadId`。
+
+### 根因
+
+`emitCodexThreadHistory` 只接受一个参数，语义上是「既是查询键又是事件归属」。历史上两者恰好相等
+（从历史库加载的会话 `id === threadId`），所以这个隐含耦合一直没暴露；一旦引入 `codex_ses_*` 这种
+「逻辑 id ≠ 真实 threadId」的会话，同一个参数就承担了两个互相冲突的职责。
+
+### 影响
+
+手机端点开 Nienie 自己创建的会话时，回放出来的历史消息会带 `sessionId = threadId`，
+客户端按当前会话 id 过滤 → 消息挂到不存在的会话上，表现为「历史消息不显示」或「错轨」。
+
+### 修复
+
+1. 签名改为 `emitCodexThreadHistory(sessionId, threadId = sessionId)`：查库用 `threadId`，
+   事件、`eventId`、sequence 全部继续用 `sessionId`。
+2. 新增回归用例：`codex_ses_*` 会话 + 假进程返回 `th_real_123` + 只在 `thread_history` 里给
+   `th_real_123` 灌历史；断言「能读到内容」且「所有事件的 sessionId 都等于 `codex_ses_*`」。
+   实测把调用改回单参数版本，这条用例立刻变红。
+
+### 预防措施
+
+1. 出现「逻辑身份」和「外部系统身份」两套 id 时，函数签名就要显式分开命名（`sessionId` / `threadId`），
+   禁止靠「反正常常相等」默许一个参数兼两用。
+2. 测试里凡是要验证「A 查库、B 发事件」的映射，必须让 A ≠ B，否则用例天然测不出问题
+   （旧用例 `loadSession('th_vscode')` 就是这个毛病）。
+3. 改 `loadSession()` 这类跨库入口时，先问一句：这个参数在函数体里被用来做几件事？

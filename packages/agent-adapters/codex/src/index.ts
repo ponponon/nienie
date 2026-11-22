@@ -204,12 +204,14 @@ export class CodexAdapter implements AgentAdapter {
     try {
       // 只列 Codex UI 会展示的交互式会话（见 CODEX_INTERACTIVE_SOURCES_SQL）：
       // 子 Agent / guardian / exec 线程属于内部实现细节，不该出现在手机端的会话列表里。
+      // 内容条件按 schema 版本探测（见 codexThreadContentFilter），老库不会因缺列整条查询报错。
+      const contentFilter = codexThreadContentFilter(sqlitePath);
       const out = execFileSync(
         'sqlite3',
         [
           '-json',
           sqlitePath,
-          `SELECT id, substr(title, 1, 80) AS title, cwd, created_at, updated_at FROM threads WHERE archived = 0 AND ${CODEX_INTERACTIVE_SOURCES_SQL} ORDER BY updated_at DESC LIMIT 60;`,
+          `SELECT id, substr(title, 1, 80) AS title, cwd, created_at, updated_at FROM threads WHERE archived = 0 AND ${CODEX_INTERACTIVE_SOURCES_SQL}${contentFilter} ORDER BY updated_at DESC LIMIT 60;`,
         ],
         { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] },
       );
@@ -274,10 +276,10 @@ export class CodexAdapter implements AgentAdapter {
   async loadSession(sessionId: string): Promise<AgentSession> {
     if (this.discoverLocalHistory && !this.loadedHistoryThreads.has(sessionId)) {
       this.loadedHistoryThreads.add(sessionId);
-      // 内存会话的 id 是 Nienie 自己的（codex_ses_*），Codex 历史库按真实的 thread_id 建索引，
-      // 必须回退到绑定后的 threadId，否则手机端拉不到历史消息。
+      // 内存会话的 id 是 Nienie 自己的（codex_ses_*），Codex 历史库按真实的 thread_id 建索引：
+      // 查库用 threadId，事件仍归属 sessionId（否则手机端会收到挂错会话的消息）。
       const historyThreadId = this.sessions.get(sessionId)?.threadId ?? sessionId;
-      this.emitCodexThreadHistory(historyThreadId);
+      this.emitCodexThreadHistory(sessionId, historyThreadId);
     }
     const existing = this.sessions.get(sessionId);
     if (existing) {
@@ -299,8 +301,15 @@ export class CodexAdapter implements AgentAdapter {
     return this.toAgentSession(resumed);
   }
 
-  private emitCodexThreadHistory(sessionId: string): void {
-    if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) return;
+  /**
+   * 回放 Codex 历史。
+   *
+   * 两个 ID 必须分开：`sessionId` 是手机端看到的会话身份（内存会话形如 `codex_ses_*`），
+   * `threadId` 是 Codex 历史库（`thread_history.thread_items.thread_id`）的索引键。
+   * 用 threadId 查库、用 sessionId 发事件——否则回放出来的消息会挂到手机端不存在的会话上。
+   */
+  private emitCodexThreadHistory(sessionId: string, threadId: string = sessionId): void {
+    if (!/^[A-Za-z0-9_-]+$/.test(threadId)) return;
     const historyDb = resolveLatestVersionedSqlite(this.codexHome, 'thread_history');
     if (!historyDb) return;
 
@@ -312,7 +321,7 @@ export class CodexAdapter implements AgentAdapter {
       const maxRows = 20000;
       let totalRead = 0;
       for (let offset = 0; ; offset += pageSize) {
-        const sql = `SELECT item_id, item_type, item_json, created_at_ms FROM thread_items WHERE thread_id = '${sessionId}' ORDER BY rollout_ordinal ASC LIMIT ${offset}, ${pageSize};`;
+        const sql = `SELECT item_id, item_type, item_json, created_at_ms FROM thread_items WHERE thread_id = '${threadId}' ORDER BY rollout_ordinal ASC LIMIT ${offset}, ${pageSize};`;
         const out = execFileSync('sqlite3', ['-json', historyDb, sql], {
           encoding: 'utf8',
           timeout: 2000,
@@ -743,6 +752,41 @@ function resolveCodexBinary(explicit?: string): string {
     }
   }
   return 'codex';
+}
+
+/**
+ * 读取某张表的列名，用于按 schema 版本降级拼 SQL。
+ * 读不到（库被锁 / 不是 SQLite）时返回空集合，调用方按「没有该列」处理。
+ */
+function readTableColumns(sqlitePath: string, table: string): Set<string> {
+  try {
+    const out = execFileSync('sqlite3', ['-json', sqlitePath, `PRAGMA table_info(${table});`], {
+      encoding: 'utf8',
+      timeout: 1500,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const columns = JSON.parse(out || '[]') as Array<{ name?: string }>;
+    return new Set(
+      columns.map((column) => column.name).filter((name): name is string => Boolean(name)),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Codex 自己的会话列表还要求「线程有可见的预览内容」
+ * （`codex-rs/state/src/runtime/threads.rs` 的 `push_thread_filters`：`preview <> ''`；
+ * 老版本用 `first_user_message <> ''`，`0032_threads_preview` 迁移后才改用 preview）。
+ *
+ * 列名随 schema 版本变化，直接写死会让老库整条查询报错、历史列表整体变空，
+ * 所以先 PRAGMA 探测，再在**固定片段**里选一个拼上去（不接受任何外部输入）。
+ */
+function codexThreadContentFilter(sqlitePath: string): string {
+  const columns = readTableColumns(sqlitePath, 'threads');
+  if (columns.has('preview')) return " AND preview <> ''";
+  if (columns.has('first_user_message')) return " AND first_user_message <> ''";
+  return '';
 }
 
 function resolveLatestCodexStateDb(codexDir: string): string | undefined {
