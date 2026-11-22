@@ -52,8 +52,8 @@ Codex 是初版的第二适配器，使用 Codex 提供的结构化运行接口�
 
 Bridge 直接读 `~/.codex/state_*.sqlite` 的 `threads` 表来展示历史会话，所以**必须**按 Codex 自己的口径过滤（`codex-rs/core/src/rollout/mod.rs` 的 `INTERACTIVE_SESSION_SOURCES`）：
 
-- 只列 `source` ∈ `cli` / `vscode` / `custom`（`atlas`、`chatgpt`）的交互式线程；
-- 必须排除 `{"subagent": ...}`（子 Agent / thread_spawn / guardian 复核线程）和 `exec`（`codex exec` 一次性执行线程，包含 Nienie 自己 spawn 的运行）；
+- 只列 `source` ∈ `cli` / `{"custom":"atlas"}` / `{"custom":"chatgpt"}` / `vscode` 的交互式线程，用精确 `IN` 枚举（不要用 `LIKE '{"custom":%'` 这类前缀匹配，官方 state 层也是 `IN`）；
+- 必须排除 `{"subagent": ...}`（子 Agent / thread_spawn / review / compact / guardian 复核线程）、`exec`（`codex exec` 一次性执行线程，包含 Nienie 自己 spawn 的运行）、`mcp`、`{"internal": ...}` 和未知来源；
 - 必须排除 `archived = 1`。
 
 否则手机端会冒出 Codex 桌面端根本不存在的「幽灵会话」（典型表现：一堆空标题兜底成 `Codex (项目名)` 的条目）。

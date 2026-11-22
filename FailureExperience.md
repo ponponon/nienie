@@ -1312,20 +1312,33 @@ Codex Desktop 走的是 app-server 的 `listThreads`，默认 `allowed_sources =
 
 ### 修复
 
-1. SQL 加来源过滤：`archived = 0 AND (source = 'cli' OR source = 'vscode' OR source LIKE '{"custom":%')`，
-   与 Codex 官方口径逐字对齐（不自己发明白名单）。
-2. 常量 `CODEX_INTERACTIVE_SOURCES_SQL` + 注释写明出处文件，避免以后有人「顺手放宽」。
-3. `codexHome` 提成 `CodexAdapterOptions`，历史库/`thread_history` 库都走它，让回归测试能注入临时目录。
-4. 新增 `tests/history.test.ts`：真实建临时 `state_5.sqlite`，七类来源混放，断言只返回交互式 4 条。
-5. `Guardian review` 的标题硬编码过滤保留，但降级为兜底（真正生效的是来源过滤）。
+1. SQL 加来源精确白名单：`archived = 0 AND source IN ('cli', 'vscode', '{"custom":"atlas"}', '{"custom":"chatgpt"}')`，
+   与 Codex 官方 `INTERACTIVE_SESSION_SOURCES` 逐字对齐（不自己发明白名单）。
+   **一版曾写成 `source LIKE '{"custom":%'`，被 code review 打回**：那样等于把所有 Custom 来源都放进来，
+   未来第三方工具注册 `{"custom":"xxx"}` 就又是一轮幽灵会话；官方 state 层本身也是 `source IN (...)`。
+2. 常量 `CODEX_INTERACTIVE_SOURCES` + `CODEX_INTERACTIVE_SOURCES_SQL`，注释写明出处文件与「不要放宽」的理由。
+3. `codexHome` 提成 `CodexAdapterOptions`，历史库/`thread_history` 库都走它，让回归测试能注入临时目录；
+   `loadSession()` 回放历史改用绑定后的真实 `threadId`（内存会话 id 是 `codex_ses_*`，按它对不上 Codex 历史索引）。
+4. 读取失败不再静默 `catch {}`：写进 `getDiagnostics()` 的 `historyRecoveryErrors`，
+   并且 `historyLoaded` 只在成功时置位，下一次 `listSessions()` 会重试。
+5. 新增 `tests/history.test.ts`：真实建临时 `state_5.sqlite`，15 条线程覆盖 vscode / cli / custom atlas / custom chatgpt /
+   subagent spawn·review·compact / guardian / internal guardian·memory / exec / mcp / 未知 custom / unknown / archived，
+   断言只返回交互式 4 条；另加 threadId 去重、`thread_history` 走注入目录、历史库缺失三个用例。
+   把白名单改回 `LIKE` 会立刻 2 条用例变红（已实测）。
+6. CI 里 `sqlite3` 不可用直接失败（`CI=true` 或 `NIENIE_REQUIRE_SQLITE=1`），本地才允许 skip——
+   否则「sqlite3 缺失 → 历史读不到 → 会话列表变空」这种回归会静默通过。
+7. `Guardian review` 的标题硬编码过滤保留，但降级为兜底（真正生效的是来源过滤）。
 
 ### 预防措施
 
 1. **凡是读别人 App 的数据库，先找到它自己的列表口径**（源码里的 `INTERACTIVE_SESSION_SOURCES`
    这类常量，或它调用的 app-server 方法参数），照着抄，不要只按「看起来像会话」来筛。
-2. 读外部 DB 的查询一定要有可注入的根目录（`codexHome` 这类），否则没法写回归测试，
-   只能靠手点手机验证——这次 bug 就是这么漏到用户手上的。
-3. 会话列表类功能验收标准：**同一个项目下，手机端条数与桌面端条数一致**（含标题），
+2. **白名单就写白名单**：能用精确 `IN` 枚举就不要用 `LIKE` 前缀匹配，前者漏了新值会「少一条」，
+   后者漏了新值会「多一堆」，后者的坏处更难发现。
+3. 读外部 DB 的查询一定要有可注入的根目录（`codexHome` 这类），否则没法写回归测试，
+   只能靠手点手机验证——这次 bug 就是这么漏到用户手上的；路径、过滤口径、测试三者要一起改。
+4. 会话列表类功能验收标准：**同一个项目下，手机端条数与桌面端条数一致**（含标题），
    凡是出现 `Codex (项目名)` 这种兜底标题，先怀疑来源没过滤干净。
-4. 注意副作用边界：过滤掉 `exec` 来源后，Nienie 自己创建的会话在 Bridge 重启后不再自动恢复，
+5. 外部依赖（`sqlite3` CLI）的测试跳过条件不能在 CI 生效：本地方便，CI 必须硬失败。
+6. 注意副作用边界：过滤掉 `exec` 来源后，Nienie 自己创建的会话在 Bridge 重启后不再自动恢复，
    需要 Bridge 侧自持久化（已记入 FEATURE.md 后续计划），别把它当成「顺手就能改」的小改动。

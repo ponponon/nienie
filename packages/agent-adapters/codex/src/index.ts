@@ -53,21 +53,39 @@ export type CodexAdapterOptions = CodexNormalizerOptions & {
   defaultProjectPath?: string | undefined;
   /** Codex 数据目录，默认 `~/.codex`。测试可注入临时目录验证历史库读取。 */
   codexHome?: string | undefined;
+  /**
+   * 是否从 `~/.codex` 本地历史库发现会话。
+   * 默认在没注入 `spawnProcess` / `detectVersion` 时启用；显式传入可覆盖（测试用）。
+   */
+  discoverLocalHistory?: boolean | undefined;
   detectVersion?: (() => Promise<string>) | undefined;
   spawnProcess?: ((args: string[], options: CodexSpawnOptions) => CodexProcessHandle) | undefined;
 };
 
 /**
  * Codex「用户可见会话」的来源过滤条件，与 codex-rs 的 `INTERACTIVE_SESSION_SOURCES`
- * （`codex-rs/core/src/rollout/mod.rs` = Cli / VSCode / Custom("atlas") / Custom("chatgpt")）保持一致。
+ * （`codex-rs/core/src/rollout/mod.rs` = Cli / VSCode / Custom("atlas") / Custom("chatgpt")）逐字对齐。
+ *
+ * 用精确 `IN` 而不是 `LIKE '{"custom":%'`：官方把 Custom 序列化成 `{"custom":"<name>"}`，
+ * 但白名单只包含这两个名字，放宽匹配会把未来的第三方 custom 来源（以及各种内部线程）又放进来。
+ * 官方 state 层的过滤本身就是 `source IN (...)`（`codex-rs/state/src/runtime/threads.rs`）。
  *
  * state 库里混着很多 Codex UI 从不展示的线程：
  * - `{"subagent": ...}`：子 Agent / thread_spawn 线程（如 logo skill 的 logo_a/b/c）、guardian 复核线程；
- * - `exec`：`codex exec` 一次性执行线程（包括 Nienie 自己 spawn 的 run）。
+ * - `exec`：`codex exec` 一次性执行线程（包括 Nienie 自己 spawn 的 run）；
+ * - `mcp` / `{"internal": ...}` / `unknown`：MCP、内部与未知来源。
  * 不过滤就会在手机端冒出 Codex 里根本不存在的「幽灵会话」。
  */
-const CODEX_INTERACTIVE_SOURCES_SQL =
-  "(source = 'cli' OR source = 'vscode' OR source LIKE '{\"custom\":%')";
+const CODEX_INTERACTIVE_SOURCES = [
+  'cli',
+  'vscode',
+  '{"custom":"atlas"}',
+  '{"custom":"chatgpt"}',
+] as const;
+
+const CODEX_INTERACTIVE_SOURCES_SQL = `source IN (${CODEX_INTERACTIVE_SOURCES.map(
+  (source) => `'${source}'`,
+).join(', ')})`;
 
 type CodexSessionRecord = AgentSession & {
   threadId?: string | undefined;
@@ -116,7 +134,8 @@ export class CodexAdapter implements AgentAdapter {
     this.defaultProjectPath = options.defaultProjectPath ?? process.cwd();
     this.codexHome = options.codexHome ?? join(homedir(), '.codex');
     this.normalizer = new CodexEventNormalizer(options);
-    this.discoverLocalHistory = !options.spawnProcess && !options.detectVersion;
+    this.discoverLocalHistory =
+      options.discoverLocalHistory ?? (!options.spawnProcess && !options.detectVersion);
 
     this.detectVersionImpl =
       options.detectVersion ??
@@ -171,63 +190,69 @@ export class CodexAdapter implements AgentAdapter {
 
   async listSessions(): Promise<AgentSession[]> {
     if (this.discoverLocalHistory && !this.historyLoaded) {
-      this.historyLoaded = true;
-      this.loadLocalCodexHistory();
+      // 读取失败不锁死：下一次 listSessions 还会重试（sqlite3 缺失 / schema 变化都能自愈）
+      this.historyLoaded = this.loadLocalCodexHistory();
     }
     return [...this.sessions.values()].map((record) => this.toAgentSession(record));
   }
 
-  private loadLocalCodexHistory(): void {
+  /** 返回是否读取成功——失败留到诊断里，不静默吞成「空会话列表」。 */
+  private loadLocalCodexHistory(): boolean {
     const sqlitePath = resolveLatestCodexStateDb(this.codexHome);
-    if (sqlitePath) {
-      try {
-        // 只列 Codex UI 会展示的交互式会话（见 CODEX_INTERACTIVE_SOURCES_SQL）：
-        // 子 Agent / guardian / exec 线程属于内部实现细节，不该出现在手机端的会话列表里。
-        const out = execFileSync(
-          'sqlite3',
-          [
-            '-json',
-            sqlitePath,
-            `SELECT id, substr(title, 1, 80) AS title, cwd, created_at, updated_at FROM threads WHERE archived = 0 AND ${CODEX_INTERACTIVE_SOURCES_SQL} ORDER BY updated_at DESC LIMIT 60;`,
-          ],
-          { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] },
-        );
-        const rows = JSON.parse(out || '[]') as Array<{
-          id?: string;
-          title?: string;
-          cwd?: string;
-          created_at?: number;
-          updated_at?: number;
-        }>;
-        // 已知线程（含内存会话绑定的 threadId）不重复入列
-        const knownThreadIds = new Set<string>();
-        for (const record of this.sessions.values()) {
-          if (record.threadId) knownThreadIds.add(record.threadId);
-        }
-        for (const row of rows) {
-          if (!row.id || this.sessions.has(row.id) || knownThreadIds.has(row.id)) continue;
-          const cleanTitle = (row.title ?? '').replace(/\s+/g, ' ').trim();
-          if (cleanTitle === 'Guardian review') continue;
-          const createdIso = row.created_at
-            ? new Date(row.created_at * 1000).toISOString()
-            : new Date().toISOString();
-          const updatedIso = row.updated_at
-            ? new Date(row.updated_at * 1000).toISOString()
-            : createdIso;
-          this.sessions.set(row.id, {
-            id: row.id,
-            threadId: row.id,
-            agentId: 'codex',
-            title: cleanTitle || `Codex (${basename(row.cwd || this.defaultProjectPath)})`,
-            projectPath: row.cwd || this.defaultProjectPath,
-            status: 'idle',
-            createdAt: createdIso,
-            updatedAt: updatedIso,
-          });
-        }
-      } catch {
-        // Ignore sqlite read errors
+    // 没有历史库（没装 Codex 或还没跑过）属于正常情况，不算失败
+    if (!sqlitePath) return true;
+    try {
+      // 只列 Codex UI 会展示的交互式会话（见 CODEX_INTERACTIVE_SOURCES_SQL）：
+      // 子 Agent / guardian / exec 线程属于内部实现细节，不该出现在手机端的会话列表里。
+      const out = execFileSync(
+        'sqlite3',
+        [
+          '-json',
+          sqlitePath,
+          `SELECT id, substr(title, 1, 80) AS title, cwd, created_at, updated_at FROM threads WHERE archived = 0 AND ${CODEX_INTERACTIVE_SOURCES_SQL} ORDER BY updated_at DESC LIMIT 60;`,
+        ],
+        { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      const rows = JSON.parse(out || '[]') as Array<{
+        id?: string;
+        title?: string;
+        cwd?: string;
+        created_at?: number;
+        updated_at?: number;
+      }>;
+      // 已知线程（含内存会话绑定的 threadId）不重复入列
+      const knownThreadIds = new Set<string>();
+      for (const record of this.sessions.values()) {
+        if (record.threadId) knownThreadIds.add(record.threadId);
       }
+      for (const row of rows) {
+        if (!row.id || this.sessions.has(row.id) || knownThreadIds.has(row.id)) continue;
+        const cleanTitle = (row.title ?? '').replace(/\s+/g, ' ').trim();
+        if (cleanTitle === 'Guardian review') continue;
+        const createdIso = row.created_at
+          ? new Date(row.created_at * 1000).toISOString()
+          : new Date().toISOString();
+        const updatedIso = row.updated_at
+          ? new Date(row.updated_at * 1000).toISOString()
+          : createdIso;
+        this.sessions.set(row.id, {
+          id: row.id,
+          threadId: row.id,
+          agentId: 'codex',
+          title: cleanTitle || `Codex (${basename(row.cwd || this.defaultProjectPath)})`,
+          projectPath: row.cwd || this.defaultProjectPath,
+          status: 'idle',
+          createdAt: createdIso,
+          updatedAt: updatedIso,
+        });
+      }
+      return true;
+    } catch (error) {
+      // 不静默：sqlite3 缺失 / state 库 schema 变化都会让历史列表变空，必须能在 /diagnostics 里看到
+      this.emitDiagnosticWarning(
+        `codex history load failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return false;
     }
   }
 
@@ -249,7 +274,10 @@ export class CodexAdapter implements AgentAdapter {
   async loadSession(sessionId: string): Promise<AgentSession> {
     if (this.discoverLocalHistory && !this.loadedHistoryThreads.has(sessionId)) {
       this.loadedHistoryThreads.add(sessionId);
-      this.emitCodexThreadHistory(sessionId);
+      // 内存会话的 id 是 Nienie 自己的（codex_ses_*），Codex 历史库按真实的 thread_id 建索引，
+      // 必须回退到绑定后的 threadId，否则手机端拉不到历史消息。
+      const historyThreadId = this.sessions.get(sessionId)?.threadId ?? sessionId;
+      this.emitCodexThreadHistory(historyThreadId);
     }
     const existing = this.sessions.get(sessionId);
     if (existing) {
