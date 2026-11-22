@@ -887,7 +887,7 @@
 
 - 历史加载三态化：`loaded` / `not-ready` / `failed`。库还不存在（没装 Codex / 还没跑过）按「未就绪」每 60 秒看一眼，避免 Bridge 先启动、Codex 后装就永远发现不了；读取报错按 1s → 2s → 4s → … 上限 60s 指数退避，失败计数只用于诊断、永不停止重试。
 - `readTableColumns()` 不再吞异常：`PRAGMA` 成功但返回空集合才代表「确实没有这些列」，`sqlite3` 缺失 / 库被锁 / 文件不是 SQLite 属于读取失败，直接抛给外层计入诊断，避免紧接着再跑一次注定失败的主查询。
-- 历史回放改为「成功才标记已加载」：`emitCodexThreadHistory()` 返回布尔值，`thread_history` 还没落盘或暂时读失败时，下次打开会话会重新回放（回放本身有 `itemId` + 长度增量与稳定 `eventId`，重复调用不会重复插入）。
+- 历史回放改为「成功才标记已加载」：`emitCodexThreadHistory()` 返回布尔值，`thread_history` 还没落盘、库在但该 thread 尚无记录（`totalRead === 0`）、或者暂时读失败时，下次打开会话都会重新回放（回放本身有 `itemId` + 长度增量与稳定 `eventId`，重复调用不会重复插入）。
 - 数据目录遵循 Codex 约定：`codexHome` 选项 → `CODEX_HOME` 环境变量 → `~/.codex`。
 - 移除 `title === 'Guardian review'` 的硬编码过滤：标题不是身份，用户自己命名的同名会话不该被吃掉；guardian 线程已由来源白名单挡住。
 - 测试补到 10 个用例：损坏的 state 库写诊断且不影响内存会话、`CODEX_HOME` 生效、历史库晚于首次打开才出现时会重新回放、用户自建 `Guardian review` 会话正常展示。

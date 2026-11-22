@@ -388,6 +388,30 @@ describe('CodexAdapter 本地历史列表', () => {
     }
   });
 
+  it.skipIf(!sqlite3Available)('历史库在、但该 thread 尚无记录时，稍后写入仍能回放', async () => {
+    const codexHome = createCodexHome('modern');
+    // 只建库和表，不写目标 thread 的记录
+    runSql(join(codexHome, 'thread_history_1.sqlite'), [
+      'CREATE TABLE thread_items (thread_id TEXT NOT NULL, item_id TEXT NOT NULL, item_type TEXT NOT NULL, item_json TEXT NOT NULL, created_at_ms INTEGER NOT NULL, rollout_ordinal INTEGER NOT NULL);',
+    ]);
+    const adapter = new CodexAdapter({ codexHome, defaultProjectPath: PROJECT });
+
+    const first: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => first.push(event));
+    await adapter.loadSession('th_vscode');
+    expect(textDeltas(first)).toHaveLength(0);
+
+    // Codex 稍后才把这个 thread 的历史写进去
+    runSql(join(codexHome, 'thread_history_1.sqlite'), [
+      `INSERT INTO thread_items VALUES ('th_vscode', 'item_user', 'userMessage', ${sqlText(JSON.stringify({ id: 'item_user', type: 'userMessage', content: [{ type: 'text', text: '手机端发来的历史问题' }] }))}, 1700000000000, 1);`,
+    ]);
+
+    const second: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => second.push(event));
+    await adapter.loadSession('th_vscode');
+    expect(textDeltas(second).some((delta) => delta.includes('手机端发来的历史问题'))).toBe(true);
+  });
+
   it.skipIf(!sqlite3Available)('历史库晚于首次打开才出现时，下次打开会重新回放', async () => {
     const codexHome = createCodexHome('modern');
     const adapter = new CodexAdapter({ codexHome, defaultProjectPath: PROJECT });

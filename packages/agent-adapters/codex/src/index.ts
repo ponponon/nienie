@@ -469,6 +469,9 @@ export class CodexAdapter implements AgentAdapter {
           break;
         }
       }
+      // 库在、但这个 thread 还没有任何记录：算「暂时没就绪」，别把已加载标记写死，
+      // 否则 Codex 稍后落盘的消息永远不会被重新回放（代价只是下次打开多跑一次查询）
+      if (totalRead === 0) return false;
       return true;
     } catch (error) {
       // 不静默：回放失败要让调用方知道（下次打开还能重试），也要能在 /diagnostics 里看到
