@@ -29,6 +29,7 @@ apps/mobile/android/key.properties
 .nienie/
 .workbuddy/
 .tmp/
+.wrangler/
 coverage/
 test-results/
 playwright-report/

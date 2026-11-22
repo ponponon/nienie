@@ -48,6 +48,19 @@ Codex 是初版的第二适配器，使用 Codex 提供的结构化运行接口�
 - 将工具调用、文件变更、文本、思考和错误转换成统一事件
 - 处理取消和进程退出
 
+### Codex 会话列表的来源过滤
+
+Bridge 直接读 `~/.codex/state_*.sqlite` 的 `threads` 表来展示历史会话，所以**必须**按 Codex 自己的口径过滤（`codex-rs/core/src/rollout/mod.rs` 的 `INTERACTIVE_SESSION_SOURCES`）：
+
+- 只列 `source` ∈ `cli` / `vscode` / `custom`（`atlas`、`chatgpt`）的交互式线程；
+- 必须排除 `{"subagent": ...}`（子 Agent / thread_spawn / guardian 复核线程）和 `exec`（`codex exec` 一次性执行线程，包含 Nienie 自己 spawn 的运行）；
+- 必须排除 `archived = 1`。
+
+否则手机端会冒出 Codex 桌面端根本不存在的「幽灵会话」（典型表现：一堆空标题兜底成 `Codex (项目名)` 的条目）。
+
+代价：Nienie 自己用 `codex exec` 创建的会话在 Codex 侧同样是 `exec` 来源，因此 Bridge 重启后不会从 Codex 历史库恢复；如需跨重启保留，应由 Bridge 自己持久化会话（见 FEATURE.md 的后续计划）。
+
+
 ## 统一能力
 
 适配器必须声明实际能力：

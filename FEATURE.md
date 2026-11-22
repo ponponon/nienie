@@ -869,3 +869,11 @@
 - GitHub 仓库已配 `CLOUDFLARE_API_TOKEN`(secret) + `CLOUDFLARE_ACCOUNT_ID`(variable)，`sync-downloads.yml` 可自动跑。
 - macOS 只发 DMG，不再发 zip（安装式更符合用户预期）。`release-notes.mjs` 的 classify 去掉 mac `.zip` 分支，官网文案统一 `.dmg`。
 - 自定义域 `nienie-releases.quniv.cn` 已绑定（minTLS 1.2，与 `releases.quniv.cn` 一致），验收全绿：5 个对象 200、`latest/` 别名 `max-age=300, must-revalidate`、APK 从生产域名下载后 SHA-256 与 GitHub digest 完全一致。R2 自定义域不需要填 IP，Cloudflare 自动加代理 CNAME + 签证书；手建 DNS 是无效路径。
+
+### 2026-11-23 Codex 会话列表对齐 Codex Desktop（消灭幽灵会话）
+
+- 手机端「空间」下冒出一堆 Codex 里根本看不到的会话：3 条空标题兜底成 `Codex (nienie)` 的子 Agent 线程、2 条 `codex exec` 测试线程（`1+1等于几` / `只回答数字：1+1等于几`），外加 `Guardian review`。
+- 根因：`listSessions()` 直读 `~/.codex/state_*.sqlite` 的 `threads` 表，只过滤了 `archived = 0`，把子 Agent（`{"subagent":...}`）、guardian 复核和 `exec` 线程全列了出来；Codex Desktop / app-server 默认只列交互式来源（`codex-rs/core/src/rollout/mod.rs` 的 `INTERACTIVE_SESSION_SOURCES` = `cli` / `vscode` / `custom`）。
+- 修复（`packages/agent-adapters/codex/src/index.ts`）：查询加 `source` 过滤 `(source = 'cli' OR source = 'vscode' OR source LIKE '{"custom":%')`，并把 `codexHome` 提成可注入选项（默认 `~/.codex`），历史库与 `thread_history` 库统一走它；已绑定 `threadId` 的内存会话不会被历史库重复列一遍。
+- 回归测试（`packages/agent-adapters/codex/tests/history.test.ts`）：临时 `state_5.sqlite` 里同项目混放 vscode / cli / custom / subagent / guardian / exec / archived 七类线程，断言只返回 4 条交互式会话、且不出现 `Codex (` 兜底标题；另一个用例验证历史库缺失时不吞掉内存会话。
+- 已知代价：Nienie 自己用 `codex exec` 建的会话在 Codex 侧也是 `exec` 来源，Bridge 重启后不再从 Codex 历史库恢复。后续计划：Bridge 自己持久化会话（`sessions.json`）并在 `listSessions()` 里与 Codex 交互式线程按 `threadId` 合并去重。

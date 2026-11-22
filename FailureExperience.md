@@ -1281,3 +1281,51 @@ Android 端完全无法出包，官网只能继续分发旧的 debug 包；本�
    不代表生产已更新，排查时别被它误导。
 4. Pages 的「生产分支」设置必须与 git 实际分支名一致（本仓库是 `master`）；
    若再出现「部署 Success 但生产域名不变」，先查 `wrangler pages deployment list` 的 Environment 列。
+
+## 2026-11-23 直接读 Codex state 库导致手机端出现幽灵会话
+
+### 问题
+
+手机端选中 Codex 的 `nienie` 项目后，会话列表出现 8 条，而 Codex Desktop 里同一个项目只有 3 条。
+多出来的 5 条是：
+
+- 3 条标题为空、被兜底成 `Codex (nienie)` 的条目（时间都落在 11-08，和 logo skill 同一时段）；
+- `1+1等于几`、`只回答数字：1+1等于几` 两条 `codex exec` 测试线程；
+- 另有 `Guardian review` 一条此前用标题硬编码过滤掉了。
+
+### 根因
+
+`CodexAdapter.loadLocalCodexHistory()` 直读 `~/.codex/state_*.sqlite`，SQL 只有 `WHERE archived = 0`，
+没有任何来源过滤。可 Codex 的 `threads` 表混着大量 UI 从不展示的内部线程：
+`{"subagent":{"thread_spawn":...}}`（logo skill 的 `logo_a/b/c` 子 Agent）、
+`{"subagent":{"other":"guardian"}}`（审批复核）、以及 `source = 'exec'` 的一次性执行线程。
+
+Codex Desktop 走的是 app-server 的 `listThreads`，默认 `allowed_sources = INTERACTIVE_SESSION_SOURCES`
+（`codex-rs/core/src/rollout/mod.rs`：`Cli` / `VSCode` / `Custom("atlas")` / `Custom("chatgpt")`），
+子 Agent 和 exec 天然不在列表里。我们绕过了这层过滤，于是把 Codex 的内部实现细节当成了用户会话。
+
+### 影响
+
+- 手机端会话列表噪音大、无法和电脑端对齐，用户怀疑会话被重复创建；
+- 空标题兜底成 `Codex (项目名)`，看起来像「新建了但没内容」的坏会话；
+- 子 Agent 线程点进去会回放出子任务的中间输出，语义完全错位。
+
+### 修复
+
+1. SQL 加来源过滤：`archived = 0 AND (source = 'cli' OR source = 'vscode' OR source LIKE '{"custom":%')`，
+   与 Codex 官方口径逐字对齐（不自己发明白名单）。
+2. 常量 `CODEX_INTERACTIVE_SOURCES_SQL` + 注释写明出处文件，避免以后有人「顺手放宽」。
+3. `codexHome` 提成 `CodexAdapterOptions`，历史库/`thread_history` 库都走它，让回归测试能注入临时目录。
+4. 新增 `tests/history.test.ts`：真实建临时 `state_5.sqlite`，七类来源混放，断言只返回交互式 4 条。
+5. `Guardian review` 的标题硬编码过滤保留，但降级为兜底（真正生效的是来源过滤）。
+
+### 预防措施
+
+1. **凡是读别人 App 的数据库，先找到它自己的列表口径**（源码里的 `INTERACTIVE_SESSION_SOURCES`
+   这类常量，或它调用的 app-server 方法参数），照着抄，不要只按「看起来像会话」来筛。
+2. 读外部 DB 的查询一定要有可注入的根目录（`codexHome` 这类），否则没法写回归测试，
+   只能靠手点手机验证——这次 bug 就是这么漏到用户手上的。
+3. 会话列表类功能验收标准：**同一个项目下，手机端条数与桌面端条数一致**（含标题），
+   凡是出现 `Codex (项目名)` 这种兜底标题，先怀疑来源没过滤干净。
+4. 注意副作用边界：过滤掉 `exec` 来源后，Nienie 自己创建的会话在 Bridge 重启后不再自动恢复，
+   需要 Bridge 侧自持久化（已记入 FEATURE.md 后续计划），别把它当成「顺手就能改」的小改动。
