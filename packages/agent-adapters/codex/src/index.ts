@@ -339,19 +339,43 @@ export class CodexAdapter implements AgentAdapter {
     }
     if (result.status === 'missing') return;
     if (result.status !== 'ok') {
-      // 读不动 / 版本不认识：先隔离原文件，再允许用新的空索引重建，
-      // 绝不能当成「空列表」直接覆盖（否则会把用户或新版本的数据抹掉）
-      const backupPath = this.sessionStore.quarantine(result.status);
+      // 读不动 / 版本不认识：走 store 的锁内隔离——它会在临界区里**重新读一遍**再决定，
+      // 如果另一个实例已经把文件修好并写入会话，这里直接采用最新内容，绝不把有效文件挪走。
+      let recovery: ReturnType<CodexSessionStore['quarantineIfUnusable']>;
+      try {
+        recovery = this.sessionStore.quarantineIfUnusable();
+      } catch (error) {
+        this.emitDiagnosticWarning(
+          `codex session store ${result.status}; quarantine skipped: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        return;
+      }
+      if (recovery.status === 'ok') {
+        this.adoptStoredSessions(recovery.sessions);
+        return;
+      }
+      if (recovery.status === 'missing') return;
+      if (recovery.status === 'quarantined') {
+        this.emitDiagnosticWarning(
+          `codex session store ${recovery.reason}; old file quarantined to ${recovery.backupPath}`,
+        );
+        return;
+      }
+      // 隔离失败 → 文件还在原地，save() 会 fail-closed 拒绝写入；
+      // 这里必须说清楚「持久化已不可用」，不能让用户以为会话还在正常保存
       this.emitDiagnosticWarning(
-        backupPath
-          ? `codex session store ${result.status}; old file quarantined to ${backupPath}`
-          : // 隔离失败 → 文件还在原地，save() 会 fail-closed 拒绝写入；
-            // 这里必须说清楚「持久化已不可用」，不能让用户以为会话还在正常保存
-            `codex session store ${result.status}; quarantine FAILED, persistence disabled until ${this.sessionStorePath} is fixed manually`,
+        `codex session store ${recovery.reason}; quarantine FAILED, persistence disabled until ${this.sessionStorePath} is fixed manually`,
       );
       return;
     }
-    for (const session of result.sessions) {
+    this.adoptStoredSessions(result.sessions);
+  }
+
+  /** 把落盘会话装进内存（已存在的 id 不覆盖，内存状态更新）。 */
+  private adoptStoredSessions(sessions: readonly CodexStoredSession[]): void {
+    for (const session of sessions) {
       // 只认自己创建的会话，防止被篡改的文件塞入任意 threadId
       if (!session.id.startsWith(NIENIE_SESSION_ID_PREFIX) || this.sessions.has(session.id)) {
         continue;

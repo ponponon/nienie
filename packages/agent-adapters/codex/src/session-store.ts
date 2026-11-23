@@ -5,7 +5,6 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
@@ -44,6 +43,13 @@ export type CodexSessionStoreLoad =
   | { status: 'corrupt' }
   | { status: 'unsupported' };
 
+/** 隔离结果：可能「文件已经被另一个实例修好了」（ok），此时不该再隔离。 */
+export type CodexSessionStoreQuarantine =
+  | { status: 'ok'; sessions: CodexStoredSession[] }
+  | { status: 'missing' }
+  | { status: 'quarantined'; reason: 'corrupt' | 'unsupported'; backupPath: string }
+  | { status: 'still-broken'; reason: 'corrupt' | 'unsupported' };
+
 type CodexSessionStoreFile = {
   version: 1;
   sessions: CodexStoredSession[];
@@ -59,11 +65,6 @@ const STORE_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 /** 抢锁重试间隔（毫秒）。同步路径上用 Atomics.wait 阻塞，总等待上限约 70ms。 */
 const LOCK_RETRY_DELAYS_MS = [10, 20, 40] as const;
-/**
- * 「内容不可读的锁」多久算孤儿（正常持锁只有几毫秒）。
- * 注意：这只用于**读不出持有者**的锁；能读出 pid 的锁只按进程存活判断，不看年龄。
- */
-const LOCK_ORPHAN_MS = 10_000;
 const RUN_STATES: readonly CodexSessionRunState[] = ['never_started', 'starting', 'started'];
 const KNOWN_STATUSES: readonly AgentStatus[] = [
   'starting',
@@ -110,16 +111,25 @@ export class CodexSessionStore {
     return { status: 'ok', sessions };
   }
 
-  /** 把读不动 / 版本不认识的文件改名隔离，避免随后的写盘把它覆盖掉。返回备份路径。 */
-  quarantine(reason: 'corrupt' | 'unsupported'): string | undefined {
-    if (!existsSync(this.filePath)) return undefined;
-    const backupPath = `${this.filePath}.${reason}.${Date.now()}.bak`;
-    try {
-      renameSync(this.filePath, backupPath);
-      return backupPath;
-    } catch {
-      return undefined;
-    }
+  /**
+   * 隔离读不动的文件——**必须在写锁内重读后再决定**，不能拿锁外那次读取的结论动手。
+   *
+   * 反例（这也是上一版的 bug）：A 在锁外读到 version 99，此时 B 已经把它修好并写入了新会话，
+   * A 再 `rename` 就会把 B 刚写好的有效文件挪进备份，B 的会话从当前索引里消失。
+   * 所以进入临界区后重新 `load()`：文件已经可用就返回会话让调用方直接用，不再隔离。
+   */
+  quarantineIfUnusable(): CodexSessionStoreQuarantine {
+    return this.withWriteLock(() => {
+      const current = this.load();
+      if (current.status === 'ok' || current.status === 'missing') return current;
+      const backupPath = `${this.filePath}.${current.status}.${Date.now()}.bak`;
+      try {
+        renameSync(this.filePath, backupPath);
+        return { status: 'quarantined', reason: current.status, backupPath };
+      } catch {
+        return { status: 'still-broken', reason: current.status };
+      }
+    });
   }
 
   /**
@@ -177,14 +187,20 @@ export class CodexSessionStore {
   /**
    * 临界区：`<file>.lock` 的排他创建即持锁。
    *
-   * 锁只覆盖一次写入（毫秒级），不做进程生命周期独占——一次崩溃不该把用户永久锁在门外，
+    * 锁只覆盖一次写入（毫秒级），不做进程生命周期独占——一次崩溃不该把用户永久锁在门外，
    * CLI 与 GUI 共用同一个 Bridge 时也不该互相拒绝启动。抢不到锁退避重试，仍失败就抛错
    * （由调用方写诊断），绝不「无锁照样覆盖」。
+   *
+   * **不做自动回收**：上一版尝试「判陈旧 → rename 认领 → 核对 → 删」，被 review 指出仍有
+   * ABA——延迟的回收者可能把别人刚换上的新锁 rename 走，恢复失败后再删掉，于是两个进程
+   * 同时进入临界区。这类状态机要正确必须依赖 compare-and-swap，而文件系统没有。
+   * 因此这里退回保守策略：锁存在且抢不到就拒绝写入，并把持有者信息写进错误里，由人确认后
+   * 删除锁文件。代价是崩溃在临界区内会暂时挡住持久化，收益是互斥永远不会静默失效。
    */
   private withWriteLock<T>(fn: () => T): T {
     const lockPath = `${this.filePath}.lock`;
     mkdirSync(dirname(lockPath), { recursive: true });
-    // 本次调用的唯一标识：既用于临时文件名，也用于「只释放/只回收自己的锁」
+    // 本次调用的唯一标识：既用于临时文件名，也用于「只释放自己的锁」
     const token = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     for (let attempt = 0; attempt <= LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
       if (this.tryAcquireLock(lockPath, token)) {
@@ -194,15 +210,11 @@ export class CodexSessionStore {
           this.releaseLock(lockPath, token);
         }
       }
-      if (this.reclaimStaleLock(lockPath, token)) continue;
       const delay = LOCK_RETRY_DELAYS_MS[attempt];
       if (delay === undefined) break;
       sleepSync(delay);
     }
-    throw new Error(
-      `codex session store is locked by another writer (${lockPath}); ` +
-        '若确认没有其他 Nienie 实例在运行，删除该锁文件后重试',
-    );
+    throw new Error(`codex session store 被其他写入者占用：${describeLock(lockPath)}`);
   }
 
   /**
@@ -235,45 +247,6 @@ export class CodexSessionStore {
     if (holder && holder.token !== token) return;
     rmSync(lockPath, { force: true });
   }
-
-  /**
-   * 回收陈旧锁。返回 true 表示「已处理，可以立刻重试抢锁」。
-   *
-   * 两条安全规则：
-   * 1. **存活进程的锁绝不按年龄抢**——持锁进程可能只是被系统挂起，超过 10 秒不代表它死了；
-   * 2. 回收时先 `rename` 成自己独有的名字，只有 rename 成功的一方拿到回收权，且**只删自己
-   *    挪走的那个文件**。若挪走后发现内容已经不是刚才判定的那把锁（别人在这瞬间换了新锁），
-   *    原样 `link` 放回去，绝不删除——否则两个回收者会互相删掉对方新建的锁，互斥直接失效。
-   */
-  private reclaimStaleLock(lockPath: string, token: string): boolean {
-    const observed = tryReadLockHolder(lockPath);
-    if (!isStaleLock(lockPath, observed)) return false;
-
-    const reclaimPath = `${lockPath}.${token}.reclaim`;
-    try {
-      renameSync(lockPath, reclaimPath);
-    } catch (error) {
-      // ENOENT：别人已经回收了，直接重试抢锁
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
-      return false;
-    }
-
-    const moved = tryReadLockHolder(reclaimPath);
-    const sameLock = sameLockHolder(observed, moved);
-    if (!sameLock) {
-      // 挪走的是别人刚换上的新锁：放回原位（仅在原位空着时），保住对方的持有权
-      try {
-        linkSync(reclaimPath, lockPath);
-      } catch {
-        // EEXIST 等：原位已被占用，放弃放回（那份锁已被新持有者替代，不必恢复）
-      } finally {
-        rmSync(reclaimPath, { force: true });
-      }
-      return false;
-    }
-    rmSync(reclaimPath, { force: true });
-    return true;
-  }
 }
 
 type LockHolder = { pid: number; at: number; token: string };
@@ -290,24 +263,20 @@ function tryReadLockHolder(lockPath: string): LockHolder | undefined {
   }
 }
 
-function sameLockHolder(a: LockHolder | undefined, b: LockHolder | undefined): boolean {
-  if (!a || !b) return a === b;
-  return a.token === b.token && a.pid === b.pid;
-}
-
 /**
- * 陈旧判定：
- * - 内容可读 → **只看持有进程是否还活着**，不看年龄；
- * - 内容不可读（旧版本残留 / 非本程序创建）→ 只有文件确实放够了时间才敢回收，
- *   避免抢走「正在被写入」的锁。
+ * 把锁现场描述成人能照着做的信息：路径、持有者 PID、写入时间、以及「这个 PID 还在不在」。
+ * 只描述不处理——自动删除活锁/僵尸锁都无法在不具备 CAS 的前提下做对。
  */
-function isStaleLock(lockPath: string, holder: LockHolder | undefined): boolean {
-  if (holder) return !isProcessAlive(holder.pid);
-  try {
-    return Date.now() - statSync(lockPath).mtimeMs > LOCK_ORPHAN_MS;
-  } catch {
-    return false;
+function describeLock(lockPath: string): string {
+  const holder = tryReadLockHolder(lockPath);
+  if (!holder) {
+    return `${lockPath}（锁内容不可读，可能是崩溃残留；确认没有其他 Nienie 实例在运行后删除该文件即可）`;
   }
+  const alive = isProcessAlive(holder.pid);
+  const at = new Date(holder.at).toISOString();
+  return alive
+    ? `${lockPath}（持有进程 PID ${holder.pid} 仍在运行，写入时间 ${at}；等它写完或退出后重试）`
+    : `${lockPath}（持有进程 PID ${holder.pid} 已不存在，是崩溃残留，写入时间 ${at}；删除该文件后重试）`;
 }
 
 /** 同步 wait：save() 在同步路径上，不能靠 await 退避。 */
