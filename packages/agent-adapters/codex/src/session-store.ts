@@ -25,6 +25,14 @@ export type CodexStoredSession = {
   /** Codex 真实线程 id；会话创建后、首个 `thread.started` 到达前可能还没有。 */
   threadId?: string | undefined;
   /**
+   * 身份修订号：每次身份或失效状态变化 +1，由显式操作维护。
+   *
+   * 为什么不用「threadId 变了没有」做 CAS：线程可能 `missing → 恢复 → 又 missing`，
+   * 两次比较看到的 id 一模一样，但中间已经被别的实例改过一轮。修订号单调递增，
+   * 只比较 id 会漏掉这种「值回到旧样子」的并发，修订号不会。
+   */
+  bindingRevision?: number | undefined;
+  /**
    * 已确认这个 `threadId` 在 Codex 侧不存在（线程被删 / 换机器 / 库被重置）。
    *
    * 与 `threadId` 并存而不是删掉 `threadId`：后者是「最后已知身份」，仍要留给诊断与去重；
@@ -66,6 +74,8 @@ export type CodexBindingOutcome = 'updated' | 'unchanged' | 'mismatch' | 'not-fo
 export type CodexStoredBinding = {
   threadId?: string | undefined;
   threadMissing?: boolean | undefined;
+  /** 身份修订号（缺失按 0 处理），CAS 用它比较。 */
+  revision: number;
 };
 
 /**
@@ -80,7 +90,8 @@ export type CodexBeginThreadOutcome =
   | 'started'
   | 'already-marked'
   | 'not-found'
-  | 'identity-mismatch';
+  | 'identity-mismatch'
+  | 'stale-revision';
 
 /** 隔离结果：可能「文件已经被另一个实例修好了」（ok），此时不该再隔离。 */
 export type CodexSessionStoreQuarantine =
@@ -214,14 +225,21 @@ export class CodexSessionStore {
           // 换绑 / 置失效 / 解除失效分别走 bindThreadId / markThreadMissing / confirmThreadPresent。
           const threadId = current?.threadId ?? session.threadId;
           const threadMissing = current?.threadMissing === true;
+          const bindingRevision = current?.bindingRevision ?? session.bindingRevision;
           // 注意：必须先剥掉内存快照里的 threadId / threadMissing 再展开 `...session`。
           // 否则 `...session` 会把内存里的 `threadMissing: true` 原样带回去——「上面算出来不要写」
           // 和「下面又写进去了」同时成立，规则形同虚设（这一版就是这么被自己坑了一次）。
-          const { threadId: _memoryThreadId, threadMissing: _memoryThreadMissing, ...rest } = session;
+          const {
+            threadId: _memoryThreadId,
+            threadMissing: _memoryThreadMissing,
+            bindingRevision: _memoryRevision,
+            ...rest
+          } = session;
           merged.set(session.id, {
             ...rest,
             ...(threadId ? { threadId } : {}),
             ...(threadMissing ? { threadMissing: true } : {}),
+            ...(typeof bindingRevision === 'number' ? { bindingRevision } : {}),
           });
         }
       }
@@ -236,20 +254,21 @@ export class CodexSessionStore {
    * 里的 `threadId` 也是「不同的」，但那是旧身份。只有本进程亲耳听到 `thread.started` 才算事实。
    * 在写锁内读-改-写，因此天然是「以磁盘当前状态为准」的换绑，不会被自己的旧快照回退。
    *
-   * `expected` 是 CAS：给出这一轮开始时认识的身份（`oldThreadId: undefined` 表示「当时还没有身份」），
-   * 磁盘已经不是那个身份时就返回 `mismatch` 不写——否则一次**过期的执行**里延迟到达的
-   * `thread.started` 会把另一个实例刚绑好的新身份覆盖掉。
+   * `expected` 是 CAS，用**修订号**而不是 id 比较：id 可能 `missing → 恢复 → 又 missing` 回到旧样子，
+   * 只比 id 会漏掉这种并发；修订号单调递增，一次过期的执行（延迟到达的 `thread.started`）
+   * 会被识别出来并拒绝，不会覆盖别的实例刚绑好的新身份。
    */
   bindThreadId(
     sessionId: string,
     threadId: string,
-    expected?: { oldThreadId: string | undefined },
+    expected?: { revision: number },
   ): CodexBindingOutcome {
     return this.updateBinding(sessionId, (record) => {
-      if (expected && record.threadId !== expected.oldThreadId) return 'mismatch';
+      if (expected && revisionOf(record) !== expected.revision) return 'mismatch';
       if (record.threadId === threadId && record.threadMissing !== true) return 'unchanged';
       record.threadId = threadId;
       delete record.threadMissing;
+      record.bindingRevision = revisionOf(record) + 1;
       return 'updated';
     });
   }
@@ -268,11 +287,17 @@ export class CodexSessionStore {
    * 否则「spawn 后、thread.started 前崩溃」的重启判定会重新失去依据
    * （`restoreStatus` 需要 `threadMissing` 才能认出「新线程的身份已经丢了」）。
    */
-  markThreadMissing(sessionId: string, threadId: string): CodexBindingOutcome {
+  markThreadMissing(
+    sessionId: string,
+    threadId: string,
+    expected?: { revision: number },
+  ): CodexBindingOutcome {
     return this.updateBinding(sessionId, (record) => {
+      if (expected && revisionOf(record) !== expected.revision) return 'mismatch';
       if (record.threadId !== threadId) return 'mismatch';
       if (record.threadMissing === true) return 'unchanged';
       record.threadMissing = true;
+      record.bindingRevision = revisionOf(record) + 1;
       return 'updated';
     });
   }
@@ -293,6 +318,7 @@ export class CodexSessionStore {
     sessionId: string,
     expectedThreadId: string,
     updatedAt: string,
+    expectedRevision?: number,
   ): CodexBeginThreadOutcome {
     return this.withWriteLock(() => {
       const existing = this.load();
@@ -305,8 +331,13 @@ export class CodexSessionStore {
       const record = sessions.find((session) => session.id === sessionId);
       if (!record) return 'not-found';
       if (record.threadId !== expectedThreadId) return 'identity-mismatch';
+      // 修订号比 id 更严：`missing → 恢复 → 又 missing` 之后 id 没变，但这一轮的认识已经过时
+      if (expectedRevision !== undefined && revisionOf(record) !== expectedRevision) {
+        return 'stale-revision';
+      }
       const alreadyMarked = record.threadMissing === true;
       record.threadMissing = true;
+      if (!alreadyMarked) record.bindingRevision = revisionOf(record) + 1;
       record.runState = 'starting';
       record.updatedAt = updatedAt;
       this.writeSessions(sessions);
@@ -320,11 +351,17 @@ export class CodexSessionStore {
    * 与 `bindThreadId` 的区别：这里**不换身份**，只有磁盘上的 `threadId` 与被确认的 id 相同才解除
    * 失效标记。这样「另一个实例拿着别的 id 说它存在」不会把失效事实抹掉。
    */
-  confirmThreadPresent(sessionId: string, threadId: string): CodexBindingOutcome {
+  confirmThreadPresent(
+    sessionId: string,
+    threadId: string,
+    expected?: { revision: number },
+  ): CodexBindingOutcome {
     return this.updateBinding(sessionId, (record) => {
+      if (expected && revisionOf(record) !== expected.revision) return 'mismatch';
       if (record.threadId !== threadId) return 'mismatch';
       if (record.threadMissing !== true) return 'unchanged';
       delete record.threadMissing;
+      record.bindingRevision = revisionOf(record) + 1;
       return 'updated';
     });
   }
@@ -349,6 +386,7 @@ export class CodexSessionStore {
     return {
       ...(record.threadId ? { threadId: record.threadId } : {}),
       ...(record.threadMissing ? { threadMissing: true } : {}),
+      revision: record.bindingRevision ?? 0,
     };
   }
 
@@ -518,6 +556,11 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+/** 缺失按 0 处理：首版文件没有这个字段。 */
+function revisionOf(record: CodexStoredSession): number {
+  return record.bindingRevision ?? 0;
+}
+
 function isStoredSession(value: unknown): value is CodexStoredSession {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Partial<CodexStoredSession>;
@@ -530,6 +573,10 @@ function isStoredSession(value: unknown): value is CodexStoredSession {
     typeof candidate.updatedAt === 'string' &&
     (candidate.threadId === undefined || typeof candidate.threadId === 'string') &&
     (candidate.threadMissing === undefined || typeof candidate.threadMissing === 'boolean') &&
+    (candidate.bindingRevision === undefined ||
+      (typeof candidate.bindingRevision === 'number' &&
+        Number.isSafeInteger(candidate.bindingRevision) &&
+        candidate.bindingRevision >= 0)) &&
     (candidate.runState === undefined ||
       RUN_STATES.includes(candidate.runState as CodexSessionRunState)) &&
     KNOWN_STATUSES.includes(candidate.status as AgentStatus)

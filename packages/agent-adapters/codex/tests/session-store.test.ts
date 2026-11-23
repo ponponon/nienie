@@ -550,10 +550,14 @@ describe('CodexSessionStore', () => {
     const store = new CodexSessionStore({ filePath });
 
     store.save([{ ...STORE_BASE, id: 'codex_ses_read', threadId: 'th_read', status: 'idle' }]);
-    expect(store.readBinding('codex_ses_read')).toEqual({ threadId: 'th_read' });
+    expect(store.readBinding('codex_ses_read')).toEqual({ threadId: 'th_read', revision: 0 });
 
     store.markThreadMissing('codex_ses_read', 'th_read');
-    expect(store.readBinding('codex_ses_read')).toEqual({ threadId: 'th_read', threadMissing: true });
+    expect(store.readBinding('codex_ses_read')).toEqual({
+      threadId: 'th_read',
+      threadMissing: true,
+      revision: 1,
+    });
 
     // 记录不在盘上 → undefined（调用方退回内存快照）
     expect(store.readBinding('codex_ses_other')).toBeUndefined();
@@ -635,18 +639,99 @@ describe('CodexSessionStore', () => {
       .toBe('not-found');
   });
 
-  it('bindThreadId 的 CAS：身份已经不是期望值时拒绝换绑', () => {
+  it('bindThreadId 的 CAS：修订号对不上就拒绝换绑', () => {
     const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     const store = new CodexSessionStore({ filePath });
     store.save([{ ...STORE_BASE, id: 'codex_ses_cas', threadId: 'th_a', status: 'idle' }]);
 
-    expect(store.bindThreadId('codex_ses_cas', 'th_b', { oldThreadId: 'th_a' })).toBe('updated');
-    // 一次过期的执行还拿着 th_a 的期望值来换绑 → 拒绝，磁盘保持 th_b
-    expect(store.bindThreadId('codex_ses_cas', 'th_c', { oldThreadId: 'th_a' })).toBe('mismatch');
+    // 首版记录没有修订号，按 0 处理
+    expect(store.readBinding('codex_ses_cas')?.revision).toBe(0);
+    expect(store.bindThreadId('codex_ses_cas', 'th_b', { revision: 0 })).toBe('updated');
+    expect(store.readBinding('codex_ses_cas')?.revision).toBe(1);
+    // 一次过期的执行还拿着修订号 0 来换绑 → 拒绝，磁盘保持 th_b
+    expect(store.bindThreadId('codex_ses_cas', 'th_c', { revision: 0 })).toBe('mismatch');
     expect(loadOk(store)[0]?.threadId).toBe('th_b');
-    // 期望「当时还没有身份」但磁盘已经有 → 同样拒绝
-    expect(store.bindThreadId('codex_ses_cas', 'th_d', { oldThreadId: undefined })).toBe('mismatch');
-    expect(loadOk(store)[0]?.threadId).toBe('th_b');
+    // 带上当前修订号才允许换绑
+    expect(store.bindThreadId('codex_ses_cas', 'th_d', { revision: 1 })).toBe('updated');
+    expect(loadOk(store)[0]?.threadId).toBe('th_d');
+  });
+
+  it('id 回到旧样子时，只有修订号能识别出「这期间已经被改过」', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_aba', threadId: 'th_old', status: 'idle' }]);
+    // A 这一轮开始时认识的绑定：th_old @ revision 0
+    const observed = store.readBinding('codex_ses_aba')!;
+
+    // 线程 missing → 恢复 → 又 missing：三次显式操作把修订号推到 3，id 却回到了 th_old
+    expect(store.markThreadMissing('codex_ses_aba', 'th_old')).toBe('updated');
+    expect(store.confirmThreadPresent('codex_ses_aba', 'th_old')).toBe('updated');
+    expect(store.markThreadMissing('codex_ses_aba', 'th_old')).toBe('updated');
+    const now = store.readBinding('codex_ses_aba')!;
+    expect(now.threadId).toBe(observed.threadId);
+    expect(now.revision).toBe(observed.revision + 3);
+
+    // 只比 id 的话这次换绑会被放行（id 一模一样），比修订号才能认出这是过期的认识
+    expect(store.bindThreadId('codex_ses_aba', 'th_new', { revision: observed.revision })).toBe(
+      'mismatch',
+    );
+    expect(loadOk(store)[0]?.threadId).toBe('th_old');
+    // 用当前修订号才允许换绑
+    expect(store.bindThreadId('codex_ses_aba', 'th_new', { revision: now.revision })).toBe(
+      'updated',
+    );
+    expect(loadOk(store)[0]?.threadId).toBe('th_new');
+    expect(loadOk(store)[0]?.threadMissing).toBeUndefined();
+  });
+
+  it('beginNewThreadFromMissing 也认修订号：id 相同但修订号过期时不许开新线程', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_rev', threadId: 'th_old', status: 'idle' }]);
+
+    // 别的实例先判失效、又确认恢复：id 没变，修订号 +2
+    store.markThreadMissing('codex_ses_rev', 'th_old');
+    store.confirmThreadPresent('codex_ses_rev', 'th_old');
+
+    expect(
+      store.beginNewThreadFromMissing(
+        'codex_ses_rev',
+        'th_old',
+        '2026-11-23T01:00:00.000Z',
+        0, // 过期的修订号
+      ),
+    ).toBe('stale-revision');
+    expect(loadOk(store)[0]?.threadMissing).toBeUndefined();
+    expect(loadOk(store)[0]?.runState).toBeUndefined();
+
+    // 拿对修订号才允许这次原子转换
+    expect(
+      store.beginNewThreadFromMissing(
+        'codex_ses_rev',
+        'th_old',
+        '2026-11-23T01:00:00.000Z',
+        store.readBinding('codex_ses_rev')?.revision,
+      ),
+    ).toBe('started');
+    expect(loadOk(store)[0]).toMatchObject({ threadMissing: true, runState: 'starting' });
+  });
+
+  it('普通 save 不写内存里的修订号，磁盘上的修订号只会被显式操作推进', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_rev2', threadId: 'th_a', status: 'idle' }]);
+    store.bindThreadId('codex_ses_rev2', 'th_b'); // revision 0 → 1
+
+    // 另一个实例的旧快照带着修订号 99：save 必须保留磁盘的 1，否则一次脏写就能让所有 CAS 失准
+    store.save([
+      { ...STORE_BASE, id: 'codex_ses_rev2', threadId: 'th_b', status: 'running', bindingRevision: 99 },
+    ]);
+    expect(store.readBinding('codex_ses_rev2')?.revision).toBe(1);
+
+    // 磁盘还没有修订号时，save 允许补上（首版文件迁移）
+    store.save([{ ...STORE_BASE, id: 'codex_ses_rev3', threadId: 'th_a', status: 'idle' }]);
+    store.save([{ ...STORE_BASE, id: 'codex_ses_rev3', status: 'running', bindingRevision: 4 }]);
+    expect(store.readBinding('codex_ses_rev3')?.revision).toBe(4);
   });
 
   it('写锁被活进程持有时拒绝写盘（不无锁覆盖），成功写完不留锁文件', () => {
@@ -844,7 +929,7 @@ describe('CodexAdapter 会话持久化', () => {
     expect(statuses.get('codex_ses_failed')).toBe('failed');
   });
 
-  it('spawn 后崩溃（starting 且没有 threadId）恢复为 failed，不伪装成空会话', async () => {
+  it('spawn 后崩溃（停在 starting）恢复为 failed，不伪装成空会话', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     new CodexSessionStore({ filePath: storePath }).save([
@@ -856,7 +941,9 @@ describe('CodexAdapter 会话持久化', () => {
         status: 'running',
         runState: 'starting',
       },
-      // 对照组：resume 场景本来就有 threadId，不算法「中断」
+      // 同样的崩溃窗口，但这一轮是 resume 老线程（threadId 本来就有）。
+      // 不能因为「threadId 非空」就当成没跑过：resume 起来的进程可能已经在 Codex 侧执行了，
+      // 恢复成 idle 会让用户以为消息没发出去，再发一次就是重复执行。
       {
         ...STORE_BASE,
         id: 'codex_ses_resumed',
@@ -877,7 +964,7 @@ describe('CodexAdapter 会话持久化', () => {
     );
 
     expect(statuses.get('codex_ses_interrupted')).toBe('failed');
-    expect(statuses.get('codex_ses_resumed')).toBe('idle');
+    expect(statuses.get('codex_ses_resumed')).toBe('failed');
   });
 
   it('版本不认识的文件会被隔离，新版本数据不被本版本覆盖', async () => {
@@ -1211,10 +1298,13 @@ describe('CodexAdapter 会话持久化', () => {
       (await adapter.listSessions()).map((session) => [session.id, session.status]),
     );
 
-    // 进程都不在了：进行中/等待一律降级 idle
-    expect(statuses.get('codex_ses_starting')).toBe('idle');
+    // 进程都不在了：只是「状态是 running/waiting」的一律降级 idle（runState 已经是 started，
+    // 说明 thread.started 落过盘，这一轮的身份是确定的）
     expect(statuses.get('codex_ses_running')).toBe('idle');
     expect(statuses.get('codex_ses_waiting')).toBe('idle');
+    // 但 runState 还停在 starting = spawn 发出去了、thread.started 没落盘 = 被打断。
+    // 有 threadId 也一样：resume 起来的那一轮可能已经在 Codex 侧跑了，用户的消息不能静默消失。
+    expect(statuses.get('codex_ses_starting')).toBe('failed');
     // 终态保留，不能被「降级」洗掉
     expect(statuses.get('codex_ses_completed')).toBe('completed');
     expect(statuses.get('codex_ses_failed')).toBe('failed');

@@ -1039,3 +1039,18 @@
 - **`processJsonLine` 从「先改内存后落盘」改成「先落盘后改内存」**：换绑被拒时只跳过内存更新，不会留下「内存新身份 / 磁盘旧身份」的分裂状态。
 - 测试：`session-store.test.ts` 45 条（新增原子转换四个结果 + 交错反例 + CAS 三条），`thread-health.test.ts` 13 条（新增「过期的 thread.started 不能覆盖别处刚绑好的身份」）。`begin` 只写标记 / 只写 starting / `bind` 忽略 CAS 三处变异，各自变红。
 - **仍未做（review 也标为 P2）**：跨进程的「同一 session 执行租约」。Store 的文件锁只保证一次状态转换原子，挡不住另一个 Bridge 在这次转换之后、真正 spawn 之前也启动同一会话——那需要带 fencing token 的执行租约，写在路线图里，不和写锁混为一谈。
+
+### 2026-11-24 第三方 review 第十轮：CAS 从「比 id」升级为「比修订号」，崩溃判定不再借用身份字段
+
+第九轮的原子转换已经把「标记 + starting」合成一次写入，review 认可这一点，但同时指出两处仍然没收敛：CAS 比较的是 `threadId`，而崩溃判定借用了 `threadMissing`。两者都错在**拿一个会被别人合法改动的值当自己的历史**。
+
+- **CAS 比较修订号**（`bindingRevision`）：`missing → 恢复 → 又 missing` 之后 `threadId` 会回到旧样子，只比 id 会把一份过时的认识当成「没变过」，延迟到达的 `thread.started` 依旧能覆盖磁盘。
+  - Store 侧：新增 `bindingRevision`，三个显式操作（`bindThreadId` / `markThreadMissing` / `confirmThreadPresent`）签名改成 `expected?: { revision }`，`beginNewThreadFromMissing` 增加 `expectedRevision` 并返回 `stale-revision`；`readBinding()` 一并返回 `revision`。
+  - `save()` **不推进**修订号，只保留磁盘上的值：否则一次脏写就能把所有 CAS 的基准打偏。首版文件没有这个字段，按 0 处理，`save()` 允许在磁盘为空时补上（迁移）。
+  - Adapter 侧：`CodexSessionRecord` 带上 `bindingRevision`，并新增 `refreshRevision()`——每次显式操作成功后立刻把磁盘上 +1 之后的修订号对齐回内存。**不同步就会反过来伤到自己**：本轮 spawn 的 CAS 基准是旧值，正常的 `thread.started` 会被判成「别的实例抢先了」。
+- **崩溃判定只看 `runState`**（`restoreStatus` 去掉 `threadId` / `threadMissing` 两个参数）：review 给的反例是 `begin` 成功 → 另一个实例 `confirmThreadPresent` 清掉标记 → 崩溃 → 磁盘上是 `{threadId: 旧id, runState: 'starting', 无标记}` → 旧规则两个条件都不成立 → 恢复成 `idle`，用户的消息静默丢失。身份字段是**别人可以合法改**的，`runState` 只有这一轮的主人会动；`cancelled` 例外（启动中被取消是已了结的一轮，不该事后翻成 failed）。
+  - 顺带把「resume 场景本来就有 `threadId`，不算法中断」这条旧规则也推翻了：resume 起来的进程可能已经在 Codex 侧执行，恢复成 idle 会让用户再发一次 = 重复执行。两条老测试按新语义改写。
+- **两次决策都被抢先后不再「保守开新线程」，而是不发这一轮**：新线程就算起来了，它的 `thread.started` 也一定会被 CAS 拒绝，结果是 Codex 侧多出一条没有任何记录指向它的线程——正是最初那类「手机端看不见、Codex 里却在」的幽灵会话。现在改为 `emitRunError` + 抛错，手机端能看到「身份正在被另一个实例修改」。
+- **换绑落盘失败时不再推进内存身份**：之前 `catch` 里 `return true`，内存会记下 `th_mine` 而磁盘还是 `th_persisted`，下一轮又以磁盘为准，两个身份来回抖动。现在 `return false`，事件照常上报（用户不该因为身份记不下来就看不到回答）。
+- 测试：codex 包 78 → 84（`session-store.test.ts` 48、`thread-health.test.ts` 15）。新增 review 点名的四条：`begin 成功后别人确认「线程回来了」再崩溃仍必须 failed`、`id 回到旧样子时只有修订号能识别`、`两次决策都对不上磁盘身份时不得 spawn`、`换绑落盘失败不推进内存但事件仍上报`；另加 `begin 也认修订号`、`save 不写内存修订号`。四处守卫（旧崩溃判定、双 mismatch 开新线程、bind 异常返回 true、CAS 忽略修订号）各自做过变异验证，改坏即变红。
+- **仍未做**：`writeSessions()` 的 `fsync`（崩溃可见性够、突然断电不够，review 标 P2）；跨进程执行租约（`already-marked` 允许继续，意味着两个 Bridge 仍可能同时起两个新线程，CAS 只保证最终不会有两个 id 都成功写盘，不保证任务只执行一次）——继续留在路线图。

@@ -109,6 +109,19 @@ const STORE_BASE = {
   updatedAt: '2026-11-23T00:10:00.000Z',
 };
 
+/**
+ * 白盒读内存里的身份。
+ *
+ * 「落盘失败时不许提前推进内存身份」这条保证没有对外可观测面（`AgentSession` 不暴露 threadId），
+ * 但它正是「内存与磁盘不许分叉」的落点，所以只能直接看内部记录。
+ */
+function peekThreadId(adapter: CodexAdapter, sessionId: string): string | undefined {
+  const sessions = (
+    adapter as unknown as { sessions: Map<string, { threadId?: string }> }
+  ).sessions;
+  return sessions.get(sessionId)?.threadId;
+}
+
 describe('Codex 线程恢复的真实性', () => {
   it('重启后第二轮真的走 exec resume <threadId>（不只是内部状态对）', async () => {
     const codexHome = makeDir('nienie-codex-home-');
@@ -555,5 +568,135 @@ describe('Codex 线程恢复的真实性', () => {
     expect(stored.status).toBe('ok');
     if (stored.status !== 'ok') return;
     expect(stored.sessions[0]?.threadMissing).toBeUndefined();
+  });
+
+  it('begin 成功后别人确认「线程回来了」，再崩溃，重启仍必须是 failed 而不是 idle', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']); // th_gone 不在库里
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_confirm_race', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => createSilentProcess(),
+    });
+    await adapter.loadSession('codex_ses_confirm_race');
+    // 一原子转换：磁盘变成 {threadId: th_gone, threadMissing: true, runState: starting}，然后 spawn
+    await adapter.sendMessage('codex_ses_confirm_race', '继续');
+
+    // spawn 之后、thread.started 之前，另一个 Bridge 认为线程又回来了，把失效标记清掉
+    expect(
+      new CodexSessionStore({ filePath: storePath }).confirmThreadPresent(
+        'codex_ses_confirm_race',
+        'th_gone',
+      ),
+    ).toBe('updated');
+    // 紧接着这一轮崩溃：进程一句话都没吐，thread.started 也从未落盘
+
+    const restarted = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+    const statuses = new Map(
+      (await restarted.listSessions()).map((session) => [session.id, session.status]),
+    );
+    // 身份标记可以被别人合法地改，但「这一轮跑了一半」不能因此消失：
+    // 恢复成 idle 的话用户会以为消息没发出去，再发一次就是重复执行。
+    expect(statuses.get('codex_ses_confirm_race')).toBe('failed');
+  });
+
+  it('两次决策都对不上磁盘身份时，宁可这一轮不发，也不开新线程', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_churn', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    let spawnCount = 0;
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => {
+        spawnCount += 1;
+        return createFakeProcess('th_never');
+      },
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_churn'); // 内存里拿着 th_gone
+
+    // 别的实例把这条记录的身份改没了（内存不知道），于是每次决策都以 th_gone 作期望值、
+    // 又每次都被磁盘拒绝——决策连错两次
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        version: 1,
+        sessions: [{ ...STORE_BASE, id: 'codex_ses_churn', runState: 'started' }],
+      }),
+      'utf8',
+    );
+
+    await expect(adapter.sendMessage('codex_ses_churn', '继续')).rejects.toThrow(
+      /另一个 Nienie 实例/,
+    );
+    // 开新线程只会得到一条「Codex 里有、手机端没有」的幽灵线程：thread.started 的 CAS
+    // 必然再次被拒，没人认领这个新线程
+    expect(spawnCount).toBe(0);
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
+    ).toHaveLength(1);
+  });
+
+  it('换绑落盘失败时不推进内存身份，但这一轮的事件照常上报', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_persisted']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_bindfail', threadId: 'th_persisted', runState: 'started' },
+    ]);
+
+    const proc = createSilentProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_bindfail');
+    await adapter.sendMessage('codex_ses_bindfail', '继续');
+
+    // 另一个 Bridge 正在写索引（持锁）→ 这次换绑必然写不进去
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    (proc.stdout as PassThrough).write(
+      `${JSON.stringify({ type: 'thread.started', thread_id: 'th_mine' })}\n`,
+    );
+    (proc.stdout as PassThrough).write(`${JSON.stringify({ type: 'turn.started' })}\n`);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toContain('bind failed');
+    // 写不进去就一点都不许改：内存若先变成 th_mine，磁盘还是 th_persisted，
+    // 下一轮的决策又会以磁盘为准，两个身份来回抖动
+    expect(peekThreadId(adapter, 'codex_ses_bindfail')).toBe('th_persisted');
+    expect(
+      new CodexSessionStore({ filePath: storePath }).readBinding('codex_ses_bindfail')?.threadId,
+    ).toBe('th_persisted');
+    // 但事件必须照常上报：用户不该因为「身份没记下来」就看不到这一轮的回答
+    expect(
+      events.some((event) => event.type === 'status' && event.payload.status === 'running'),
+    ).toBe(true);
+    rmSync(`${storePath}.lock`, { force: true });
   });
 });
