@@ -3,6 +3,13 @@ import 'dart:convert';
 const int PROTOCOL_VERSION = 1;
 const String DEFAULT_RELAY_URL = 'wss://nienie-replay.quniv.cn';
 
+/// 用 `error` 事件承载的「会话级提示」code。
+///
+/// 协议里能带自由文本的可见事件只有 `error`，但这类提示**不是执行失败**：
+/// 例如 `THREAD_LOST` 表示原 Codex 线程已不存在、Bridge 已改用新线程继续执行。
+/// 手机端只把它渲染成卡片，不改会话状态、不终止 Thinking 计时、不清等待占位。
+const Set<String> kSessionNoticeCodes = {'THREAD_LOST'};
+
 class PairingQrPayload {
   final int version;
   final String machineId;

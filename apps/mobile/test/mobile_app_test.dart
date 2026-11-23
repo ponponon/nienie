@@ -4321,6 +4321,73 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('THREAD_LOST 提示只落卡片：不置 failed、不终止计时、不清等待占位', (WidgetTester tester) async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await tester.pumpWidget(NienieMobileApp(client: client));
+
+    await tester.tap(find.byKey(const Key('btn-toggle-advanced')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('input-ws-url')), 'ws://127.0.0.1:4100');
+    await tester.enterText(find.byKey(const Key('input-pairing-code')), '123456');
+    await tester.tap(find.byKey(const Key('btn-connect-pair')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Implement OpenCode adapter'));
+    await tester.pumpAndSettle();
+
+    // 发一条 → 产生等待占位，并进入 running
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '继续');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pumpAndSettle();
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'tl_run', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'running'},
+    });
+    await tester.pumpAndSettle();
+    expect(client.statusFor('ses_alpha'), 'running');
+    expect(client.timelineFor('ses_alpha').whereType<PendingResponseItem>(), isNotEmpty);
+
+    // Bridge 检测到原线程不存在：
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'tl_notice', 'sessionId': 'ses_alpha',
+      'sequence': 2, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'error',
+      'payload': {
+        'code': 'THREAD_LOST',
+        'message': '原 Codex 线程 th_gone 已不存在，本次将开启新会话，之前的上下文无法恢复',
+        'retryable': false,
+      },
+    });
+    await tester.pumpAndSettle();
+
+    // 卡片要出现
+    expect(
+      client.timelineFor('ses_alpha').whereType<ErrorCardItem>().where((e) => e.code == 'THREAD_LOST').length,
+      1,
+    );
+    // 但会话状态不能被这一次提示打成 failed
+    expect(client.statusFor('ses_alpha'), isNot('failed'));
+    // 等待占位也不能被清掉（这一轮还在跑）
+    expect(client.timelineFor('ses_alpha').whereType<PendingResponseItem>(), isNotEmpty);
+
+    // 对照：普通错误仍然按失败处理（别把原有语义改坏）
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'tl_real_err', 'sessionId': 'ses_alpha',
+      'sequence': 3, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'error',
+      'payload': {'code': 'RUN_FAILED', 'message': '炸了', 'retryable': true},
+    });
+    await tester.pumpAndSettle();
+    // （占位是否被移除取决于它是否位于时间线末尾，与本次改动无关，这里只断言状态语义）
+    expect(client.statusFor('ses_alpha'), 'failed');
+
+    client.dispose();
+  });
+
 }
 
 /// 测试辅助：可控延迟的 CredentialStore（竞态测试用）

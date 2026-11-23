@@ -1902,13 +1902,20 @@ class MobileBridgeClient extends ChangeNotifier {
         break;
 
       case 'error':
-        // F3：错误事件同步落终态——置失败并终止 Thinking 计时（不依赖后续 status 事件）
-        _sessionStatusBySession[event.sessionId] = 'failed';
-        _runningSinceBySession.remove(event.sessionId);
-        _resolvePending(event.sessionId);
+        // 会话级提示（code=THREAD_LOST 等）不是执行失败：只落一张卡片，
+        // 不改会话状态、不终止 Thinking 计时、不 resolve 等待中的占位——
+        // 这一轮还在正常跑（Bridge 已经改用新线程继续），后续 running/idle 会自己收敛。
+        final errorCode = event.payload['code'] as String? ?? 'ERROR';
+        final isNotice = kSessionNoticeCodes.contains(errorCode);
+        if (!isNotice) {
+          // F3：错误事件同步落终态——置失败并终止 Thinking 计时（不依赖后续 status 事件）
+          _sessionStatusBySession[event.sessionId] = 'failed';
+          _runningSinceBySession.remove(event.sessionId);
+          _resolvePending(event.sessionId);
+        }
         items.add(
           ErrorCardItem(
-            code: event.payload['code'] as String? ?? 'ERROR',
+            code: errorCode,
             message: event.payload['message'] as String? ?? 'Agent error',
             retryable: event.payload['retryable'] as bool? ?? false,
           ),
