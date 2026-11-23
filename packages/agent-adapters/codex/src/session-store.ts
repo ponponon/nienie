@@ -29,7 +29,8 @@ export type CodexStoredSession = {
    *
    * 与 `threadId` 并存而不是删掉 `threadId`：后者是「最后已知身份」，仍要留给诊断与去重；
    * 而 `threadMissing` 是「不许再拿它 resume」的持久标记。合并时它是粘性的，
-   * 只有绑定到新的 threadId 才解除。
+   * 只有**显式**的绑定操作（`bindThreadId` / `confirmThreadPresent`）能解除——
+   * `save()` 永远不清除它，否则另一个实例的旧快照会把这条否定事实覆盖掉。
    */
   threadMissing?: boolean | undefined;
   title: string;
@@ -146,6 +147,9 @@ export class CodexSessionStore {
    * 为什么还要锁：只做「读盘 → 合并 → 写」不足以防并发——两个进程可能读到同一份旧快照，
    * 后写的那个仍会丢掉对方的记录。锁把这段读-改-写变成临界区，配合合并语义，
    * 单文件 + 200 条的规模下足够，不需要换成 SQLite 或事件日志。
+   *
+   * 注意 `save()` **不更改线程身份**（见下面的合并规则）：换绑与解除失效标记必须调用
+   * `bindThreadId` / `confirmThreadPresent`。
    */
   save(sessions: readonly CodexStoredSession[]): void {
     this.withWriteLock(() => {
@@ -164,15 +168,19 @@ export class CodexSessionStore {
       for (const session of sessions) {
         const current = merged.get(session.id);
         if (!current || session.updatedAt >= current.updatedAt) {
-          // threadId 只增不减：另一实例的旧快照（还没有 threadId）即使 updatedAt 更新，
-          // 也不能把已绑定的 Codex 线程抹掉——这是恢复上下文唯一的依据。
-          const keepThreadId = current?.threadId && !session.threadId ? current.threadId : undefined;
-          const threadId = keepThreadId ?? session.threadId;
-          // 换了新线程 = 重新绑定，失效标记自然解除；否则 threadMissing 是**粘性**的：
-          // 它表达「这个 threadId 已被确认不存在」，不能因为另一个实例的旧快照是 undefined
-          // 就被抹掉，否则「死 id 仍被当可恢复」会重新出现。
-          const rebound = Boolean(session.threadId && session.threadId !== current?.threadId);
-          const threadMissing = rebound ? Boolean(session.threadMissing) : current?.threadMissing === true || session.threadMissing === true;
+          // 身份（threadId / threadMissing）**只由磁盘说事**：save() 不做任何推断式换绑。
+          //
+          // 反例（review 抓到的并发漏洞）：A、B 两个 Bridge 持有同一会话的旧快照。
+          // A 检测到旧线程失效 → 换到 th_new 并清掉标记；B 手里还是 th_old 且 updatedAt 更晚，
+          // B 一 save 就被这里判成「threadId 不同 ⇒ rebind」，把磁盘上的 th_new 改回 th_old、
+          // 还把失效标记一并清了。文件锁只保护单次读改写，保护不了「一个实例独占会话生命周期」。
+          //
+          // 因此普通 save() 只做两件事：
+          //   1. 磁盘上没有身份时才接受内存的身份（补空，只增不减，永远不会回退）；
+          //   2. threadMissing 只允许从「没有」升级成 true，不允许被清除。
+          // 换绑与解除失效必须走显式操作（bindThreadId / confirmThreadPresent）。
+          const threadId = current?.threadId ?? session.threadId;
+          const threadMissing = current?.threadMissing === true || session.threadMissing === true;
           merged.set(session.id, {
             ...session,
             ...(threadId ? { threadId } : {}),
@@ -180,26 +188,86 @@ export class CodexSessionStore {
           });
         }
       }
-
-      const payload: CodexSessionStoreFile = {
-        version: STORE_VERSION,
-        sessions: [...merged.values()]
-          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-          .slice(0, this.maxSessions),
-      };
-      mkdirSync(dirname(this.filePath), { recursive: true });
-      const tmpPath = `${this.filePath}.${process.pid}.tmp`;
-      try {
-        // 0600：会话标题与项目路径属于本地隐私信息，不给同机其他用户读
-        writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, {
-          encoding: 'utf8',
-          mode: 0o600,
-        });
-        renameSync(tmpPath, this.filePath);
-      } finally {
-        rmSync(tmpPath, { force: true });
-      }
+      this.writeSessions([...merged.values()]);
     });
+  }
+
+  /**
+   * 显式换绑：把会话绑定到 Codex **真实返回**的 `threadId`（`thread.started`），并解除失效标记。
+   *
+   * 为什么必须是一个专门的操作而不是让 `save()` 看 `threadId` 变了就换绑：另一个实例的旧快照
+   * 里的 `threadId` 也是「不同的」，但那是旧身份。只有本进程亲耳听到 `thread.started` 才算事实。
+   * 在写锁内读-改-写，因此天然是「以磁盘当前状态为准」的换绑，不会被自己的旧快照回退。
+   *
+   * @returns 是否真的改到了记录（文件不存在 / 记录不在盘上时为 false，由调用方的 save 建记录）
+   */
+  bindThreadId(sessionId: string, threadId: string): boolean {
+    return this.updateBinding(sessionId, (record) => {
+      const changed = record.threadId !== threadId || record.threadMissing === true;
+      record.threadId = threadId;
+      delete record.threadMissing;
+      return changed;
+    });
+  }
+
+  /**
+   * 显式确认「同一个线程又存在了」（用户在 Codex 侧重新同步 / 换回了原来的库）。
+   *
+   * 与 `bindThreadId` 的区别：这里**不换身份**，只有磁盘上的 `threadId` 与被确认的 id 相同才解除
+   * 失效标记。这样「另一个实例拿着别的 id 说它存在」不会把失效事实抹掉。
+   *
+   * @returns 是否真的清除了标记
+   */
+  confirmThreadPresent(sessionId: string, threadId: string): boolean {
+    return this.updateBinding(sessionId, (record) => {
+      if (record.threadId !== threadId || record.threadMissing !== true) return false;
+      delete record.threadMissing;
+      return true;
+    });
+  }
+
+  /** 在写锁内对单条记录做一次读-改-写；`mutate` 返回 false 表示无需落盘。 */
+  private updateBinding(
+    sessionId: string,
+    mutate: (record: CodexStoredSession) => boolean,
+  ): boolean {
+    return this.withWriteLock(() => {
+      const existing = this.load();
+      // 与 save 同样的 fail-closed：读不动的文件不猜内容、不覆盖
+      if (existing.status === 'corrupt' || existing.status === 'unsupported') {
+        throw new Error(
+          `codex session store is ${existing.status}; refusing to write ${this.filePath}`,
+        );
+      }
+      const sessions = existing.status === 'ok' ? existing.sessions : [];
+      const record = sessions.find((session) => session.id === sessionId);
+      if (!record) return false;
+      if (!mutate(record)) return false;
+      this.writeSessions(sessions);
+      return true;
+    });
+  }
+
+  /** 原子写：同目录临时文件（0600）→ rename 替换。 */
+  private writeSessions(sessions: readonly CodexStoredSession[]): void {
+    const payload: CodexSessionStoreFile = {
+      version: STORE_VERSION,
+      sessions: [...sessions]
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, this.maxSessions),
+    };
+    mkdirSync(dirname(this.filePath), { recursive: true });
+    const tmpPath = `${this.filePath}.${process.pid}.tmp`;
+    try {
+      // 0600：会话标题与项目路径属于本地隐私信息，不给同机其他用户读
+      writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+      renameSync(tmpPath, this.filePath);
+    } finally {
+      rmSync(tmpPath, { force: true });
+    }
   }
 
   /**

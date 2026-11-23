@@ -305,7 +305,7 @@ describe('CodexSessionStore', () => {
     expect(session).toMatchObject({ threadId: 'th_gone', threadMissing: true, status: 'running' });
   });
 
-  it('绑定到新 threadId 时解除 threadMissing', () => {
+  it('普通 save 不换绑：换了 threadId 的旧快照也改不动磁盘上的身份', () => {
     const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     const store = new CodexSessionStore({ filePath });
 
@@ -319,6 +319,7 @@ describe('CodexSessionStore', () => {
         updatedAt: '2026-11-23T00:00:00.000Z',
       },
     ]);
+    // 直接 save 一个「不同 threadId」的快照：不做隐式 rebind，身份与标记都不动
     store.save([
       {
         ...STORE_BASE,
@@ -330,10 +331,131 @@ describe('CodexSessionStore', () => {
       },
     ]);
 
+    expect(loadOk(store)[0]).toMatchObject({
+      threadId: 'th_gone',
+      threadMissing: true,
+      status: 'running', // 其他字段照常按 updatedAt 合并
+    });
+  });
+
+  it('显式 bindThreadId 才换绑并解除 threadMissing', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_rebind',
+        threadId: 'th_gone',
+        threadMissing: true,
+        status: 'idle',
+        updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+    ]);
+
+    expect(store.bindThreadId('codex_ses_rebind', 'th_new')).toBe(true);
+
     const sessions = loadOk(store);
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.threadId).toBe('th_new');
     expect(sessions[0]?.threadMissing).toBeUndefined();
+  });
+
+  it('bindThreadId 之后，另一个实例的旧快照也没法把身份换回去', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    // 两个实例各自持有同一会话的旧快照
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_race',
+        threadId: 'th_old',
+        status: 'idle',
+        updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+    ]);
+    // A 换到新线程
+    store.bindThreadId('codex_ses_race', 'th_new');
+    // B 的旧快照（th_old）后写，且 updatedAt 更晚 —— 不能把 th_new 改回 th_old
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_race',
+        threadId: 'th_old',
+        status: 'idle',
+        updatedAt: '2026-11-23T09:00:00.000Z',
+      },
+    ]);
+
+    expect(loadOk(store)[0]).toMatchObject({
+      threadId: 'th_new',
+      updatedAt: '2026-11-23T09:00:00.000Z',
+    });
+  });
+
+  it('磁盘上没有身份时 save 接受内存里的 threadId（补空只增不减）', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([{ ...STORE_BASE, id: 'codex_ses_fill', status: 'idle' }]);
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_fill',
+        threadId: 'th_first',
+        runState: 'started',
+        status: 'running',
+        updatedAt: '2026-11-23T00:15:00.000Z',
+      },
+    ]);
+
+    expect(loadOk(store)[0]?.threadId).toBe('th_first');
+  });
+
+  it('confirmThreadPresent 只对同一个 threadId 生效', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_resync',
+        threadId: 'th_sync',
+        threadMissing: true,
+        status: 'idle',
+        updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+    ]);
+
+    // 别的实例拿着另一个 id 说「它存在」——不构成恢复证据
+    expect(store.confirmThreadPresent('codex_ses_resync', 'th_other')).toBe(false);
+    expect(loadOk(store)[0]?.threadMissing).toBe(true);
+
+    // 同一个 id 重新出现才解除
+    expect(store.confirmThreadPresent('codex_ses_resync', 'th_sync')).toBe(true);
+    expect(loadOk(store)[0]?.threadMissing).toBeUndefined();
+    expect(loadOk(store)[0]?.threadId).toBe('th_sync');
+  });
+
+  it('显式绑定操作对读不动的文件同样 fail-closed', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    writeFileSync(filePath, '{ broken', 'utf8');
+    const store = new CodexSessionStore({ filePath });
+
+    expect(() => store.bindThreadId('codex_ses_any', 'th_new')).toThrow(/corrupt/);
+    expect(() => store.confirmThreadPresent('codex_ses_any', 'th_new')).toThrow(/corrupt/);
+    expect(readFileSync(filePath, 'utf8')).toBe('{ broken');
+  });
+
+  it('记录不在盘上时显式绑定返回 false，不凭空造记录', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    expect(store.bindThreadId('codex_ses_absent', 'th_new')).toBe(false);
+    expect(store.confirmThreadPresent('codex_ses_absent', 'th_new')).toBe(false);
+    // 没写任何东西：文件仍然不存在
+    expect(existsSync(filePath)).toBe(false);
   });
 
   it('写锁被活进程持有时拒绝写盘（不无锁覆盖），成功写完不留锁文件', () => {

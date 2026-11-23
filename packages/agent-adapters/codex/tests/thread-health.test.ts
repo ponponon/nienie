@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -325,5 +325,129 @@ describe('Codex 线程恢复的真实性', () => {
     expect(stored.sessions[0]?.threadId).toBe('th_new');
     expect(stored.sessions[0]?.threadMissing).toBeUndefined();
     expect(stored.sessions[0]?.runState).toBe('started');
+  });
+
+  it('线程重新出现时恢复绑定：resume 原 id 并在磁盘上解除失效标记', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    // 之前判过失效，但用户把线程同步回来了（或换回了原来的库）
+    seedThreads(codexHome, ['th_sync']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_resync',
+        threadId: 'th_sync',
+        threadMissing: true,
+        runState: 'started',
+      },
+    ]);
+
+    const calls: string[][] = [];
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => {
+        calls.push(args);
+        return createFakeProcess('th_sync');
+      },
+    });
+    await adapter.loadSession('codex_ses_resync');
+    await adapter.sendMessage('codex_ses_resync', '继续');
+    await adapter.waitForRun('codex_ses_resync');
+
+    // 不能因为一次「确认失效」就永久放弃这个 id：它现在是真的存在
+    expect(calls[0]?.slice(0, 5)).toEqual([
+      'exec',
+      'resume',
+      '--json',
+      '--skip-git-repo-check',
+      'th_sync',
+    ]);
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]?.threadMissing).toBeUndefined();
+    expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toContain('is back');
+  });
+
+  it('已确认失效但复查失败时仍不复用死 id（持久事实优先于一次查询抖动）', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    // 压根没有 state 库 → 查询只能得出 unknown
+    new CodexSessionStore({ filePath: storePath }).save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_degraded',
+        threadId: 'th_dead',
+        threadMissing: true,
+        runState: 'started',
+      },
+    ]);
+
+    const calls: string[][] = [];
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => {
+        calls.push(args);
+        return createFakeProcess('th_degraded_new');
+      },
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    await adapter.loadSession('codex_ses_degraded');
+    await adapter.sendMessage('codex_ses_degraded', '继续');
+    await adapter.waitForRun('codex_ses_degraded');
+
+    expect(calls[0]?.slice(0, 2)).toEqual(['exec', '--json']);
+    // 提示只在「新确认失效」时发一次，这里不重复打扰
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'THREAD_LOST'),
+    ).toHaveLength(0);
+  });
+
+  it('持久化失败时不发 THREAD_LOST（没 spawn 就不许说「将尝试新建线程」）', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_nopersist', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    let spawnCount = 0;
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => {
+        spawnCount += 1;
+        return createFakeProcess('th_never');
+      },
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_nopersist');
+
+    // 另一个活进程正持锁 → starting 落盘必失败
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+
+    await expect(adapter.sendMessage('codex_ses_nopersist', '继续')).rejects.toThrow(/持久化失败/);
+    expect(spawnCount).toBe(0);
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'THREAD_LOST'),
+    ).toHaveLength(0);
+    // 磁盘上的失效标记也不能半途写进去（这一笔整个没落盘）
+    rmSync(`${storePath}.lock`, { force: true });
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]?.threadMissing).toBeUndefined();
   });
 });

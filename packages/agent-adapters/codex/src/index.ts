@@ -728,23 +728,45 @@ export class CodexAdapter implements AgentAdapter {
       // 恢复前先确认 Codex 那边这个线程还在：用户可能在 Codex 里删了线程、换过机器、
       // 库被重置过。拿一个不存在的 id 去 `exec resume` 只会让这一轮莫名其妙失败，
       // 而且用户以为「还能接着聊」。这里明确降级成新会话，并在时间线上留一条提示。
-      if (boundThreadId && !this.codexThreadExists(boundThreadId)) {
-        const lostThreadId = boundThreadId;
-        boundThreadId = undefined;
-        // 关键：**保留** threadId（最后已知身份）但打上失效标记并持久化。
-        // 只解绑不落盘会让 store 的「threadId 只增不减」把死 id 又合并回来，
-        // 于是「spawn 了新线程但还没拿到 id 就崩溃」重启后 threadId 仍在，
-        // 崩溃窗口判定失效、被误降级成 idle（把之前修好的 P1-2 又破坏掉）。
-        record.threadMissing = true;
-        record.runState = 'never_started';
-        this.emitDiagnosticWarning(
-          `codex thread ${lostThreadId} no longer exists; starting a new thread for ${sessionId}`,
-        );
-        this.emitSessionNotice(
-          sessionId,
-          'THREAD_LOST',
-          `原 Codex 线程 ${lostThreadId} 已不存在，本次将开启新会话，之前的上下文无法恢复`,
-        );
+      let lostThreadId: string | undefined;
+      if (boundThreadId) {
+        const probe = this.probeThread(boundThreadId);
+        if (probe === 'exists') {
+          if (record.threadMissing) {
+            // 反向：线程又回来了（用户在 Codex 侧重新同步 / 换回了原来的库）。
+            // 之前的设计「不缓存『不存在』」就是为了这一天，所以这里必须真的恢复绑定，
+            // 否则标记会一直是 true、每次发消息都重复「换新线程」。
+            // 清除必须走显式操作：save() 不允许清除这条否定事实。
+            if (this.clearThreadMissing(sessionId, boundThreadId)) {
+              record.threadMissing = false;
+              this.emitDiagnosticWarning(
+                `codex thread ${boundThreadId} is back; resuming it for ${sessionId}`,
+              );
+            }
+          }
+        } else if (probe === 'missing') {
+          lostThreadId = boundThreadId;
+          boundThreadId = undefined;
+          // 关键：**保留** threadId（最后已知身份）但打上失效标记并持久化。
+          // 只解绑不落盘会让 store 的「threadId 只增不减」把死 id 又合并回来，
+          // 于是「spawn 了新线程但还没拿到 id 就崩溃」重启后 threadId 仍在，
+          // 崩溃窗口判定失效、被误降级成 idle（把之前修好的 P1-2 又破坏掉）。
+          record.threadMissing = true;
+          record.runState = 'never_started';
+          this.emitDiagnosticWarning(
+            `codex thread ${lostThreadId} no longer exists; starting a new thread for ${sessionId}`,
+          );
+        } else if (record.threadMissing) {
+          // 查询失败（unknown）但已经确认过这个 id 不存在：**持久事实优先**，
+          // 一次查询抖动不能把「上下文已经丢了」翻回「还能接着聊」。这里同样不复用死 id，
+          // 只是不重复发提示——那条消息在确认失效时就发过了。
+          boundThreadId = undefined;
+          record.runState = 'never_started';
+          this.emitDiagnosticWarning(
+            `codex thread ${record.threadId} is known-missing but re-check failed; keeping degraded binding for ${sessionId}`,
+          );
+        }
+        // probe === 'unknown' 且没有失效标记 → fail-open：照旧 resume，交给 Codex 自己判断
       }
       const args: string[] = boundThreadId
         ? ['exec', 'resume', '--json', '--skip-git-repo-check', boundThreadId, message]
@@ -764,6 +786,16 @@ export class CodexAdapter implements AgentAdapter {
         record.updatedAt = new Date().toISOString();
         this.emitRunError(sessionId, '会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
         throw new Error('会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
+      }
+
+      // 提示必须发在持久化**成功之后**：落盘失败时根本没 spawn，却先告诉用户「将新建线程」
+      // 就是在讲未经证实的事。文案也只承诺「尝试」——新线程能不能起来要等 spawn 结果。
+      if (lostThreadId) {
+        this.emitSessionNotice(
+          sessionId,
+          'THREAD_LOST',
+          `原 Codex 线程 ${lostThreadId} 已不存在，本次将尝试新建线程继续，之前的上下文无法恢复`,
+        );
       }
 
       proc = this.spawnProcessImpl(args, { cwd: record.projectPath });
@@ -937,18 +969,24 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
-   * 这个 Codex 线程现在还存不存在？
+   * 这个 Codex 线程现在还存不存在？三种答案，不能压成布尔：
    *
-   * 只回答一个问题，而且**查询失败一律按「存在」处理**（fail-open）：宁可照旧 resume 让 Codex
-   * 自己报错，也不能因为一次 sqlite3 抖动就把用户的上下文判死刑。
-   * `verifiedThreads` 缓存「确实存在」的结果，避免每条消息都去查库；
-   * 不存在的结果不缓存（删了线程、同步回来都属于少见但会变的情况）。
+   * - `exists`：查询成功且查到这一行（或本进程亲眼见过 `thread.started`）；
+   * - `missing`：查询成功但没有这一行（用户删了线程 / 换机器 / 库被重置）；
+   * - `unknown`：查不了（state 库不存在、`sqlite3` 缺失、SQL 报错）——**按存在处理**（fail-open），
+   *   宁可照旧 resume 让 Codex 自己报错，也不能因为一次抖动就把用户的上下文判死刑。
+   *
+   * 两个方向的降级动作对答案的要求不对称，所以必须分开：
+   * 「判死刑」（开新线程）只接受确定性的 `missing`；
+   * 「恢复失效标记」要求确凿的 `exists`，`unknown` 不足以证明线程回来了。
+   * `verifiedThreads` 只缓存肯定答案，不缓存 `missing`（线程可能被同步回来）。
    */
-  private codexThreadExists(threadId: string): boolean {
-    if (this.verifiedThreads.has(threadId)) return true;
-    if (!/^[A-Za-z0-9_-]+$/.test(threadId)) return false;
+  private probeThread(threadId: string): 'exists' | 'missing' | 'unknown' {
+    if (this.verifiedThreads.has(threadId)) return 'exists';
+    // 格式非法 = 这个 id 不可能存在于 threads 表，属于确定性结论
+    if (!/^[A-Za-z0-9_-]+$/.test(threadId)) return 'missing';
     const sqlitePath = resolveLatestCodexStateDb(this.codexHome);
-    if (!sqlitePath) return true;
+    if (!sqlitePath) return 'unknown';
     try {
       const out = execFileSync(
         'sqlite3',
@@ -956,16 +994,35 @@ export class CodexAdapter implements AgentAdapter {
         { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] },
       );
       const rows = JSON.parse(out || '[]') as unknown[];
-      if (rows.length === 0) return false;
+      if (rows.length === 0) return 'missing';
       this.verifiedThreads.add(threadId);
-      return true;
+      return 'exists';
     } catch (error) {
       this.emitDiagnosticWarning(
         `codex thread check failed for ${threadId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return true;
+      return 'unknown';
+    }
+  }
+
+  /**
+   * 线程重新出现后恢复绑定：清掉 `threadMissing`，**必须**走 store 的显式操作——
+   * `save()` 不允许清除这条否定事实（否则另一个实例的旧快照会把它覆盖掉）。
+   * 返回是否已在磁盘上确认恢复。
+   */
+  private clearThreadMissing(sessionId: string, threadId: string): boolean {
+    if (!this.sessionStore) return true;
+    try {
+      return this.sessionStore.confirmThreadPresent(sessionId, threadId);
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `codex session thread restore failed for ${sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
     }
   }
 
@@ -1026,8 +1083,21 @@ export class CodexAdapter implements AgentAdapter {
       // 绑定到新线程 = 失效标记解除（旧线程的 id 已经被更可信的新身份取代）
       record.threadMissing = false;
       record.runState = 'started';
-      // 本进程亲眼看到 thread.started：它就是存在的，不必再查库（见 codexThreadExists）
+      // 本进程亲眼看到 thread.started：它就是存在的，不必再查库（见 probeThread）
       this.verifiedThreads.add(threadId);
+      // 身份变更必须走 store 的显式操作：save() 只会「补空」，不会改写磁盘上已有的身份
+      // （否则另一个实例的旧快照能把新线程 id 换回去）。显式换绑成功后再落盘其余字段。
+      if (this.sessionStore) {
+        try {
+          this.sessionStore.bindThreadId(sessionId, threadId);
+        } catch (error) {
+          this.emitDiagnosticWarning(
+            `codex session bind failed for ${sessionId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
       // 真实 threadId 一到就落盘：重启后靠它 resume + 回放历史
       this.persistOwnedSessions();
     }

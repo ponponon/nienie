@@ -989,3 +989,17 @@
 - **`THREAD_LOST` 是提示，不是执行失败**：手机端 `case 'error'` 之前的语义是「错误事件同步落终态」（置 `failed`、终止 Thinking 计时、resolve 等待占位）。`THREAD_LOST` 复用了 `error` 这个唯一能承载自由文本的事件类型，于是「Bridge 已改用新线程继续跑这一轮」被渲染成红色失败卡片，会话被判定失败、计时被掐断——**降级动作比原问题更吓人**。
   - 协议侧不新增事件类型（避免版本兼容负担），改为在 `error.payload.code` 上区分语义：`kSessionNoticeCodes = {'THREAD_LOST'}` 走「只落卡片」分支，不改状态、不终止计时、不清等待占位，让后续 `running` / `idle` 自己收敛；其余 `code` 保持原语义不变。
 - 测试：`thread-health.test.ts` 新增三条（`threadMissing` 落盘、崩溃窗口恢复成 `failed`、绑定新线程后清除标记）、`session-store.test.ts` 新增两条（粘性合并、rebind 解除）、`mobile_app_test.dart` 新增一条（`THREAD_LOST` 只落卡片 + 对照组 `RUN_FAILED` 仍置 `failed`）。三处都做了变异验证（把守卫改坏即变红）。
+
+### 2026-11-23 第三方 review 第六轮：把「换绑」从 save() 里拿出来
+
+第五轮修完之后 review 复查，两个 P1 通过，但抓到 **store 合并里的一条隐式换绑**——它把上一轮刚建立的「失效事实不能被旧快照覆盖」在另一个入口又破坏了：
+
+- **`save()` 不再推断换绑**：之前是「`threadId` 变了 ⇒ 认定 rebind ⇒ 用内存里的身份 + 清掉 `threadMissing`」。但「`threadId` 不同」**不等于**「绑定了新线程」，它也可能只是另一个 Bridge 实例手里的旧身份。真实时序：A 检测到旧线程失效 → 换到 `th_new`；B 拿着 `th_old` 且 `updatedAt` 更晚，B 一 save 就把磁盘上的 `th_new` 改回 `th_old`、还把失效标记清了。文件锁只保护单次读改写，保护不了「一个实例独占会话生命周期」，所以这条推断必须去掉。
+  - 现在 `save()` 对身份只做两件事：磁盘上没有身份时才接受内存的身份（补空，只增不减）；`threadMissing` 只允许从无升级成 `true`，不允许被清除。
+  - 换绑改成 store 的显式操作 `bindThreadId(sessionId, threadId)`：在写锁内以磁盘当前状态为准做读-改-写，只有「本进程亲耳听到 `thread.started`」才调用（`processJsonLine`）。
+  - 恢复失效标记同样是显式操作 `confirmThreadPresent(sessionId, threadId)`：**只对同一个 id 生效**，别的实例拿另一个 id 说「它存在」不构成恢复证据。
+- **线程存在性探测三态化（`probeThread`）**：`exists` / `missing` / `unknown`。两个方向的降级动作对答案的要求不对称——「判死刑」只接受确定性 `missing`（fail-open 仍适用于 `unknown`），「解除失效」要求确凿的 `exists`。
+- **重新同步的语义闭合**：之前一旦确认失效就永久放弃那个 id，即使用户在 Codex 侧把线程同步回来也只会一直开新线程。现在探测到 `exists` 且带失效标记 → 通过 `confirmThreadPresent` 恢复绑定、照旧 `exec resume <原 id>`。
+- **持久事实优先于一次抖动**：`unknown` + 已有失效标记时不复用死 id（仍按降级走），但不重复发提示——「这条上下文已经丢了」只在**新确认失效**时说一次。
+- **提示挪到持久化成功之后**：`THREAD_LOST` 之前发在 `starting` 落盘之前，落盘失败时根本没 spawn，却已经告诉用户「将开启新会话」。现在落盘成功后、spawn 之前才发，文案也从「将开启新会话」改成「将**尝试**新建线程继续」——新线程能不能起来要等 spawn 结果，不能讲未经证实的事。
+- 测试：`session-store.test.ts` 29 → 35 条（普通 save 不换绑 / 显式 bindThreadId 才换绑 / 换绑后旧快照换不回去 / 磁盘无身份时补空 / confirmThreadPresent 只认同一个 id / 显式操作对坏文件 fail-closed / 记录不在盘上返回 false）；`thread-health.test.ts` 6 → 9 条（线程重新出现恢复绑定并 resume 原 id、已确认失效但复查失败仍不复用死 id、持久化失败时不发 THREAD_LOST）。codex 包 65 passed，四条新守卫全部做过变异验证（改坏即变红）。
