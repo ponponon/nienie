@@ -746,6 +746,13 @@ export class CodexAdapter implements AgentAdapter {
           }
         } else if (probe === 'missing') {
           lostThreadId = boundThreadId;
+          // 先落「已确认失效」再谈别的：`save()` 不写这个标记（否则旧快照能把它贴到新线程上），
+          // 所以必须在这里用显式操作写下去，而且要在下面的 `starting` 持久化**之前**完成——
+          // 崩溃窗口的重启判定依赖它（见 restoreStatus）。
+          if (!this.markThreadMissing(sessionId, boundThreadId)) {
+            this.emitRunError(sessionId, '会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
+            throw new Error('会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
+          }
           boundThreadId = undefined;
           // 关键：**保留** threadId（最后已知身份）但打上失效标记并持久化。
           // 只解绑不落盘会让 store 的「threadId 只增不减」把死 id 又合并回来，
@@ -1004,6 +1011,32 @@ export class CodexAdapter implements AgentAdapter {
         }`,
       );
       return 'unknown';
+    }
+  }
+
+  /**
+   * 显式落「这个线程已确认不存在」的标记。
+   *
+   * 为什么不能交给 `persistOwnedSessions()`：`save()` 不接受内存里的 `threadMissing=true`
+   * （另一个实例的旧快照也带着旧线程的 true，会把活着的线程判死），所以标记只能由
+   * store 的显式操作写入。
+   *
+   * 返回 false = 存储不可用，调用方必须中止这一轮：写不进这个标记，
+   * 「spawn 后、thread.started 前崩溃」的重启判定就重新失去依据。
+   */
+  private markThreadMissing(sessionId: string, threadId: string): boolean {
+    if (!this.sessionStore) return true;
+    try {
+      // 返回 false 只表示「无需写」（记录不在盘上 / 已被别人换绑成新线程），不是失败
+      this.sessionStore.markThreadMissing(sessionId, threadId);
+      return true;
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `codex session mark thread missing failed for ${sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
     }
   }
 

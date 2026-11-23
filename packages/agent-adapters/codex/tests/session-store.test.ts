@@ -285,11 +285,12 @@ describe('CodexSessionStore', () => {
         ...STORE_BASE,
         id: 'codex_ses_lost',
         threadId: 'th_gone',
-        threadMissing: true,
         status: 'idle',
         updatedAt: '2026-11-23T00:00:00.000Z',
       },
     ]);
+    // 失效标记只能由显式操作写入（save 不接受内存里的 true）
+    expect(store.markThreadMissing('codex_ses_lost', 'th_gone')).toBe(true);
     // 另一个实例手里是「还不知道线程失效」的旧快照，时间戳更新
     store.save([
       {
@@ -305,6 +306,75 @@ describe('CodexSessionStore', () => {
     expect(session).toMatchObject({ threadId: 'th_gone', threadMissing: true, status: 'running' });
   });
 
+  it('save 不接受内存里的 threadMissing=true（否则旧快照能把活线程判死）', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([{ ...STORE_BASE, id: 'codex_ses_alive', threadId: 'th_alive', status: 'idle' }]);
+    // 旧快照带着「旧线程失效」的事实，但磁盘上已经是新线程：标记不能被贴过来
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_alive',
+        threadId: 'th_old_dead',
+        threadMissing: true,
+        status: 'running',
+        updatedAt: '2026-11-23T09:00:00.000Z',
+      },
+    ]);
+
+    expect(loadOk(store)[0]).toMatchObject({ threadId: 'th_alive', status: 'running' });
+    expect(loadOk(store)[0]?.threadMissing).toBeUndefined();
+  });
+
+  it('bindThreadId 之后，旧快照的 threadMissing=true 不会复活', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([{ ...STORE_BASE, id: 'codex_ses_revive', threadId: 'th_old', status: 'idle' }]);
+    store.markThreadMissing('codex_ses_revive', 'th_old');
+    store.bindThreadId('codex_ses_revive', 'th_new');
+    // B 手里的旧快照：th_old + threadMissing=true，且 updatedAt 更晚
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_revive',
+        threadId: 'th_old',
+        threadMissing: true,
+        status: 'idle',
+        updatedAt: '2026-11-23T09:00:00.000Z',
+      },
+    ]);
+    // 旧快照若还要显式标记失效，也不许贴到新线程上（身份不符）
+    expect(store.markThreadMissing('codex_ses_revive', 'th_old')).toBe(false);
+
+    expect(loadOk(store)[0]).toMatchObject({ threadId: 'th_new' });
+    expect(loadOk(store)[0]?.threadMissing).toBeUndefined();
+  });
+
+  it('confirmThreadPresent 之后，旧快照的 threadMissing=true 不会复活', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([{ ...STORE_BASE, id: 'codex_ses_sync', threadId: 'th_sync', status: 'idle' }]);
+    store.markThreadMissing('codex_ses_sync', 'th_sync');
+    expect(store.confirmThreadPresent('codex_ses_sync', 'th_sync')).toBe(true);
+    // 另一个实例的旧快照仍然带着 true，且 updatedAt 更晚
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_sync',
+        threadId: 'th_sync',
+        threadMissing: true,
+        status: 'running',
+        updatedAt: '2026-11-23T09:00:00.000Z',
+      },
+    ]);
+
+    expect(loadOk(store)[0]?.threadMissing).toBeUndefined();
+    expect(loadOk(store)[0]?.status).toBe('running');
+  });
+
   it('普通 save 不换绑：换了 threadId 的旧快照也改不动磁盘上的身份', () => {
     const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     const store = new CodexSessionStore({ filePath });
@@ -314,11 +384,11 @@ describe('CodexSessionStore', () => {
         ...STORE_BASE,
         id: 'codex_ses_rebind',
         threadId: 'th_gone',
-        threadMissing: true,
         status: 'idle',
         updatedAt: '2026-11-23T00:00:00.000Z',
       },
     ]);
+    store.markThreadMissing('codex_ses_rebind', 'th_gone');
     // 直接 save 一个「不同 threadId」的快照：不做隐式 rebind，身份与标记都不动
     store.save([
       {
@@ -422,11 +492,11 @@ describe('CodexSessionStore', () => {
         ...STORE_BASE,
         id: 'codex_ses_resync',
         threadId: 'th_sync',
-        threadMissing: true,
         status: 'idle',
         updatedAt: '2026-11-23T00:00:00.000Z',
       },
     ]);
+    store.markThreadMissing('codex_ses_resync', 'th_sync');
 
     // 别的实例拿着另一个 id 说「它存在」——不构成恢复证据
     expect(store.confirmThreadPresent('codex_ses_resync', 'th_other')).toBe(false);
@@ -445,6 +515,7 @@ describe('CodexSessionStore', () => {
 
     expect(() => store.bindThreadId('codex_ses_any', 'th_new')).toThrow(/corrupt/);
     expect(() => store.confirmThreadPresent('codex_ses_any', 'th_new')).toThrow(/corrupt/);
+    expect(() => store.markThreadMissing('codex_ses_any', 'th_new')).toThrow(/corrupt/);
     expect(readFileSync(filePath, 'utf8')).toBe('{ broken');
   });
 

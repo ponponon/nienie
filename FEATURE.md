@@ -1003,3 +1003,14 @@
 - **持久事实优先于一次抖动**：`unknown` + 已有失效标记时不复用死 id（仍按降级走），但不重复发提示——「这条上下文已经丢了」只在**新确认失效**时说一次。
 - **提示挪到持久化成功之后**：`THREAD_LOST` 之前发在 `starting` 落盘之前，落盘失败时根本没 spawn，却已经告诉用户「将开启新会话」。现在落盘成功后、spawn 之前才发，文案也从「将开启新会话」改成「将**尝试**新建线程继续」——新线程能不能起来要等 spawn 结果，不能讲未经证实的事。
 - 测试：`session-store.test.ts` 29 → 35 条（普通 save 不换绑 / 显式 bindThreadId 才换绑 / 换绑后旧快照换不回去 / 磁盘无身份时补空 / confirmThreadPresent 只认同一个 id / 显式操作对坏文件 fail-closed / 记录不在盘上返回 false）；`thread-health.test.ts` 6 → 9 条（线程重新出现恢复绑定并 resume 原 id、已确认失效但复查失败仍不复用死 id、持久化失败时不发 THREAD_LOST）。codex 包 65 passed，四条新守卫全部做过变异验证（改坏即变红）。
+
+### 2026-11-23 第三方 review 第七轮：失效标记也必须走显式操作
+
+第六轮把 `threadId` 的隐式换绑去掉了，但 review 指出同一处还剩一半问题：`save()` 仍然接受内存里的 `threadMissing: true`。
+
+- **标记会被贴到新线程上**：A 换绑到 `th_new` 之后，B 的旧快照是 `{th_old, threadMissing: true}`。B 一 save，`threadId` 保住了 `th_new`（第六轮修好的一半），但标记按「或」合并又被写回磁盘——**活着的 `th_new` 被永久判死**。`confirmThreadPresent()` 清掉标记后同样会被旧快照写回来，等于连「重新同步」那条恢复路径也一起破掉。
+- 现在 `save()` 对身份只做「补空 + 保真」：`threadId` 只在磁盘为空时接受内存值；`threadMissing` **只承认磁盘上的值**，内存里的真值一概忽略。
+- 置位改成显式操作 `markThreadMissing(sessionId, threadId)`：只对「磁盘身份就是这个 id」生效（别的实例已换绑时这条失效事实已经过时，直接不写）。
+- adapter 侧在探测到 `missing` 后**先**显式落标记、**再**走 `starting` 持久化闸门；标记写不进去就直接中止这一轮（写不进标记，崩溃窗口的判定依据就没了）。这一点被变异测试证实：去掉这次显式落盘，「新线程起来但 `thread.started` 没回来就崩溃 → 恢复成 failed」立刻退回 `idle`。
+- **顺带修掉自己代码里同类的一个 bug**：`merged.set(id, { ...session, ...(threadMissing ? {...} : {}) })` 里 `...session` 会把内存的 `threadMissing: true` 原样带回去——「上面算出来不该写」和「下面又写进去了」同时成立，规则形同虚设。改成先剥掉 `threadId` / `threadMissing` 再展开。这一条恰好说明为什么「先写断言再看红」不能省：修完第二行规则时测试居然是绿的，正是因为展开把它又写回去了。
+- 测试 `session-store.test.ts` 38 条：新增「save 不接受内存里的 threadMissing」「bindThreadId 之后标记不复活」「confirmThreadPresent 之后标记不复活」；`thread-health.test.ts` 9 条。四处守卫（save 规则、剥字段、markThreadMissing 身份校验、adapter 显式落盘）各自变异变红。

@@ -332,15 +332,11 @@ describe('Codex 线程恢复的真实性', () => {
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     // 之前判过失效，但用户把线程同步回来了（或换回了原来的库）
     seedThreads(codexHome, ['th_sync']);
-    new CodexSessionStore({ filePath: storePath }).save([
-      {
-        ...STORE_BASE,
-        id: 'codex_ses_resync',
-        threadId: 'th_sync',
-        threadMissing: true,
-        runState: 'started',
-      },
+    const seeded = new CodexSessionStore({ filePath: storePath });
+    seeded.save([
+      { ...STORE_BASE, id: 'codex_ses_resync', threadId: 'th_sync', runState: 'started' },
     ]);
+    seeded.markThreadMissing('codex_ses_resync', 'th_sync');
 
     const calls: string[][] = [];
     const adapter = new CodexAdapter({
@@ -375,15 +371,11 @@ describe('Codex 线程恢复的真实性', () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     // 压根没有 state 库 → 查询只能得出 unknown
-    new CodexSessionStore({ filePath: storePath }).save([
-      {
-        ...STORE_BASE,
-        id: 'codex_ses_degraded',
-        threadId: 'th_dead',
-        threadMissing: true,
-        runState: 'started',
-      },
+    const seeded = new CodexSessionStore({ filePath: storePath });
+    seeded.save([
+      { ...STORE_BASE, id: 'codex_ses_degraded', threadId: 'th_dead', runState: 'started' },
     ]);
+    seeded.markThreadMissing('codex_ses_degraded', 'th_dead');
 
     const calls: string[][] = [];
     const adapter = new CodexAdapter({

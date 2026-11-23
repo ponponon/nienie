@@ -28,9 +28,11 @@ export type CodexStoredSession = {
    * 已确认这个 `threadId` 在 Codex 侧不存在（线程被删 / 换机器 / 库被重置）。
    *
    * 与 `threadId` 并存而不是删掉 `threadId`：后者是「最后已知身份」，仍要留给诊断与去重；
-   * 而 `threadMissing` 是「不许再拿它 resume」的持久标记。合并时它是粘性的，
-   * 只有**显式**的绑定操作（`bindThreadId` / `confirmThreadPresent`）能解除——
-   * `save()` 永远不清除它，否则另一个实例的旧快照会把这条否定事实覆盖掉。
+   * 而 `threadMissing` 是「不许再拿它 resume」的持久标记。
+   *
+   * 它的每一次变化都必须走**显式操作**，`save()` 从不改写它：
+   * 置位 `markThreadMissing()`、换绑 `bindThreadId()`、恢复 `confirmThreadPresent()`。
+   * 原因见 `save()` 的合并规则注释（旧快照既能把身份换回去，也能把失效标记贴到新线程上）。
    */
   threadMissing?: boolean | undefined;
   title: string;
@@ -168,21 +170,28 @@ export class CodexSessionStore {
       for (const session of sessions) {
         const current = merged.get(session.id);
         if (!current || session.updatedAt >= current.updatedAt) {
-          // 身份（threadId / threadMissing）**只由磁盘说事**：save() 不做任何推断式换绑。
+          // 身份（threadId / threadMissing）**只由显式操作改写**：save() 不做任何推断。
           //
-          // 反例（review 抓到的并发漏洞）：A、B 两个 Bridge 持有同一会话的旧快照。
-          // A 检测到旧线程失效 → 换到 th_new 并清掉标记；B 手里还是 th_old 且 updatedAt 更晚，
-          // B 一 save 就被这里判成「threadId 不同 ⇒ rebind」，把磁盘上的 th_new 改回 th_old、
-          // 还把失效标记一并清了。文件锁只保护单次读改写，保护不了「一个实例独占会话生命周期」。
+          // 反例一（identity 回退）：A、B 两个 Bridge 持有同一会话的旧快照。A 检测到旧线程失效
+          // → 换到 th_new；B 手里还是 th_old 且 updatedAt 更晚，B 一 save 就把磁盘上的 th_new
+          // 改回 th_old。文件锁只保护单次读改写，保护不了「一个实例独占会话生命周期」。
           //
-          // 因此普通 save() 只做两件事：
-          //   1. 磁盘上没有身份时才接受内存的身份（补空，只增不减，永远不会回退）；
-          //   2. threadMissing 只允许从「没有」升级成 true，不允许被清除。
-          // 换绑与解除失效必须走显式操作（bindThreadId / confirmThreadPresent）。
+          // 反例二（标记复活）：A 换到 th_new 之后，B 的旧快照是 {th_old, threadMissing: true}。
+          // 若这里接受内存里的 true，失效标记就会**附着到新线程**上——新线程明明是活的，
+          // 却被永久判死。confirmThreadPresent() 清掉标记后同样会被旧快照写回来。
+          //
+          // 因此普通 save() 只做一件事：**只补空，只保真**。
+          //   threadId：磁盘没有时才接受内存的（只增不减，永不回退）；
+          //   threadMissing：磁盘已有就是 true，内存里的真值一概忽略。
+          // 换绑 / 置失效 / 解除失效分别走 bindThreadId / markThreadMissing / confirmThreadPresent。
           const threadId = current?.threadId ?? session.threadId;
-          const threadMissing = current?.threadMissing === true || session.threadMissing === true;
+          const threadMissing = current?.threadMissing === true;
+          // 注意：必须先剥掉内存快照里的 threadId / threadMissing 再展开 `...session`。
+          // 否则 `...session` 会把内存里的 `threadMissing: true` 原样带回去——「上面算出来不要写」
+          // 和「下面又写进去了」同时成立，规则形同虚设（这一版就是这么被自己坑了一次）。
+          const { threadId: _memoryThreadId, threadMissing: _memoryThreadMissing, ...rest } = session;
           merged.set(session.id, {
-            ...session,
+            ...rest,
             ...(threadId ? { threadId } : {}),
             ...(threadMissing ? { threadMissing: true } : {}),
           });
@@ -207,6 +216,30 @@ export class CodexSessionStore {
       record.threadId = threadId;
       delete record.threadMissing;
       return changed;
+    });
+  }
+
+  /**
+   * 显式标记「这个线程已被确认不存在」。
+   *
+   * 为什么不能靠 `save()` 把内存里的 `threadMissing=true` 写下去：另一个实例的旧快照里也可能
+   * 带着 `threadMissing=true`（那是**旧线程**的失效事实），一旦被合并到新绑定上，活着的线程
+   * 就被永久判死。所以置位同样需要一个指名道姓的操作。
+   *
+   * 只对「磁盘身份就是这个 id」生效：别的实例已经换绑到新线程时，这条失效事实已经过时，
+   * 直接不写。
+   *
+   * 调用顺序有讲究：必须在 `runState='starting'` 那次关键持久化**之前**完成，
+   * 否则「spawn 后、thread.started 前崩溃」的重启判定会重新失去依据
+   * （`restoreStatus` 需要 `threadMissing` 才能认出「新线程的身份已经丢了」）。
+   *
+   * @returns 是否真的写入了标记
+   */
+  markThreadMissing(sessionId: string, threadId: string): boolean {
+    return this.updateBinding(sessionId, (record) => {
+      if (record.threadId !== threadId || record.threadMissing === true) return false;
+      record.threadMissing = true;
+      return true;
     });
   }
 
