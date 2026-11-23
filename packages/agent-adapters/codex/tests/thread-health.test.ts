@@ -432,6 +432,41 @@ describe('Codex 线程恢复的真实性', () => {
     expect(calls[0]?.slice(0, 2)).toEqual(['exec', '--json']);
   });
 
+  it('过期的 thread.started 不能覆盖别处刚绑好的新身份', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_late', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    // 手动控制 stdout：spawn 之后才决定什么时候吐 thread.started
+    const proc = createSilentProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_late');
+    await adapter.sendMessage('codex_ses_late', '继续');
+
+    // spawn 之后、thread.started 之前，另一个实例把身份换掉了
+    new CodexSessionStore({ filePath: storePath }).bindThreadId('codex_ses_late', 'th_other');
+
+    (proc.stdout as PassThrough).write(
+      `${JSON.stringify({ type: 'thread.started', thread_id: 'th_mine' })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    // 磁盘上的新身份是别人绑的 th_other；这次执行太旧了，不能覆盖它
+    expect(stored.sessions[0]?.threadId).toBe('th_other');
+    expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toContain('stale run');
+  });
+
   it('盘上没有这条记录时写不进失效标记 → 中止这一轮（不 spawn）', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');

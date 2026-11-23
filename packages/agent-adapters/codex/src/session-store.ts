@@ -68,6 +68,20 @@ export type CodexStoredBinding = {
   threadMissing?: boolean | undefined;
 };
 
+/**
+ * 「线程已确认失效 → 开新线程且已落盘 starting」这次状态转换的结果。
+ *
+ * 为什么必须是**一次**原子操作而不是「先标记、再写 starting」两次写：两次写之间锁已释放，
+ * 另一个实例可以插进来（例如它探测到线程又存在了、调用 confirmThreadPresent 清掉标记），
+ * 于是最终磁盘是 `{threadId: th_old, runState: starting, 没有标记}` —— 崩溃后重启，
+ * `restoreStatus` 的两个条件都不成立，会话被错误恢复成 `idle`，恰好把崩溃窗口的保证破掉。
+ */
+export type CodexBeginThreadOutcome =
+  | 'started'
+  | 'already-marked'
+  | 'not-found'
+  | 'identity-mismatch';
+
 /** 隔离结果：可能「文件已经被另一个实例修好了」（ok），此时不该再隔离。 */
 export type CodexSessionStoreQuarantine =
   | { status: 'ok'; sessions: CodexStoredSession[] }
@@ -221,9 +235,18 @@ export class CodexSessionStore {
    * 为什么必须是一个专门的操作而不是让 `save()` 看 `threadId` 变了就换绑：另一个实例的旧快照
    * 里的 `threadId` 也是「不同的」，但那是旧身份。只有本进程亲耳听到 `thread.started` 才算事实。
    * 在写锁内读-改-写，因此天然是「以磁盘当前状态为准」的换绑，不会被自己的旧快照回退。
+   *
+   * `expected` 是 CAS：给出这一轮开始时认识的身份（`oldThreadId: undefined` 表示「当时还没有身份」），
+   * 磁盘已经不是那个身份时就返回 `mismatch` 不写——否则一次**过期的执行**里延迟到达的
+   * `thread.started` 会把另一个实例刚绑好的新身份覆盖掉。
    */
-  bindThreadId(sessionId: string, threadId: string): CodexBindingOutcome {
+  bindThreadId(
+    sessionId: string,
+    threadId: string,
+    expected?: { oldThreadId: string | undefined },
+  ): CodexBindingOutcome {
     return this.updateBinding(sessionId, (record) => {
+      if (expected && record.threadId !== expected.oldThreadId) return 'mismatch';
       if (record.threadId === threadId && record.threadMissing !== true) return 'unchanged';
       record.threadId = threadId;
       delete record.threadMissing;
@@ -251,6 +274,43 @@ export class CodexSessionStore {
       if (record.threadMissing === true) return 'unchanged';
       record.threadMissing = true;
       return 'updated';
+    });
+  }
+
+  /**
+   * 一次原子转换：「这个线程已确认不存在，接下来要开新线程，并且这一轮已经进入 starting」。
+   *
+   * 必须在**同一把写锁**里同时写 `threadMissing = true`、`runState = 'starting'` 和 `updatedAt`：
+   * 分两次写会在中间释放锁，另一个实例可以插进来把标记清掉（例如它刚探测到线程恢复），
+   * 于是磁盘上留下 `{threadId: 旧id, runState: 'starting', 无标记}` —— 崩溃后重启会被恢复成
+   * `idle` 而不是 `failed`，崩溃窗口的保证就没了。
+   *
+   * `expectedThreadId` 是调用方这一轮开始时认识的身份：磁盘上已经变成别的 id 时说明
+   * 另一个实例抢先换绑了，返回 `identity-mismatch` 让调用方重新读盘再判断，
+   * 绝不基于过期身份去开新线程。
+   */
+  beginNewThreadFromMissing(
+    sessionId: string,
+    expectedThreadId: string,
+    updatedAt: string,
+  ): CodexBeginThreadOutcome {
+    return this.withWriteLock(() => {
+      const existing = this.load();
+      if (existing.status === 'corrupt' || existing.status === 'unsupported') {
+        throw new Error(
+          `codex session store is ${existing.status}; refusing to write ${this.filePath}`,
+        );
+      }
+      const sessions = existing.status === 'ok' ? existing.sessions : [];
+      const record = sessions.find((session) => session.id === sessionId);
+      if (!record) return 'not-found';
+      if (record.threadId !== expectedThreadId) return 'identity-mismatch';
+      const alreadyMarked = record.threadMissing === true;
+      record.threadMissing = true;
+      record.runState = 'starting';
+      record.updatedAt = updatedAt;
+      this.writeSessions(sessions);
+      return alreadyMarked ? 'already-marked' : 'started';
     });
   }
 

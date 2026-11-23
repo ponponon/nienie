@@ -562,6 +562,93 @@ describe('CodexSessionStore', () => {
     expect(store.readBinding('codex_ses_read')).toBeUndefined();
   });
 
+  it('beginNewThreadFromMissing 一次原子写完成「标记 + starting」', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_begin',
+        threadId: 'th_old',
+        status: 'idle',
+        runState: 'started',
+        updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+    ]);
+
+    expect(store.beginNewThreadFromMissing('codex_ses_begin', 'th_old', '2026-11-23T01:00:00.000Z'))
+      .toBe('started');
+    expect(loadOk(store)[0]).toMatchObject({
+      threadId: 'th_old', // 最后已知身份保留
+      threadMissing: true,
+      runState: 'starting',
+      updatedAt: '2026-11-23T01:00:00.000Z',
+    });
+    // 再来一次：状态一致，只是「本来就标记过了」
+    expect(store.beginNewThreadFromMissing('codex_ses_begin', 'th_old', '2026-11-23T02:00:00.000Z'))
+      .toBe('already-marked');
+  });
+
+  it('标记与 starting 之间被别人清掉标记，也不会留下「starting 且无标记」', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_race2',
+        threadId: 'th_old',
+        status: 'idle',
+        runState: 'started',
+        updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+    ]);
+
+    // A 标记失效 → B（以为线程回来了）清掉标记 → A 才做「开新线程 + starting」那次原子写。
+    // 因为这次写把标记和 starting 放在同一个临界区，中间没有窗口，最终状态一定是对的。
+    store.markThreadMissing('codex_ses_race2', 'th_old');
+    store.confirmThreadPresent('codex_ses_race2', 'th_old');
+    store.beginNewThreadFromMissing('codex_ses_race2', 'th_old', '2026-11-23T01:00:00.000Z');
+
+    // 这两个字段必须同时在场，否则重启会把「跑一半被打断」误判成 idle
+    expect(loadOk(store)[0]).toMatchObject({ threadMissing: true, runState: 'starting' });
+  });
+
+  it('别人已经换绑时 beginNewThreadFromMissing 拒绝写入（身份过期）', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_stale', threadId: 'th_old', status: 'idle' }]);
+    store.bindThreadId('codex_ses_stale', 'th_new');
+
+    expect(store.beginNewThreadFromMissing('codex_ses_stale', 'th_old', '2026-11-23T01:00:00.000Z'))
+      .toBe('identity-mismatch');
+    expect(loadOk(store)[0]).toMatchObject({ threadId: 'th_new', status: 'idle' });
+    expect(loadOk(store)[0]?.threadMissing).toBeUndefined();
+    expect(loadOk(store)[0]?.runState).toBeUndefined();
+  });
+
+  it('记录不在盘上时 beginNewThreadFromMissing 返回 not-found', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_only', threadId: 'th_x', status: 'idle' }]);
+
+    expect(store.beginNewThreadFromMissing('codex_ses_absent', 'th_x', '2026-11-23T01:00:00.000Z'))
+      .toBe('not-found');
+  });
+
+  it('bindThreadId 的 CAS：身份已经不是期望值时拒绝换绑', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_cas', threadId: 'th_a', status: 'idle' }]);
+
+    expect(store.bindThreadId('codex_ses_cas', 'th_b', { oldThreadId: 'th_a' })).toBe('updated');
+    // 一次过期的执行还拿着 th_a 的期望值来换绑 → 拒绝，磁盘保持 th_b
+    expect(store.bindThreadId('codex_ses_cas', 'th_c', { oldThreadId: 'th_a' })).toBe('mismatch');
+    expect(loadOk(store)[0]?.threadId).toBe('th_b');
+    // 期望「当时还没有身份」但磁盘已经有 → 同样拒绝
+    expect(store.bindThreadId('codex_ses_cas', 'th_d', { oldThreadId: undefined })).toBe('mismatch');
+    expect(loadOk(store)[0]?.threadId).toBe('th_b');
+  });
+
   it('写锁被活进程持有时拒绝写盘（不无锁覆盖），成功写完不留锁文件', () => {
     const dir = makeDir('nienie-store-');
     const filePath = join(dir, 'codex-sessions.json');

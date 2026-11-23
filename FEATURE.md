@@ -1026,3 +1026,16 @@
   - `not-found` / 抛错 → **中止这一轮**（`markThreadMissing` 写不进标记，就等于「spawn 后、`thread.started` 前崩溃」的重启判定失去依据）。
 - **决策依据从内存快照改为磁盘权威绑定**：新增 `store.readBinding()`，每次 `sendMessage` 决策前把磁盘上的 `threadId` / `threadMissing` 同步进内存。之前只看内存：另一个 Bridge 已经判死，本进程还拿着加载时的旧值继续 `resume`；反过来别人确认恢复后，本进程还拿着旧的 `true` 去开新线程。两条都被一条测试覆盖（无 state 库 → 本进程只能探测出 `unknown`，但磁盘上已被别人标失效 → 必须开新线程）。
 - 测试：`session-store.test.ts` 40 条（新增「区分没改 / 没找到」「readBinding 权威身份与坏文件返回 undefined」），`thread-health.test.ts` 11 条（新增「别人已标失效时不得拿内存旧快照 resume」「盘上没有这条记录时中止不 spawn」）。磁盘权威与 `not-found` fail-closed 两处做了变异验证（改坏即变红）；`mismatch → 重读磁盘重判` 这条是防御路径——正常顺序下磁盘身份已经先同步进内存，构造不出稳定的复现，只能在 store 层验证 `mismatch` 本身。
+
+### 2026-11-23 第三方 review 第九轮：「失效标记 + starting」必须是一次原子转换
+
+第八轮之后 review 指出两处 P1 残留，都在「两次加锁写」这个缝里：
+
+- **`markThreadMissing` 的返回值被吞掉**：Adapter 只看异常、不看结果，于是 `mismatch`（别人已换绑）和 `not-found`（盘上没有这条记录）都被当成成功，继续基于过期身份 spawn。第八轮的三态化 + `not-found` fail-closed 已修掉。
+- **`mark` 与 `starting` 之间锁已释放，业务转换不原子**。反例：A 探测到失效 → 标记落盘 → 释放锁；B 这时探测到线程又存在 → `confirmThreadPresent` 清掉标记；A 再写 `starting`（`save()` 只认磁盘上的标记，此时已没有）→ 磁盘留下 `{threadId: 旧id, runState: 'starting', 无标记}`。崩溃后重启，`restoreStatus` 的两个条件都不成立，会话被恢复成 `idle`——崩溃窗口的保证刚好在这一格丢掉。
+  - 新增 `store.beginNewThreadFromMissing(sessionId, expectedThreadId, updatedAt)`：在**同一个临界区**里校验身份 → 写 `threadMissing = true` + `runState = 'starting'` + `updatedAt` → 原子落盘。返回 `started / already-marked / not-found / identity-mismatch`。
+  - Adapter 的决策表：`stale`（identity-mismatch）→ 重读磁盘重判；`failed`（not-found / 抛错）→ 中止这一轮。
+- **`bindThreadId` 加了 CAS**：`expected.oldThreadId` = 这一轮 spawn 之前认识的身份。既然身份只能由显式操作改写，「磁盘已经不是这个身份」就说明另一个实例抢先绑了更新的线程，这次 `thread.started` 属于**过期的执行**，不能覆盖它（返回 `mismatch`，Adapter 保留磁盘身份并写诊断）。
+- **`processJsonLine` 从「先改内存后落盘」改成「先落盘后改内存」**：换绑被拒时只跳过内存更新，不会留下「内存新身份 / 磁盘旧身份」的分裂状态。
+- 测试：`session-store.test.ts` 45 条（新增原子转换四个结果 + 交错反例 + CAS 三条），`thread-health.test.ts` 13 条（新增「过期的 thread.started 不能覆盖别处刚绑好的身份」）。`begin` 只写标记 / 只写 starting / `bind` 忽略 CAS 三处变异，各自变红。
+- **仍未做（review 也标为 P2）**：跨进程的「同一 session 执行租约」。Store 的文件锁只保证一次状态转换原子，挡不住另一个 Bridge 在这次转换之后、真正 spawn 之前也启动同一会话——那需要带 fencing token 的执行租约，写在路线图里，不和写锁混为一谈。
