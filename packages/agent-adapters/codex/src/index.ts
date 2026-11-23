@@ -14,12 +14,18 @@ import {
 } from '@nienie/agent-events';
 import type {
   AgentSession,
+  AgentStatus,
   CanonicalAgentEvent,
   CreateSessionInput,
 } from '@nienie/protocol';
 import { CodexEventNormalizer, type CodexNormalizerOptions } from './normalizer.js';
+import { CodexSessionStore, type CodexStoredSession } from './session-store.js';
 
 export { CodexEventNormalizer, type CodexNormalizerOptions } from './normalizer.js';
+export { CodexSessionStore, type CodexStoredSession, type CodexSessionStoreOptions } from './session-store.js';
+
+/** Nienie 自己创建的会话 id 前缀——只有这类会话需要 Bridge 自己持久化。 */
+const NIENIE_SESSION_ID_PREFIX = 'codex_ses_';
 
 const execFileAsync = promisify(execFile);
 
@@ -60,6 +66,11 @@ export type CodexAdapterOptions = CodexNormalizerOptions & {
   discoverLocalHistory?: boolean | undefined;
   detectVersion?: (() => Promise<string>) | undefined;
   spawnProcess?: ((args: string[], options: CodexSpawnOptions) => CodexProcessHandle) | undefined;
+  /**
+   * Nienie 自建会话的持久化文件路径。不传则只在内存里保留（Bridge 重启即丢）。
+   * 路径应由 Bridge / Electron 注入，适配器不依赖任何 UI 层。
+   */
+  sessionStorePath?: string | undefined;
 };
 
 /**
@@ -116,6 +127,9 @@ export class CodexAdapter implements AgentAdapter {
   /** F5-1：取消意图——启动中被取消时阻止后续 spawn / 确认后立即 kill，但锁仍等真实退出。 */
   private readonly cancelRequested = new Set<string>();
   private readonly discoverLocalHistory: boolean;
+  /** Nienie 自建会话的落盘索引（可选）。 */
+  private readonly sessionStore: CodexSessionStore | undefined;
+  private storedSessionsLoaded = false;
   private readonly loadedHistoryThreads = new Set<string>();
   private historyLoaded = false;
   /** 历史库暂不可用（未安装 / 还没建库）时的低频重试时间点。 */
@@ -146,6 +160,9 @@ export class CodexAdapter implements AgentAdapter {
     this.normalizer = new CodexEventNormalizer(options);
     this.discoverLocalHistory =
       options.discoverLocalHistory ?? (!options.spawnProcess && !options.detectVersion);
+    this.sessionStore = options.sessionStorePath
+      ? new CodexSessionStore({ filePath: options.sessionStorePath })
+      : undefined;
 
     this.detectVersionImpl =
       options.detectVersion ??
@@ -199,6 +216,7 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async listSessions(): Promise<AgentSession[]> {
+    this.ensureStoredSessionsLoaded();
     if (this.discoverLocalHistory && !this.historyLoaded && Date.now() >= this.historyRetryAt) {
       this.applyHistoryLoadResult(this.loadLocalCodexHistory());
     }
@@ -292,10 +310,71 @@ export class CodexAdapter implements AgentAdapter {
     }
   }
 
+  /**
+   * 把 Nienie 自己持久化的会话装回内存（Bridge 重启后恢复）。
+   *
+   * 重启时进程都不在了：`running` / `starting` / `waiting` 一律降级成 `idle`，
+   * 不能假装它还在跑（手机端会一直转圈等一个不存在的进程）。
+   */
+  private ensureStoredSessionsLoaded(): void {
+    if (!this.sessionStore || this.storedSessionsLoaded) return;
+    this.storedSessionsLoaded = true;
+    let stored: CodexStoredSession[];
+    try {
+      stored = this.sessionStore.load();
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `codex session store load failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    for (const session of stored) {
+      if (this.sessions.has(session.id)) continue;
+      this.sessions.set(session.id, {
+        id: session.id,
+        ...(session.threadId ? { threadId: session.threadId } : {}),
+        agentId: 'codex',
+        title: session.title,
+        projectPath: session.projectPath,
+        status: restoreStatus(session.status),
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      });
+    }
+  }
+
+  /** 只落盘 Nienie 自己创建的会话；Codex 桌面端会话由 state 库负责，不做二次存储。 */
+  private persistOwnedSessions(): void {
+    if (!this.sessionStore) return;
+    // 先恢复再写：否则「新建会话 → 立刻落盘」会把上一次运行存的会话整份覆盖掉
+    this.ensureStoredSessionsLoaded();
+    const owned = [...this.sessions.values()].filter((record) =>
+      record.id.startsWith(NIENIE_SESSION_ID_PREFIX),
+    );
+    if (owned.length === 0) return;
+    try {
+      this.sessionStore.save(
+        owned.map((record) => ({
+          id: record.id,
+          ...(record.threadId ? { threadId: record.threadId } : {}),
+          title: record.title,
+          projectPath: record.projectPath,
+          status: record.status,
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        })),
+      );
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `codex session store save failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   async createSession(input: CreateSessionInput = {}): Promise<AgentSession> {
     const nowIso = new Date().toISOString();
     const record: CodexSessionRecord = {
-      id: `codex_ses_${randomUUID()}`,
+      id: `${NIENIE_SESSION_ID_PREFIX}${randomUUID()}`,
       agentId: 'codex',
       title: input.title?.trim() || 'Codex Session',
       projectPath: input.projectPath?.trim() || this.defaultProjectPath,
@@ -304,10 +383,13 @@ export class CodexAdapter implements AgentAdapter {
       updatedAt: nowIso,
     };
     this.sessions.set(record.id, record);
+    // 创建即落盘：手机端点了「新建」就算数，不能等第一轮跑完（Bridge 中途重启也不丢）
+    this.persistOwnedSessions();
     return this.toAgentSession(record);
   }
 
   async loadSession(sessionId: string): Promise<AgentSession> {
+    this.ensureStoredSessionsLoaded();
     if (this.discoverLocalHistory && !this.loadedHistoryThreads.has(sessionId)) {
       // 内存会话的 id 是 Nienie 自己的（codex_ses_*），Codex 历史库按真实的 thread_id 建索引：
       // 查库用 threadId，事件仍归属 sessionId（否则手机端会收到挂错会话的消息）。
@@ -651,6 +733,7 @@ export class CodexAdapter implements AgentAdapter {
         if (!wasCancelled && record!.status !== 'failed' && (code === null || code !== 0)) {
           record!.status = 'failed';
           record!.updatedAt = new Date().toISOString();
+          this.persistOwnedSessions();
           this.emitRunError(
             sessionId,
             code === null ? 'Codex 进程被信号终止' : `Codex 异常退出（退出码 ${code}）`,
@@ -666,6 +749,7 @@ export class CodexAdapter implements AgentAdapter {
             record!.status = 'idle';
           }
           record!.updatedAt = new Date().toISOString();
+          this.persistOwnedSessions();
         }
         resolve();
       });
@@ -716,6 +800,7 @@ export class CodexAdapter implements AgentAdapter {
     if (record && record.status !== 'failed') {
       record.status = 'cancelled';
       record.updatedAt = new Date().toISOString();
+      this.persistOwnedSessions();
     }
     const proc = this.activeProcesses.get(sessionId);
     if (proc) {
@@ -724,6 +809,7 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async dispose(): Promise<void> {
+    this.persistOwnedSessions();
     for (const proc of this.activeProcesses.values()) {
       proc.kill();
     }
@@ -753,8 +839,10 @@ export class CodexAdapter implements AgentAdapter {
 
     const events = this.normalizer.normalize(sessionId, parsed);
     const threadId = this.normalizer.getThreadId(sessionId);
-    if (threadId) {
+    if (threadId && record.threadId !== threadId) {
       record.threadId = threadId;
+      // 真实 threadId 一到就落盘：重启后靠它 resume + 回放历史
+      this.persistOwnedSessions();
     }
 
     for (const event of events) {
@@ -780,6 +868,11 @@ export class CodexAdapter implements AgentAdapter {
       updatedAt: record.updatedAt,
     };
   }
+}
+
+/** 重启后把「进程态」状态降级成 idle——进程已经不存在，不能伪装还在跑。 */
+function restoreStatus(status: AgentStatus): AgentStatus {
+  return status === 'running' || status === 'starting' || status === 'waiting' ? 'idle' : status;
 }
 
 function resolveCodexBinary(explicit?: string): string {

@@ -24,7 +24,17 @@ const controller = new DesktopBridgeController({
   host,
   port: bridgePort,
   includeExtendedAgents: true,
-  ...(isSmoke ? {} : { preferencesFilePath: resolve(process.cwd(), '.nienie/desktop-preferences.json') }),
+  // 无 GUI 模式同样要持久化 Nienie 自建会话，否则 headless 重启后手机端会话全丢；smoke 不写盘
+  ...(isSmoke
+    ? {}
+    : {
+        codex: {
+          sessionStorePath:
+            process.env.NIENIE_CODEX_SESSION_STORE ??
+            resolve(process.cwd(), '.nienie/codex-sessions.json'),
+        },
+        preferencesFilePath: resolve(process.cwd(), '.nienie/desktop-preferences.json'),
+      }),
 });
 
 const state = await controller.startBridge();

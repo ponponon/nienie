@@ -891,3 +891,15 @@
 - 数据目录遵循 Codex 约定：`codexHome` 选项 → `CODEX_HOME` 环境变量 → `~/.codex`。
 - 移除 `title === 'Guardian review'` 的硬编码过滤：标题不是身份，用户自己命名的同名会话不该被吃掉；guardian 线程已由来源白名单挡住。
 - 测试补到 10 个用例：损坏的 state 库写诊断且不影响内存会话、`CODEX_HOME` 生效、历史库晚于首次打开才出现时会重新回放、用户自建 `Guardian review` 会话正常展示。
+
+### 2026-11-23 Codex 自建会话持久化（sessions.json，跨 Bridge 重启恢复）
+
+修完历史列表过滤后暴露的缺口：Nienie 用 `codex exec` 建的会话在 Codex 侧是 `exec` 来源，
+被官方列表过滤 → Bridge 重启后手机端这些会话全丢。
+
+- 新增 `packages/agent-adapters/codex/src/session-store.ts`（`CodexSessionStore`）：`{ version: 1, sessions: [...] }`，只存 Nienie 自建会话（`id` 是 `codex_ses_*`、`threadId` 可为空），按 `updatedAt` 倒序截断到 200 条；**同目录临时文件 + `rename` 原子替换**，权限 `0600`；文件损坏 / 版本不认识一律返回空数组，不阻断会话列表。
+- 适配器新增 `sessionStorePath` 选项（不传即纯内存，测试与旧行为不受影响）；`createSession` 创建即落盘，`thread.started` 拿到真实 `threadId`、`cancel`、进程退出、`dispose` 时都会更新。落盘前先恢复旧记录，避免「新建会话 → 立刻写盘」把历史整份覆盖。
+- `listSessions()` / `loadSession()` 入口先恢复落盘会话；重启后 `running` / `starting` / `waiting` 一律降级 `idle`（进程已不存在，不伪造运行中），`failed` / `cancelled` 等终态保留。
+- 与 Codex 历史库合并规则：按 `threadId` 去重，**保留 Nienie 自己的 `sessionId`**，同一个线程不会既显示 `codex_ses_*` 又显示 Codex 的线程 id；历史消息仍走 `thread_history` 回放。
+- 注入路径：Electron 主进程 `codex.sessionStorePath = <userData>/.nienie/codex-sessions.json`（开发态是仓库内 `.nienie/`），无 GUI 的 `apps/desktop/src/cli.ts` 同路径同逻辑，可用 `NIENIE_CODEX_SESSION_STORE` 覆盖。
+- 测试（`tests/session-store.test.ts`，7 个用例）：store 原子写与无 `.tmp` 残留、倒序截断、损坏/版本不认识容错；适配器「重启后恢复 + 按 threadId 去重 + 能回放历史」「重启降级 running/waiting 但保留 failed」「新建即写盘不覆盖旧记录」「不传路径时行为不变」。

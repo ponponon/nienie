@@ -49,6 +49,12 @@ async function bootstrap() {
     host,
     port: bridgePort,
     includeExtendedAgents: true,
+    // Codex 桌面端看不到 Nienie 用 `codex exec` 建的会话（exec 来源被官方列表过滤），
+    // 必须由 Bridge 自己落盘，否则重启后手机端的会话全丢。
+    codex: {
+      sessionStorePath:
+        process.env.NIENIE_CODEX_SESSION_STORE ?? join(dataDir, 'codex-sessions.json'),
+    },
     preferencesFilePath: join(dataDir, 'desktop-preferences.json'),
   });
 
