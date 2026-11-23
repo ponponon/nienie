@@ -729,8 +729,14 @@ describe('CodexAdapter 会话持久化', () => {
       // 第 1 次：隔离被跳过，绝不能把「已加载」写死
       await adapter.listSessions();
       expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toMatch(/quarantine skipped/);
+      expect(await adapter.listSessions()).toEqual([]);
 
-      // 锁还在时即便过了退避窗口也仍然读不到（证明它是真的在重试，不是假成功）
+      // 第 2 次：**锁仍然在**，只是过了退避窗口。仍然不能加载成功——
+      // 否则就是把「重试了一次」误当成「加载完成」，会话照样丢。
+      vi.advanceTimersByTime(1_100);
+      expect(await adapter.listSessions()).toEqual([]);
+
+      // 第 3 次：锁释放 + 文件被修好，再等一个退避周期（失败两次后已涨到 2s）
       rmSync(lockPath);
       writeFileSync(
         storePath,
@@ -749,7 +755,7 @@ describe('CodexAdapter 会话持久化', () => {
         }),
         'utf8',
       );
-      vi.advanceTimersByTime(1_100);
+      vi.advanceTimersByTime(2_100);
 
       const sessions = await adapter.listSessions();
       expect(sessions.map((session) => session.id)).toEqual(['codex_ses_late']);
