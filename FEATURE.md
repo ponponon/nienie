@@ -903,3 +903,14 @@
 - 与 Codex 历史库合并规则：按 `threadId` 去重，**保留 Nienie 自己的 `sessionId`**，同一个线程不会既显示 `codex_ses_*` 又显示 Codex 的线程 id；历史消息仍走 `thread_history` 回放。
 - 注入路径：Electron 主进程 `codex.sessionStorePath = <userData>/.nienie/codex-sessions.json`（开发态是仓库内 `.nienie/`），无 GUI 的 `apps/desktop/src/cli.ts` 同路径同逻辑，可用 `NIENIE_CODEX_SESSION_STORE` 覆盖。
 - 测试（`tests/session-store.test.ts`，7 个用例）：store 原子写与无 `.tmp` 残留、倒序截断、损坏/版本不认识容错；适配器「重启后恢复 + 按 threadId 去重 + 能回放历史」「重启降级 running/waiting 但保留 failed」「新建即写盘不覆盖旧记录」「不传路径时行为不变」。
+
+### 2026-11-23 会话存储的健壮性补强（读失败四态 / 崩溃窗口 / 版本保护）
+
+`sessions.json` 上线后，代码 review 指出三个会真正丢数据或骗人的缺口，逐条修掉：
+
+- **读取四态化**：`CodexSessionStore.load()` 返回 `{status: 'ok' | 'missing' | 'corrupt' | 'unsupported'}`，不再用「空数组」表达「读不了」。`corrupt` / `unsupported` 时先 `quarantine()` 把原文件改名成 `<file>.<reason>.<ts>.bak`（内容一字不动，留给用户或新版本回捞），再写诊断，最后才允许用空索引重建。`missing` 是正常首次启动，不隔离、不告警。
+- **版本保护**：`version !== 1` 视为 `unsupported` 而非「坏数据」。老版本 Nienie 打开新版本写的文件时，不会用自己的 1 条会话把对方 200 条覆盖掉。
+- **崩溃窗口**：新增 `runState: 'never_started' | 'starting' | 'started'`。`sendMessage()` 在 **spawn 之前**就写 `starting` 并落盘，`thread.started` 到达后写 `started` + 真实 `threadId`；spawn 确认失败则退回 `never_started`（Codex 侧确实没起过进程）并把终态一并落盘。重启恢复时 `starting && 无 threadId` 判定为**中断** → `failed`（其余 `running`/`starting`/`waiting` 仍降级 `idle`）。这样「消息可能已经发出去、但 threadId 还没落盘就断电」不会被伪装成一条从未运行过的空会话，用户再发消息也不会悄悄换一个新线程、丢掉原上下文。
+- **单写者约束的软实现**：`save()` 写盘前先读盘按 `id` 合并（`updatedAt` 较新的赢），再原子替换。两个 Bridge 实例（或 Electron 主进程 + CLI 调试）同时写，不会互相清空；`maxSessions` 截断在合并之后做，不会把别人刚写的会话挤掉。
+- **兼容首版文件**：缺 `runState` 时按 `threadId ? 'started' : 'never_started'` 推断，老文件不用迁移。
+- 测试（`tests/session-store.test.ts`，13 个用例）新增：四态区分（missing / corrupt / 两处 corrupt 形态 / unsupported）、坏文件隔离后可读回原内容、`version: 99` 不被本版本覆盖且留下 `quarantined` 诊断、`starting` 无 `threadId` 恢复为 `failed`（对照：`starting` 有 `threadId` 仍降级 `idle`）、spawn 失败落盘 `failed` + `never_started`、跨实例 save 合并不互相覆盖。隔离与中断识别两处都做了变异测试校验（改坏即变红）。

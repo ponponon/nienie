@@ -19,7 +19,11 @@ import type {
   CreateSessionInput,
 } from '@nienie/protocol';
 import { CodexEventNormalizer, type CodexNormalizerOptions } from './normalizer.js';
-import { CodexSessionStore, type CodexStoredSession } from './session-store.js';
+import {
+  CodexSessionStore,
+  type CodexSessionRunState,
+  type CodexStoredSession,
+} from './session-store.js';
 
 export { CodexEventNormalizer, type CodexNormalizerOptions } from './normalizer.js';
 export { CodexSessionStore, type CodexStoredSession, type CodexSessionStoreOptions } from './session-store.js';
@@ -100,6 +104,8 @@ const CODEX_INTERACTIVE_SOURCES_SQL = `source IN (${CODEX_INTERACTIVE_SOURCES.ma
 
 type CodexSessionRecord = AgentSession & {
   threadId?: string | undefined;
+  /** 执行阶段：用于识别「spawn 后、threadId 落盘前」的崩溃窗口。 */
+  runState?: CodexSessionRunState | undefined;
 };
 
 export class CodexAdapter implements AgentAdapter {
@@ -319,24 +325,39 @@ export class CodexAdapter implements AgentAdapter {
   private ensureStoredSessionsLoaded(): void {
     if (!this.sessionStore || this.storedSessionsLoaded) return;
     this.storedSessionsLoaded = true;
-    let stored: CodexStoredSession[];
+    let result: ReturnType<CodexSessionStore['load']>;
     try {
-      stored = this.sessionStore.load();
+      result = this.sessionStore.load();
     } catch (error) {
       this.emitDiagnosticWarning(
         `codex session store load failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       return;
     }
-    for (const session of stored) {
-      if (this.sessions.has(session.id)) continue;
+    if (result.status === 'missing') return;
+    if (result.status !== 'ok') {
+      // 读不动 / 版本不认识：先隔离原文件，再允许用新的空索引重建，
+      // 绝不能当成「空列表」直接覆盖（否则会把用户或新版本的数据抹掉）
+      const backupPath = this.sessionStore.quarantine(result.status);
+      this.emitDiagnosticWarning(
+        `codex session store ${result.status}; old file quarantined${backupPath ? ` to ${backupPath}` : ' (quarantine failed)'}`,
+      );
+      return;
+    }
+    for (const session of result.sessions) {
+      // 只认自己创建的会话，防止被篡改的文件塞入任意 threadId
+      if (!session.id.startsWith(NIENIE_SESSION_ID_PREFIX) || this.sessions.has(session.id)) {
+        continue;
+      }
+      const runState = restoreRunState(session);
       this.sessions.set(session.id, {
         id: session.id,
         ...(session.threadId ? { threadId: session.threadId } : {}),
         agentId: 'codex',
         title: session.title,
         projectPath: session.projectPath,
-        status: restoreStatus(session.status),
+        status: restoreStatus(session.status, runState, session.threadId),
+        runState,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
       });
@@ -360,6 +381,7 @@ export class CodexAdapter implements AgentAdapter {
           title: record.title,
           projectPath: record.projectPath,
           status: record.status,
+          ...(record.runState ? { runState: record.runState } : {}),
           createdAt: record.createdAt,
           updatedAt: record.updatedAt,
         })),
@@ -379,6 +401,7 @@ export class CodexAdapter implements AgentAdapter {
       title: input.title?.trim() || 'Codex Session',
       projectPath: input.projectPath?.trim() || this.defaultProjectPath,
       status: 'idle',
+      runState: 'never_started',
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -641,6 +664,14 @@ export class CodexAdapter implements AgentAdapter {
         ? ['exec', 'resume', '--json', '--skip-git-repo-check', boundThreadId, message]
         : ['exec', '--json', '--skip-git-repo-check', '-C', record.projectPath, message];
 
+      // P1-2 崩溃窗口：spawn 之前就先落盘 starting。否则进程起来、Codex 还没吐出
+      // thread.started 时电脑断电/崩溃，重启后这条记录仍是 never_started + 无 threadId，
+      // 会被当成「没跑过」的空会话——用户以为消息没发出去，其实 Codex 侧可能已经在跑。
+      // 先写 starting，重启时才能识别为「被中断」（见 restoreStatus）。
+      record.runState = 'starting';
+      record.updatedAt = new Date().toISOString();
+      this.persistOwnedSessions();
+
       proc = this.spawnProcessImpl(args, { cwd: record.projectPath });
       this.activeProcesses.set(sessionId, proc);
     } catch (error) {
@@ -672,7 +703,12 @@ export class CodexAdapter implements AgentAdapter {
       // F3-2：spawn 确认前被取消 → cancelled；否则 failed
       const wasCancelled = this.cancelRequested.delete(sessionId);
       record.status = wasCancelled ? 'cancelled' : 'failed';
+      // spawn 都没成功 = Codex 那一侧没起过进程，runState 要退回去；
+      // 停在 'starting' 会让下次启动把它当成「跑一半被打断」，语义不对。
+      if (!record.threadId) record.runState = 'never_started';
       record.updatedAt = new Date().toISOString();
+      // 内存里改了终态就必须落盘，否则重启后磁盘上还是 starting/running
+      this.persistOwnedSessions();
       if (!wasCancelled) {
         this.emitRunError(
           sessionId,
@@ -841,6 +877,7 @@ export class CodexAdapter implements AgentAdapter {
     const threadId = this.normalizer.getThreadId(sessionId);
     if (threadId && record.threadId !== threadId) {
       record.threadId = threadId;
+      record.runState = 'started';
       // 真实 threadId 一到就落盘：重启后靠它 resume + 回放历史
       this.persistOwnedSessions();
     }
@@ -870,8 +907,24 @@ export class CodexAdapter implements AgentAdapter {
   }
 }
 
-/** 重启后把「进程态」状态降级成 idle——进程已经不存在，不能伪装还在跑。 */
-function restoreStatus(status: AgentStatus): AgentStatus {
+/** 首版文件没有 runState：按是否有 threadId 推断。 */
+function restoreRunState(session: CodexStoredSession): CodexSessionRunState {
+  return session.runState ?? (session.threadId ? 'started' : 'never_started');
+}
+
+/**
+ * 重启后恢复状态：
+ * - `running` / `starting` / `waiting` 一律降级 `idle`（进程已经不存在，不能伪装还在跑）；
+ * - 但「spawn 已发生、threadId 还没落盘」的会话是**中断**：再发消息会新建一个线程、
+ *   悄悄丢掉原上下文，所以标记为 `failed`，让手机端看到「这一轮被打断了」。
+ */
+function restoreStatus(
+  status: AgentStatus,
+  runState: CodexSessionRunState,
+  threadId: string | undefined,
+): AgentStatus {
+  const interrupted = runState === 'starting' && !threadId;
+  if (interrupted) return 'failed';
   return status === 'running' || status === 'starting' || status === 'waiting' ? 'idle' : status;
 }
 

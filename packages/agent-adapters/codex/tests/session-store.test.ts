@@ -1,12 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CanonicalAgentEvent } from '@nienie/protocol';
-import { CodexAdapter, CodexSessionStore, type CodexProcessHandle } from '../src/index.js';
+import {
+  CodexAdapter,
+  CodexSessionStore,
+  type CodexProcessHandle,
+  type CodexStoredSession,
+} from '../src/index.js';
 
 const PROJECT = '/workspace/nienie';
 const createdDirs: string[] = [];
@@ -22,6 +27,13 @@ function makeDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   createdDirs.push(dir);
   return dir;
+}
+
+/** `load()` 现在是四态联合：测试里绝大多数场景只关心「读到了什么」。 */
+function loadOk(store: CodexSessionStore): CodexStoredSession[] {
+  const result = store.load();
+  if (result.status !== 'ok') throw new Error(`expected status ok, got ${result.status}`);
+  return result.sessions;
 }
 
 function sqlText(value: string): string {
@@ -84,6 +96,13 @@ function textDeltas(events: CanonicalAgentEvent[]): string[] {
     .map((event) => (event.payload as { delta?: string }).delta ?? '');
 }
 
+const STORE_BASE = {
+  title: '手机端任务',
+  projectPath: PROJECT,
+  createdAt: '2026-11-23T00:00:00.000Z',
+  updatedAt: '2026-11-23T00:10:00.000Z',
+};
+
 describe('CodexSessionStore', () => {
   it('写入即可读回，且不留临时文件', () => {
     const dir = makeDir('nienie-store-');
@@ -97,14 +116,20 @@ describe('CodexSessionStore', () => {
         title: '手机端任务',
         projectPath: PROJECT,
         status: 'idle',
+        runState: 'started',
         createdAt: '2026-11-23T00:00:00.000Z',
         updatedAt: '2026-11-23T00:10:00.000Z',
       },
     ]);
 
-    const loaded = store.load();
+    const loaded = loadOk(store);
     expect(loaded).toHaveLength(1);
-    expect(loaded[0]).toMatchObject({ id: 'codex_ses_a', threadId: 'th_a', title: '手机端任务' });
+    expect(loaded[0]).toMatchObject({
+      id: 'codex_ses_a',
+      threadId: 'th_a',
+      title: '手机端任务',
+      runState: 'started',
+    });
     // 原子写：目录里只应有最终文件，没有 .tmp 残留
     expect(readdirSync(join(dir, 'nested'))).toEqual(['codex-sessions.json']);
     expect(JSON.parse(readFileSync(filePath, 'utf8')).version).toBe(1);
@@ -126,18 +151,58 @@ describe('CodexSessionStore', () => {
       { ...base, id: 'codex_ses_mid', title: 'mid', updatedAt: '2026-11-10T00:00:00.000Z' },
     ]);
 
-    expect(store.load().map((session) => session.id)).toEqual(['codex_ses_new', 'codex_ses_mid']);
+    expect(loadOk(store).map((session) => session.id)).toEqual([
+      'codex_ses_new',
+      'codex_ses_mid',
+    ]);
   });
 
-  it('文件损坏或版本不认识时返回空数组而不是抛错', () => {
+  it('文件不存在 / 损坏 / 版本不认识时区分状态，而不是一律返回空数组', () => {
     const dir = makeDir('nienie-store-');
     const filePath = join(dir, 'codex-sessions.json');
 
+    // 没有文件 ≠ 文件坏了：前者是正常首次启动，后者必须隔离
+    expect(new CodexSessionStore({ filePath }).load()).toEqual({ status: 'missing' });
+
     writeFileSync(filePath, 'not json at all', 'utf8');
-    expect(new CodexSessionStore({ filePath }).load()).toEqual([]);
+    expect(new CodexSessionStore({ filePath }).load()).toEqual({ status: 'corrupt' });
 
     writeFileSync(filePath, JSON.stringify({ version: 99, sessions: [{ id: 'x' }] }), 'utf8');
-    expect(new CodexSessionStore({ filePath }).load()).toEqual([]);
+    expect(new CodexSessionStore({ filePath }).load()).toEqual({ status: 'unsupported' });
+
+    writeFileSync(filePath, JSON.stringify({ version: 1, sessions: 'nope' }), 'utf8');
+    expect(new CodexSessionStore({ filePath }).load()).toEqual({ status: 'corrupt' });
+  });
+
+  it('坏文件可以被隔离改名，原内容不丢', () => {
+    const dir = makeDir('nienie-store-');
+    const filePath = join(dir, 'codex-sessions.json');
+    const original = JSON.stringify({ version: 99, sessions: [{ id: 'future' }] });
+    writeFileSync(filePath, original, 'utf8');
+
+    const backupPath = new CodexSessionStore({ filePath }).quarantine('unsupported');
+
+    expect(backupPath).toBeDefined();
+    expect(existsSync(filePath)).toBe(false);
+    // 备份文件名要能看出原因，方便用户手工找回
+    expect(backupPath).toContain('.unsupported.');
+    expect(backupPath!.endsWith('.bak')).toBe(true);
+    expect(readFileSync(backupPath!, 'utf8')).toBe(original);
+  });
+
+  it('save 先读盘合并：不会覆盖另一个实例已写的会话', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const first = new CodexSessionStore({ filePath });
+    const second = new CodexSessionStore({ filePath });
+
+    first.save([{ ...STORE_BASE, id: 'codex_ses_a', title: 'A', status: 'idle' }]);
+    // 第二个实例没读过盘就直接写：合并后 A 必须还在
+    second.save([{ ...STORE_BASE, id: 'codex_ses_b', title: 'B', status: 'idle' }]);
+
+    expect(loadOk(first).map((session) => session.id).sort()).toEqual([
+      'codex_ses_a',
+      'codex_ses_b',
+    ]);
   });
 });
 
@@ -160,6 +225,13 @@ describe('CodexAdapter 会话持久化', () => {
     await first.sendMessage(created.id, '你好');
     await first.waitForRun(created.id);
     await first.dispose();
+
+    // 跑过一轮后落盘的应该是 started + threadId（不是 starting 卡住）
+    const persisted = loadOk(new CodexSessionStore({ filePath: storePath }));
+    expect(persisted.find((s) => s.id === created.id)).toMatchObject({
+      threadId: 'th_real_123',
+      runState: 'started',
+    });
 
     // 第二次启动：新实例只靠落盘索引恢复
     const second = new CodexAdapter({
@@ -188,17 +260,24 @@ describe('CodexAdapter 会话持久化', () => {
   it('重启时 running / waiting 一律降级 idle，不伪造运行中', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
-    const store = new CodexSessionStore({ filePath: storePath });
-    const base = {
-      title: '手机端任务',
-      projectPath: PROJECT,
-      createdAt: '2026-11-23T00:00:00.000Z',
-      updatedAt: '2026-11-23T00:10:00.000Z',
-    };
-    store.save([
-      { ...base, id: 'codex_ses_running', title: '运行中', status: 'running' },
-      { ...base, id: 'codex_ses_waiting', title: '等待中', status: 'waiting' },
-      { ...base, id: 'codex_ses_failed', title: '失败过', status: 'failed' },
+    new CodexSessionStore({ filePath: storePath }).save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_running',
+        title: '运行中',
+        status: 'running',
+        threadId: 'th_running',
+        runState: 'started',
+      },
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_waiting',
+        title: '等待中',
+        status: 'waiting',
+        threadId: 'th_waiting',
+        runState: 'started',
+      },
+      { ...STORE_BASE, id: 'codex_ses_failed', title: '失败过', status: 'failed' },
     ]);
 
     const adapter = new CodexAdapter({
@@ -214,6 +293,85 @@ describe('CodexAdapter 会话持久化', () => {
     expect(statuses.get('codex_ses_waiting')).toBe('idle');
     // 终态保留，不要把一个真失败洗成 idle
     expect(statuses.get('codex_ses_failed')).toBe('failed');
+  });
+
+  it('spawn 后崩溃（starting 且没有 threadId）恢复为 failed，不伪装成空会话', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([
+      // 崩溃窗口：已经 spawn 了 Codex，但 thread.started 还没落盘
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_interrupted',
+        title: '被打断的一轮',
+        status: 'running',
+        runState: 'starting',
+      },
+      // 对照组：resume 场景本来就有 threadId，不算法「中断」
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_resumed',
+        title: '能续上的会话',
+        status: 'running',
+        threadId: 'th_resumed',
+        runState: 'starting',
+      },
+    ]);
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+    const statuses = new Map(
+      (await adapter.listSessions()).map((session) => [session.id, session.status]),
+    );
+
+    expect(statuses.get('codex_ses_interrupted')).toBe('failed');
+    expect(statuses.get('codex_ses_resumed')).toBe('idle');
+  });
+
+  it('版本不认识的文件会被隔离，新版本数据不被本版本覆盖', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const dir = makeDir('nienie-store-');
+    const storePath = join(dir, 'codex-sessions.json');
+    const futureContent = JSON.stringify({ version: 99, sessions: [{ id: 'codex_ses_future' }] });
+    writeFileSync(storePath, futureContent, 'utf8');
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+    const created = await adapter.createSession({ title: '本版本新建', projectPath: PROJECT });
+
+    // 原文件被改名隔离，内容一字未改
+    const backups = readdirSync(dir).filter((name) => name.endsWith('.bak'));
+    expect(backups).toHaveLength(1);
+    expect(readFileSync(join(dir, backups[0]!), 'utf8')).toBe(futureContent);
+    // 新文件里只有本版本自己的会话
+    expect(loadOk(new CodexSessionStore({ filePath: storePath })).map((s) => s.id)).toEqual([
+      created.id,
+    ]);
+    // 不能静默：必须留下诊断，否则用户永远不知道自己的会话去哪了
+    expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toContain('quarantined');
+  });
+
+  it('损坏的文件同样隔离后重建，不抛错', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const dir = makeDir('nienie-store-');
+    const storePath = join(dir, 'codex-sessions.json');
+    writeFileSync(storePath, '{"version":1,"sessions":[', 'utf8');
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+
+    // 读坏了也不能让 listSessions 整个失败
+    await expect(adapter.listSessions()).resolves.toEqual([]);
+    expect(readdirSync(dir).some((name) => name.includes('.corrupt.'))).toBe(true);
   });
 
   it('新建会话立刻落盘时不会覆盖此前已存的会话', async () => {
@@ -239,9 +397,57 @@ describe('CodexAdapter 会话持久化', () => {
     // 没有先调 listSessions，直接新建：落盘前必须先恢复旧记录
     const created = await adapter.createSession({ title: '本次新建', projectPath: PROJECT });
 
-    const stored = new CodexSessionStore({ filePath: storePath }).load().map((session) => session.id);
+    const stored = loadOk(new CodexSessionStore({ filePath: storePath })).map((s) => s.id);
     expect(stored).toContain('codex_ses_prev');
     expect(stored).toContain(created.id);
+  });
+
+  it('spawn 失败要把 failed 落盘，且 runState 退回 never_started', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      // spawn 都没成功：Codex 那一侧没有任何进程/线程被创建
+      spawnProcess: () => {
+        const emitter = new EventEmitter();
+        setTimeout(() => emitter.emit('error', new Error('spawn ENOENT')), 0);
+        return {
+          stdout: new PassThrough(),
+          stderr: new PassThrough(),
+          kill() {
+            emitter.emit('exit', 130);
+          },
+          onExit(listener) {
+            emitter.once('exit', listener);
+          },
+          onError(listener) {
+            emitter.once('error', listener);
+          },
+          onSpawn() {},
+        } satisfies CodexProcessHandle;
+      },
+    });
+
+    const created = await adapter.createSession({ title: '起不来的会话', projectPath: PROJECT });
+    await expect(adapter.sendMessage(created.id, '你好')).rejects.toThrow(/ENOENT/);
+
+    // 磁盘上必须是终态：不能停在 starting，否则重启后被当成「跑一半被打断」
+    expect(loadOk(new CodexSessionStore({ filePath: storePath })).find((s) => s.id === created.id))
+      .toMatchObject({ status: 'failed', runState: 'never_started' });
+
+    // 重启后状态就是 failed（不是 idle），手机端能看出这一轮没跑起来
+    const restarted = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+    const statuses = new Map(
+      (await restarted.listSessions()).map((session) => [session.id, session.status]),
+    );
+    expect(statuses.get(created.id)).toBe('failed');
   });
 
   it('没有 sessionStorePath 时行为不变（不落盘、也不读历史文件）', async () => {
