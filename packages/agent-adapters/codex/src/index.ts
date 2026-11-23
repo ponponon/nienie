@@ -142,6 +142,8 @@ export class CodexAdapter implements AgentAdapter {
   private storedSessionsRetryAt = 0;
   private storedSessionsRetryDelayMs = 1_000;
   private readonly loadedHistoryThreads = new Set<string>();
+  /** 已确认存在于 Codex state 库的 threadId（避免每条消息都查一次 sqlite）。 */
+  private readonly verifiedThreads = new Set<string>();
   private historyLoaded = false;
   /** 历史库暂不可用（未安装 / 还没建库）时的低频重试时间点。 */
   private historyRetryAt = 0;
@@ -718,7 +720,26 @@ export class CodexAdapter implements AgentAdapter {
         throw new Error('会话任务已取消');
       }
 
-      const boundThreadId = record.threadId ?? this.normalizer.getThreadId(sessionId);
+      let boundThreadId = record.threadId ?? this.normalizer.getThreadId(sessionId);
+      // 恢复前先确认 Codex 那边这个线程还在：用户可能在 Codex 里删了线程、换过机器、
+      // 库被重置过。拿一个不存在的 id 去 `exec resume` 只会让这一轮莫名其妙失败，
+      // 而且用户以为「还能接着聊」。这里明确降级成新会话，并在时间线上留一条提示。
+      if (boundThreadId && !this.codexThreadExists(boundThreadId)) {
+        const lostThreadId = boundThreadId;
+        boundThreadId = undefined;
+        // 内存里解绑，避免下一轮继续拿这个死 id 去 resume（磁盘上的绑定由 store 的
+        // 「threadId 只增不减」保留，下次启动会再检测一次，不会误删用户数据）
+        delete record.threadId;
+        record.runState = 'never_started';
+        this.emitDiagnosticWarning(
+          `codex thread ${lostThreadId} no longer exists; starting a new thread for ${sessionId}`,
+        );
+        this.emitSessionNotice(
+          sessionId,
+          'THREAD_LOST',
+          `原 Codex 线程 ${lostThreadId} 已不存在，本次将开启新会话，之前的上下文无法恢复`,
+        );
+      }
       const args: string[] = boundThreadId
         ? ['exec', 'resume', '--json', '--skip-git-repo-check', boundThreadId, message]
         : ['exec', '--json', '--skip-git-repo-check', '-C', record.projectPath, message];
@@ -862,8 +883,7 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /** R3-3/F3：运行失败必须反馈到手机——错误事件 + 终态 status 事件（终止 Thinking 计时/置失败）。 */
-  private emitRunError(sessionId: string, message: string): void {
-    const base = {
+  private emitRunError(sessionId: string, message: string): void {    const base = {
       streamEpoch: this.normalizer.streamEpoch,
       agentId: 'codex' as const,
       sessionId,
@@ -889,9 +909,62 @@ export class CodexAdapter implements AgentAdapter {
     );
   }
 
+  /**
+   * 会话级提示：**不改状态**，只让手机端在时间线里看到一条卡片。
+   *
+   * 目前协议里唯一能承载自由文本的可见事件就是 `error`（手机端渲染成 ErrorCard），
+   * 所以这里复用它，但用独立 code（THREAD_LOST 等）标明它不是执行失败。
+   */
+  private emitSessionNotice(sessionId: string, code: string, message: string): void {
+    this.emitEvent(
+      createCanonicalEvent({
+        streamEpoch: this.normalizer.streamEpoch,
+        agentId: 'codex',
+        sessionId,
+        timestamp: new Date().toISOString(),
+        eventId: `notice:${sessionId}:${code}:${Date.now()}`,
+        sequence: this.normalizer.nextSequence(sessionId),
+        type: 'error',
+        payload: { code, message, retryable: false },
+      }),
+    );
+  }
+
+  /**
+   * 这个 Codex 线程现在还存不存在？
+   *
+   * 只回答一个问题，而且**查询失败一律按「存在」处理**（fail-open）：宁可照旧 resume 让 Codex
+   * 自己报错，也不能因为一次 sqlite3 抖动就把用户的上下文判死刑。
+   * `verifiedThreads` 缓存「确实存在」的结果，避免每条消息都去查库；
+   * 不存在的结果不缓存（删了线程、同步回来都属于少见但会变的情况）。
+   */
+  private codexThreadExists(threadId: string): boolean {
+    if (this.verifiedThreads.has(threadId)) return true;
+    if (!/^[A-Za-z0-9_-]+$/.test(threadId)) return false;
+    const sqlitePath = resolveLatestCodexStateDb(this.codexHome);
+    if (!sqlitePath) return true;
+    try {
+      const out = execFileSync(
+        'sqlite3',
+        ['-json', sqlitePath, `SELECT id FROM threads WHERE id = '${threadId}' LIMIT 1;`],
+        { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      const rows = JSON.parse(out || '[]') as unknown[];
+      if (rows.length === 0) return false;
+      this.verifiedThreads.add(threadId);
+      return true;
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `codex thread check failed for ${threadId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return true;
+    }
+  }
+
   /// 等待某会话当前运行完成（测试与诊断用；sendMessage 本身不等待执行）
-  async waitForRun(sessionId: string): Promise<void> {
-    await this.runs.get(sessionId);
+  async waitForRun(sessionId: string): Promise<void> {    await this.runs.get(sessionId);
   }
 
   async cancel(sessionId: string): Promise<void> {
@@ -945,6 +1018,8 @@ export class CodexAdapter implements AgentAdapter {
     if (threadId && record.threadId !== threadId) {
       record.threadId = threadId;
       record.runState = 'started';
+      // 本进程亲眼看到 thread.started：它就是存在的，不必再查库（见 codexThreadExists）
+      this.verifiedThreads.add(threadId);
       // 真实 threadId 一到就落盘：重启后靠它 resume + 回放历史
       this.persistOwnedSessions();
     }

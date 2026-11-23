@@ -965,3 +965,15 @@
 - **锁元数据严格校验**：`tryReadLockHolder()` 现在要求 `pid` 是正安全整数、`at` 是有限数字且能转成有效日期、`token` 非空。之前只检查 `typeof`，`{"at":1e999}` 会被 `JSON.parse` 成 `Infinity`，随后 `describeLock()` 里的 `new Date(Infinity).toISOString()` 抛 `RangeError`，把真正的「锁被占用」信息整个覆盖掉——报错本身变成了事故。
 - **释放只删能确认是自己的锁**：`releaseLock()` 从 `if (holder && token 不符) return` 改为 `if (!holder || token 不符) return`。内容读不出来说明不是我们写的（我们的锁先写完整内容再 `link`，不存在半成品），删下去可能删到别人的锁。
 - 测试（`session-store.test.ts` 27 个用例）新增：首次加载失败后自动重试并恢复会话（含「锁还在时仍读不到」的反向断言）、五种非法锁元数据都降级成「内容不可读」而不是抛 RangeError、落盘文件权限 `0600`、非 `codex_ses_*` 记录不被当成可恢复会话、六种状态的重启降级规则全覆盖。加载标记与元数据校验两处做了变异测试（改坏即变红）。
+
+### 2026-11-23 Codex 线程恢复的真实性（resume 断言 + 线程消失降级）
+
+封板后 P2 第二批，两条都在「恢复」这件事本身：
+
+- **真的会 resume 吗**：补了真实参数断言（`tests/thread-health.test.ts`）：落盘一条绑定 `th_persisted` 的会话 → 新实例 `loadSession` → `sendMessage` → 断言 spawn 参数是 `['exec','resume','--json','--skip-git-repo-check','th_persisted', 消息]`。之前只验证了「内部状态正确」，没验证过真的续到原线程上。
+- **线程不存在时不装可恢复**：`sendMessage` 在构造参数前查一次 Codex state 库（`SELECT id FROM threads WHERE id = ?`）。线程不存在（用户在 Codex 删了线程 / 换机器 / 库被重置）就不再拿死 id 去 `exec resume`——那只会让这一轮莫名失败、用户却以为还能接着聊——而是解绑内存里的 `threadId`、开新线程，并且：
+  - 发一条 `code` 为 `THREAD_LOST` 的事件（复用协议里唯一能承载自由文本的 `error` 类型，手机端渲染成卡片），文案明确说「原线程已不存在，本次开启新会话，之前上下文无法恢复」；
+  - 写一条诊断（`/diagnostics` 可见）。
+- **查询失败 fail-open**：state 库不存在、`sqlite3` 缺失、查询报错一律按「线程存在」处理，照旧 resume 交给 Codex 判断——不能因为一次抖动就判用户上下文死刑。只有「查询成功且确实没有这一行」才降级。
+- **不做多余查询**：本进程亲眼见过 `thread.started` 的 threadId 直接标记为已确认（`verifiedThreads` 缓存），只有从磁盘恢复出来的绑定才会查一次；查不到的结果不缓存（线程可能被同步回来）。
+- **archived 的处理**：Nienie 自建会话在 Codex 侧被归档后数据仍在、仍可 resume，所以在 Nienie 里**不隐藏**——用户是在 Codex 里整理列表，不等于要在手机端删掉这个会话。Codex 原生会话的归档过滤仍由历史查询的 `archived = 0` 负责。
