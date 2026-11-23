@@ -401,6 +401,85 @@ describe('Codex 线程恢复的真实性', () => {
     ).toHaveLength(0);
   });
 
+  it('别人已经把线程标成失效时，本实例不能拿内存旧快照继续 resume', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    // 没有 state 库 → 本实例自己只能探测出 unknown（fail-open 会去 resume）
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_stale', threadId: 'th_dead', runState: 'started' },
+    ]);
+
+    const calls: string[][] = [];
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => {
+        calls.push(args);
+        return createFakeProcess('th_stale_new');
+      },
+    });
+    // 本实例加载时磁盘上还没有失效标记
+    await adapter.loadSession('codex_ses_stale');
+
+    // 另一个 Bridge 确认了线程失效并落盘
+    new CodexSessionStore({ filePath: storePath }).markThreadMissing('codex_ses_stale', 'th_dead');
+
+    await adapter.sendMessage('codex_ses_stale', '继续');
+    await adapter.waitForRun('codex_ses_stale');
+
+    // 决策必须依据磁盘上的权威绑定，而不是加载时的内存快照
+    expect(calls[0]?.slice(0, 2)).toEqual(['exec', '--json']);
+  });
+
+  it('盘上没有这条记录时写不进失效标记 → 中止这一轮（不 spawn）', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_vanished', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    let spawnCount = 0;
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => {
+        spawnCount += 1;
+        return createFakeProcess('th_never');
+      },
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_vanished');
+
+    // 另一个实例把这份索引整份重写了（会话被 maxSessions 截断掉 / 换了机器）。
+    // 直接写文件而不是 save()：save() 是按 id 合并的，删不掉记录。
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          {
+            ...STORE_BASE,
+            id: 'codex_ses_someone_else',
+            title: '别人的会话',
+            threadId: 'th_x',
+            runState: 'started',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    await expect(adapter.sendMessage('codex_ses_vanished', '继续')).rejects.toThrow(/持久化失败/);
+    expect(spawnCount).toBe(0);
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'THREAD_LOST'),
+    ).toHaveLength(0);
+  });
+
   it('持久化失败时不发 THREAD_LOST（没 spawn 就不许说「将尝试新建线程」）', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');

@@ -54,6 +54,20 @@ export type CodexSessionStoreLoad =
   | { status: 'corrupt' }
   | { status: 'unsupported' };
 
+/**
+ * 显式身份操作的结果。
+ *
+ * 为什么不能压成布尔：`false` 同时表示「记录不在盘上」和「本来就不用改」，
+ * 调用方没法区分「没找到」和「已经是对的」——前者要建记录，后者可以放心继续。
+ */
+export type CodexBindingOutcome = 'updated' | 'unchanged' | 'mismatch' | 'not-found';
+
+/** 磁盘上的权威绑定（只含身份字段）。 */
+export type CodexStoredBinding = {
+  threadId?: string | undefined;
+  threadMissing?: boolean | undefined;
+};
+
 /** 隔离结果：可能「文件已经被另一个实例修好了」（ok），此时不该再隔离。 */
 export type CodexSessionStoreQuarantine =
   | { status: 'ok'; sessions: CodexStoredSession[] }
@@ -207,15 +221,13 @@ export class CodexSessionStore {
    * 为什么必须是一个专门的操作而不是让 `save()` 看 `threadId` 变了就换绑：另一个实例的旧快照
    * 里的 `threadId` 也是「不同的」，但那是旧身份。只有本进程亲耳听到 `thread.started` 才算事实。
    * 在写锁内读-改-写，因此天然是「以磁盘当前状态为准」的换绑，不会被自己的旧快照回退。
-   *
-   * @returns 是否真的改到了记录（文件不存在 / 记录不在盘上时为 false，由调用方的 save 建记录）
    */
-  bindThreadId(sessionId: string, threadId: string): boolean {
+  bindThreadId(sessionId: string, threadId: string): CodexBindingOutcome {
     return this.updateBinding(sessionId, (record) => {
-      const changed = record.threadId !== threadId || record.threadMissing === true;
+      if (record.threadId === threadId && record.threadMissing !== true) return 'unchanged';
       record.threadId = threadId;
       delete record.threadMissing;
-      return changed;
+      return 'updated';
     });
   }
 
@@ -227,19 +239,18 @@ export class CodexSessionStore {
    * 就被永久判死。所以置位同样需要一个指名道姓的操作。
    *
    * 只对「磁盘身份就是这个 id」生效：别的实例已经换绑到新线程时，这条失效事实已经过时，
-   * 直接不写。
+   * 返回 `mismatch` 不写入。
    *
    * 调用顺序有讲究：必须在 `runState='starting'` 那次关键持久化**之前**完成，
    * 否则「spawn 后、thread.started 前崩溃」的重启判定会重新失去依据
    * （`restoreStatus` 需要 `threadMissing` 才能认出「新线程的身份已经丢了」）。
-   *
-   * @returns 是否真的写入了标记
    */
-  markThreadMissing(sessionId: string, threadId: string): boolean {
+  markThreadMissing(sessionId: string, threadId: string): CodexBindingOutcome {
     return this.updateBinding(sessionId, (record) => {
-      if (record.threadId !== threadId || record.threadMissing === true) return false;
+      if (record.threadId !== threadId) return 'mismatch';
+      if (record.threadMissing === true) return 'unchanged';
       record.threadMissing = true;
-      return true;
+      return 'updated';
     });
   }
 
@@ -248,22 +259,44 @@ export class CodexSessionStore {
    *
    * 与 `bindThreadId` 的区别：这里**不换身份**，只有磁盘上的 `threadId` 与被确认的 id 相同才解除
    * 失效标记。这样「另一个实例拿着别的 id 说它存在」不会把失效事实抹掉。
-   *
-   * @returns 是否真的清除了标记
    */
-  confirmThreadPresent(sessionId: string, threadId: string): boolean {
+  confirmThreadPresent(sessionId: string, threadId: string): CodexBindingOutcome {
     return this.updateBinding(sessionId, (record) => {
-      if (record.threadId !== threadId || record.threadMissing !== true) return false;
+      if (record.threadId !== threadId) return 'mismatch';
+      if (record.threadMissing !== true) return 'unchanged';
       delete record.threadMissing;
-      return true;
+      return 'updated';
     });
   }
 
-  /** 在写锁内对单条记录做一次读-改-写；`mutate` 返回 false 表示无需落盘。 */
+  /**
+   * 读磁盘上的权威绑定（多实例场景下「要不要 resume」的决策依据）。
+   *
+   * 内存快照可能比磁盘旧：另一个 Bridge 已经把线程标成失效（或反过来确认恢复），
+   * 本进程却还拿着加载时的旧值。只凭内存判断会出现「别人已经判死，这里还在 resume」。
+   * 读不动文件时返回 undefined，调用方退回内存快照（fail-open）。
+   */
+  readBinding(sessionId: string): CodexStoredBinding | undefined {
+    let loaded: CodexSessionStoreLoad;
+    try {
+      loaded = this.load();
+    } catch {
+      return undefined;
+    }
+    if (loaded.status !== 'ok') return undefined;
+    const record = loaded.sessions.find((session) => session.id === sessionId);
+    if (!record) return undefined;
+    return {
+      ...(record.threadId ? { threadId: record.threadId } : {}),
+      ...(record.threadMissing ? { threadMissing: true } : {}),
+    };
+  }
+
+  /** 在写锁内对单条记录做一次读-改-写；`mutate` 返回 `unchanged` 时不落盘。 */
   private updateBinding(
     sessionId: string,
-    mutate: (record: CodexStoredSession) => boolean,
-  ): boolean {
+    mutate: (record: CodexStoredSession) => CodexBindingOutcome,
+  ): CodexBindingOutcome {
     return this.withWriteLock(() => {
       const existing = this.load();
       // 与 save 同样的 fail-closed：读不动的文件不猜内容、不覆盖
@@ -274,10 +307,10 @@ export class CodexSessionStore {
       }
       const sessions = existing.status === 'ok' ? existing.sessions : [];
       const record = sessions.find((session) => session.id === sessionId);
-      if (!record) return false;
-      if (!mutate(record)) return false;
-      this.writeSessions(sessions);
-      return true;
+      if (!record) return 'not-found';
+      const outcome = mutate(record);
+      if (outcome === 'updated') this.writeSessions(sessions);
+      return outcome;
     });
   }
 

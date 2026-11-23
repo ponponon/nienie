@@ -22,6 +22,7 @@ import { CodexEventNormalizer, type CodexNormalizerOptions } from './normalizer.
 import {
   CodexSessionStore,
   type CodexSessionRunState,
+  type CodexStoredBinding,
   type CodexStoredSession,
 } from './session-store.js';
 
@@ -724,57 +725,9 @@ export class CodexAdapter implements AgentAdapter {
         throw new Error('会话任务已取消');
       }
 
-      let boundThreadId = record.threadId ?? this.normalizer.getThreadId(sessionId);
-      // 恢复前先确认 Codex 那边这个线程还在：用户可能在 Codex 里删了线程、换过机器、
-      // 库被重置过。拿一个不存在的 id 去 `exec resume` 只会让这一轮莫名其妙失败，
-      // 而且用户以为「还能接着聊」。这里明确降级成新会话，并在时间线上留一条提示。
-      let lostThreadId: string | undefined;
-      if (boundThreadId) {
-        const probe = this.probeThread(boundThreadId);
-        if (probe === 'exists') {
-          if (record.threadMissing) {
-            // 反向：线程又回来了（用户在 Codex 侧重新同步 / 换回了原来的库）。
-            // 之前的设计「不缓存『不存在』」就是为了这一天，所以这里必须真的恢复绑定，
-            // 否则标记会一直是 true、每次发消息都重复「换新线程」。
-            // 清除必须走显式操作：save() 不允许清除这条否定事实。
-            if (this.clearThreadMissing(sessionId, boundThreadId)) {
-              record.threadMissing = false;
-              this.emitDiagnosticWarning(
-                `codex thread ${boundThreadId} is back; resuming it for ${sessionId}`,
-              );
-            }
-          }
-        } else if (probe === 'missing') {
-          lostThreadId = boundThreadId;
-          // 先落「已确认失效」再谈别的：`save()` 不写这个标记（否则旧快照能把它贴到新线程上），
-          // 所以必须在这里用显式操作写下去，而且要在下面的 `starting` 持久化**之前**完成——
-          // 崩溃窗口的重启判定依赖它（见 restoreStatus）。
-          if (!this.markThreadMissing(sessionId, boundThreadId)) {
-            this.emitRunError(sessionId, '会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
-            throw new Error('会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
-          }
-          boundThreadId = undefined;
-          // 关键：**保留** threadId（最后已知身份）但打上失效标记并持久化。
-          // 只解绑不落盘会让 store 的「threadId 只增不减」把死 id 又合并回来，
-          // 于是「spawn 了新线程但还没拿到 id 就崩溃」重启后 threadId 仍在，
-          // 崩溃窗口判定失效、被误降级成 idle（把之前修好的 P1-2 又破坏掉）。
-          record.threadMissing = true;
-          record.runState = 'never_started';
-          this.emitDiagnosticWarning(
-            `codex thread ${lostThreadId} no longer exists; starting a new thread for ${sessionId}`,
-          );
-        } else if (record.threadMissing) {
-          // 查询失败（unknown）但已经确认过这个 id 不存在：**持久事实优先**，
-          // 一次查询抖动不能把「上下文已经丢了」翻回「还能接着聊」。这里同样不复用死 id，
-          // 只是不重复发提示——那条消息在确认失效时就发过了。
-          boundThreadId = undefined;
-          record.runState = 'never_started';
-          this.emitDiagnosticWarning(
-            `codex thread ${record.threadId} is known-missing but re-check failed; keeping degraded binding for ${sessionId}`,
-          );
-        }
-        // probe === 'unknown' 且没有失效标记 → fail-open：照旧 resume，交给 Codex 自己判断
-      }
+      // 这一轮到底 resume 旧线程还是开新线程，全部由 resolveThreadBinding 决定。
+      // 它每次都以**磁盘上的权威绑定**为准，不用加载时那份可能已经过期的内存快照。
+      const { boundThreadId, lostThreadId } = this.resolveThreadBinding(sessionId, record);
       const args: string[] = boundThreadId
         ? ['exec', 'resume', '--json', '--skip-git-repo-check', boundThreadId, message]
         : ['exec', '--json', '--skip-git-repo-check', '-C', record.projectPath, message];
@@ -1015,47 +968,157 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
+   * 决定这一轮到底 resume 旧线程还是开新线程。
+   *
+   * 每次都以**磁盘上的权威绑定**为准（另一个 Bridge 可能刚把它改过），并且对 store 显式操作的
+   * 三态结果分别处理：
+   * - `updated` / `unchanged` → 继续；
+   * - `mismatch` → 别人已经换绑，本实例的决策过时：重读磁盘、重新判断（最多两轮）；
+   * - `not-found` / 抛错 → 这一轮中止（写不进身份，就别 spawn：崩溃窗口的重启判定会失去依据）。
+   *
+   * @returns 要 resume 的 threadId（没有就开新线程）+ 需要提示用户的失效线程 id
+   */
+  private resolveThreadBinding(
+    sessionId: string,
+    record: CodexSessionRecord,
+  ): { boundThreadId: string | undefined; lostThreadId: string | undefined } {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      this.syncBindingFromDisk(sessionId, record);
+      const knownMissing = record.threadMissing === true;
+      const bound = record.threadId ?? this.normalizer.getThreadId(sessionId);
+      if (!bound) {
+        record.runState = knownMissing ? 'never_started' : record.runState;
+        return { boundThreadId: undefined, lostThreadId: undefined };
+      }
+
+      const probe = this.probeThread(bound);
+      if (probe === 'exists') {
+        if (!knownMissing) return { boundThreadId: bound, lostThreadId: undefined };
+        // 反向：线程又回来了（用户在 Codex 侧重新同步 / 换回了原来的库）。
+        // 之前的设计「不缓存『不存在』」就是为了这一天，所以这里必须真的恢复绑定，
+        // 否则标记会一直是 true、每次发消息都重复「换新线程」。
+        const restored = this.clearThreadMissing(sessionId, bound);
+        if (restored === 'stale') continue; // 别人先改了身份：重读磁盘再来
+        if (restored === 'ok') {
+          record.threadMissing = false;
+          this.emitDiagnosticWarning(`codex thread ${bound} is back; resuming it for ${sessionId}`);
+        }
+        return { boundThreadId: bound, lostThreadId: undefined };
+      }
+
+      if (probe === 'missing') {
+        // 先落「已确认失效」：`save()` 不写这个标记（否则旧快照能把它贴到新线程上），
+        // 而且必须在下面的 `starting` 持久化**之前**完成——崩溃窗口的重启判定依赖它。
+        const marked = this.markThreadMissing(sessionId, bound);
+        if (marked === 'stale') continue; // 别人已经换绑：这条失效事实过时了，重读磁盘
+        if (marked === 'failed') {
+          this.emitRunError(sessionId, '会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
+          throw new Error('会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
+        }
+        // 保留 threadId 作「最后已知身份」，只打标记：删掉它会被 store 的「只增不减」合并回来
+        record.threadMissing = true;
+        record.runState = 'never_started';
+        this.emitDiagnosticWarning(
+          `codex thread ${bound} no longer exists; starting a new thread for ${sessionId}`,
+        );
+        return { boundThreadId: undefined, lostThreadId: bound };
+      }
+
+      // unknown：查询失败。已确认失效过 → 持久事实优先，别再拿死 id 去试（但不重复发提示）；
+      // 没失效过 → fail-open 照旧 resume，交给 Codex 自己判断。
+      if (knownMissing) {
+        record.runState = 'never_started';
+        this.emitDiagnosticWarning(
+          `codex thread ${bound} is known-missing but re-check failed; keeping degraded binding for ${sessionId}`,
+        );
+        return { boundThreadId: undefined, lostThreadId: undefined };
+      }
+      return { boundThreadId: bound, lostThreadId: undefined };
+    }
+
+    // 两轮都被人抢先改身份：保守开新线程（拿一份两边都在变的身份去 resume 风险更大）
+    this.emitDiagnosticWarning(
+      `codex session binding kept changing for ${sessionId}; falling back to a new thread`,
+    );
+    return { boundThreadId: undefined, lostThreadId: undefined };
+  }
+
+  /** 把磁盘上的权威身份同步进内存记录（磁盘身份只由显式操作改写，不会比内存旧）。 */
+  private syncBindingFromDisk(sessionId: string, record: CodexSessionRecord): void {
+    const diskBinding = this.readDiskBinding(sessionId);
+    if (!diskBinding) return;
+    if (diskBinding.threadId && diskBinding.threadId !== record.threadId) {
+      record.threadId = diskBinding.threadId;
+    }
+    if (diskBinding.threadMissing === true) record.threadMissing = true;
+  }
+
+  /**
    * 显式落「这个线程已确认不存在」的标记。
    *
    * 为什么不能交给 `persistOwnedSessions()`：`save()` 不接受内存里的 `threadMissing=true`
    * （另一个实例的旧快照也带着旧线程的 true，会把活着的线程判死），所以标记只能由
    * store 的显式操作写入。
    *
-   * 返回 false = 存储不可用，调用方必须中止这一轮：写不进这个标记，
-   * 「spawn 后、thread.started 前崩溃」的重启判定就重新失去依据。
+   * - `ok`：标记已在磁盘上（新写或本来就有）；
+   * - `stale`：`mismatch`——别人已经换绑，这条失效事实过时了，调用方应重读磁盘重新判断；
+   * - `failed`：`not-found`（盘上没有这条记录，写不进标记）或抛错——写不进标记就等于
+   *   「spawn 后、thread.started 前崩溃」的重启判定失去依据，必须中止这一轮。
    */
-  private markThreadMissing(sessionId: string, threadId: string): boolean {
-    if (!this.sessionStore) return true;
+  private markThreadMissing(sessionId: string, threadId: string): 'ok' | 'stale' | 'failed' {
+    if (!this.sessionStore) return 'ok';
     try {
-      // 返回 false 只表示「无需写」（记录不在盘上 / 已被别人换绑成新线程），不是失败
-      this.sessionStore.markThreadMissing(sessionId, threadId);
-      return true;
+      const outcome = this.sessionStore.markThreadMissing(sessionId, threadId);
+      if (outcome === 'mismatch') return 'stale';
+      if (outcome === 'not-found') {
+        this.emitDiagnosticWarning(
+          `codex session ${sessionId} is not in ${this.sessionStorePath}; refusing to start a run`,
+        );
+        return 'failed';
+      }
+      return 'ok';
     } catch (error) {
       this.emitDiagnosticWarning(
         `codex session mark thread missing failed for ${sessionId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return false;
+      return 'failed';
     }
   }
 
   /**
    * 线程重新出现后恢复绑定：清掉 `threadMissing`，**必须**走 store 的显式操作——
    * `save()` 不允许清除这条否定事实（否则另一个实例的旧快照会把它覆盖掉）。
-   * 返回是否已在磁盘上确认恢复。
+   *
+   * `unchanged` 也算恢复：磁盘上本来就没有标记（可能刚被别的实例清掉），旧的是内存快照。
+   * `not-found` 同样放行——记录不在盘上时由随后的 save 建，内存里的清除不会被写回去。
+   * 只有 `mismatch`（磁盘已绑到别的线程）返回 `stale`，让调用方重读磁盘重新判断。
    */
-  private clearThreadMissing(sessionId: string, threadId: string): boolean {
-    if (!this.sessionStore) return true;
+  private clearThreadMissing(sessionId: string, threadId: string): 'ok' | 'stale' | 'failed' {
+    if (!this.sessionStore) return 'ok';
     try {
-      return this.sessionStore.confirmThreadPresent(sessionId, threadId);
+      const outcome = this.sessionStore.confirmThreadPresent(sessionId, threadId);
+      if (outcome === 'mismatch') return 'stale';
+      return 'ok';
     } catch (error) {
       this.emitDiagnosticWarning(
         `codex session thread restore failed for ${sessionId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return false;
+      // 清不掉标记不算致命：这一轮仍然 resume（线程确实存在），下一轮会再试
+      return 'failed';
+    }
+  }
+
+  /** 读磁盘上的权威绑定；读不到返回 undefined（调用方退回内存快照）。 */
+  private readDiskBinding(sessionId: string): CodexStoredBinding | undefined {
+    if (!this.sessionStore) return undefined;
+    try {
+      return this.sessionStore.readBinding(sessionId);
+    } catch {
+      return undefined;
     }
   }
 

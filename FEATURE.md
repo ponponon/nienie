@@ -1014,3 +1014,15 @@
 - adapter 侧在探测到 `missing` 后**先**显式落标记、**再**走 `starting` 持久化闸门；标记写不进去就直接中止这一轮（写不进标记，崩溃窗口的判定依据就没了）。这一点被变异测试证实：去掉这次显式落盘，「新线程起来但 `thread.started` 没回来就崩溃 → 恢复成 failed」立刻退回 `idle`。
 - **顺带修掉自己代码里同类的一个 bug**：`merged.set(id, { ...session, ...(threadMissing ? {...} : {}) })` 里 `...session` 会把内存的 `threadMissing: true` 原样带回去——「上面算出来不该写」和「下面又写进去了」同时成立，规则形同虚设。改成先剥掉 `threadId` / `threadMissing` 再展开。这一条恰好说明为什么「先写断言再看红」不能省：修完第二行规则时测试居然是绿的，正是因为展开把它又写回去了。
 - 测试 `session-store.test.ts` 38 条：新增「save 不接受内存里的 threadMissing」「bindThreadId 之后标记不复活」「confirmThreadPresent 之后标记不复活」；`thread-health.test.ts` 9 条。四处守卫（save 规则、剥字段、markThreadMissing 身份校验、adapter 显式落盘）各自变异变红。
+
+### 2026-11-23 第三方 review 第八轮：显式操作的返回值要能区分「没改」和「没找到」
+
+第七轮之后 review 指出：三个显式操作返回布尔太粗，Adapter 没法区分「本来就不用改」「记录不在盘上」「别人抢先改了」。这三件事对应三种完全不同的动作，压成 `false` 必然有两条走错。
+
+- **返回值三态化**（`session-store.ts`）：`CodexBindingOutcome = 'updated' | 'unchanged' | 'mismatch' | 'not-found'`。`bindThreadId` 用 `updated / unchanged / not-found`；`markThreadMissing` 与 `confirmThreadPresent` 额外用 `mismatch`（磁盘身份已被别人换绑，这条事实已过时）。
+- **Adapter 的决策表按结果分流**（`resolveThreadBinding()`）：
+  - `updated` / `unchanged` → 继续；
+  - `mismatch` → 本实例的决策过时：重读磁盘身份、重新判断（最多两轮，两轮都被抢先就保守开新线程）；
+  - `not-found` / 抛错 → **中止这一轮**（`markThreadMissing` 写不进标记，就等于「spawn 后、`thread.started` 前崩溃」的重启判定失去依据）。
+- **决策依据从内存快照改为磁盘权威绑定**：新增 `store.readBinding()`，每次 `sendMessage` 决策前把磁盘上的 `threadId` / `threadMissing` 同步进内存。之前只看内存：另一个 Bridge 已经判死，本进程还拿着加载时的旧值继续 `resume`；反过来别人确认恢复后，本进程还拿着旧的 `true` 去开新线程。两条都被一条测试覆盖（无 state 库 → 本进程只能探测出 `unknown`，但磁盘上已被别人标失效 → 必须开新线程）。
+- 测试：`session-store.test.ts` 40 条（新增「区分没改 / 没找到」「readBinding 权威身份与坏文件返回 undefined」），`thread-health.test.ts` 11 条（新增「别人已标失效时不得拿内存旧快照 resume」「盘上没有这条记录时中止不 spawn」）。磁盘权威与 `not-found` fail-closed 两处做了变异验证（改坏即变红）；`mismatch → 重读磁盘重判` 这条是防御路径——正常顺序下磁盘身份已经先同步进内存，构造不出稳定的复现，只能在 store 层验证 `mismatch` 本身。

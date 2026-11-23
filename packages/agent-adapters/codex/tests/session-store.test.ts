@@ -290,7 +290,7 @@ describe('CodexSessionStore', () => {
       },
     ]);
     // 失效标记只能由显式操作写入（save 不接受内存里的 true）
-    expect(store.markThreadMissing('codex_ses_lost', 'th_gone')).toBe(true);
+    expect(store.markThreadMissing('codex_ses_lost', 'th_gone')).toBe('updated');
     // 另一个实例手里是「还不知道线程失效」的旧快照，时间戳更新
     store.save([
       {
@@ -346,7 +346,7 @@ describe('CodexSessionStore', () => {
       },
     ]);
     // 旧快照若还要显式标记失效，也不许贴到新线程上（身份不符）
-    expect(store.markThreadMissing('codex_ses_revive', 'th_old')).toBe(false);
+    expect(store.markThreadMissing('codex_ses_revive', 'th_old')).toBe('mismatch');
 
     expect(loadOk(store)[0]).toMatchObject({ threadId: 'th_new' });
     expect(loadOk(store)[0]?.threadMissing).toBeUndefined();
@@ -358,7 +358,7 @@ describe('CodexSessionStore', () => {
 
     store.save([{ ...STORE_BASE, id: 'codex_ses_sync', threadId: 'th_sync', status: 'idle' }]);
     store.markThreadMissing('codex_ses_sync', 'th_sync');
-    expect(store.confirmThreadPresent('codex_ses_sync', 'th_sync')).toBe(true);
+    expect(store.confirmThreadPresent('codex_ses_sync', 'th_sync')).toBe('updated');
     // 另一个实例的旧快照仍然带着 true，且 updatedAt 更晚
     store.save([
       {
@@ -423,7 +423,7 @@ describe('CodexSessionStore', () => {
       },
     ]);
 
-    expect(store.bindThreadId('codex_ses_rebind', 'th_new')).toBe(true);
+    expect(store.bindThreadId('codex_ses_rebind', 'th_new')).toBe('updated');
 
     const sessions = loadOk(store);
     expect(sessions).toHaveLength(1);
@@ -499,11 +499,11 @@ describe('CodexSessionStore', () => {
     store.markThreadMissing('codex_ses_resync', 'th_sync');
 
     // 别的实例拿着另一个 id 说「它存在」——不构成恢复证据
-    expect(store.confirmThreadPresent('codex_ses_resync', 'th_other')).toBe(false);
+    expect(store.confirmThreadPresent('codex_ses_resync', 'th_other')).toBe('mismatch');
     expect(loadOk(store)[0]?.threadMissing).toBe(true);
 
     // 同一个 id 重新出现才解除
-    expect(store.confirmThreadPresent('codex_ses_resync', 'th_sync')).toBe(true);
+    expect(store.confirmThreadPresent('codex_ses_resync', 'th_sync')).toBe('updated');
     expect(loadOk(store)[0]?.threadMissing).toBeUndefined();
     expect(loadOk(store)[0]?.threadId).toBe('th_sync');
   });
@@ -519,14 +519,47 @@ describe('CodexSessionStore', () => {
     expect(readFileSync(filePath, 'utf8')).toBe('{ broken');
   });
 
-  it('记录不在盘上时显式绑定返回 false，不凭空造记录', () => {
+  it('记录不在盘上时显式绑定返回 not-found，不凭空造记录', () => {
     const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     const store = new CodexSessionStore({ filePath });
 
-    expect(store.bindThreadId('codex_ses_absent', 'th_new')).toBe(false);
-    expect(store.confirmThreadPresent('codex_ses_absent', 'th_new')).toBe(false);
+    expect(store.bindThreadId('codex_ses_absent', 'th_new')).toBe('not-found');
+    expect(store.confirmThreadPresent('codex_ses_absent', 'th_new')).toBe('not-found');
+    expect(store.markThreadMissing('codex_ses_absent', 'th_new')).toBe('not-found');
     // 没写任何东西：文件仍然不存在
     expect(existsSync(filePath)).toBe(false);
+  });
+
+  it('显式操作区分「本来就不用改」和「没找到记录」', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_same', threadId: 'th_same', status: 'idle' }]);
+
+    // 换绑到同一个 id 且没有标记 → 无需改动，但记录是找得到的
+    expect(store.bindThreadId('codex_ses_same', 'th_same')).toBe('unchanged');
+    // 本来就没有标记 → 恢复也是「无需改动」
+    expect(store.confirmThreadPresent('codex_ses_same', 'th_same')).toBe('unchanged');
+    // 置位两次：第二次是「无需改动」
+    expect(store.markThreadMissing('codex_ses_same', 'th_same')).toBe('updated');
+    expect(store.markThreadMissing('codex_ses_same', 'th_same')).toBe('unchanged');
+  });
+
+  it('readBinding 给出磁盘上的权威身份（含失效标记），读不动时返回 undefined', () => {
+    const dir = makeDir('nienie-store-');
+    const filePath = join(dir, 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([{ ...STORE_BASE, id: 'codex_ses_read', threadId: 'th_read', status: 'idle' }]);
+    expect(store.readBinding('codex_ses_read')).toEqual({ threadId: 'th_read' });
+
+    store.markThreadMissing('codex_ses_read', 'th_read');
+    expect(store.readBinding('codex_ses_read')).toEqual({ threadId: 'th_read', threadMissing: true });
+
+    // 记录不在盘上 → undefined（调用方退回内存快照）
+    expect(store.readBinding('codex_ses_other')).toBeUndefined();
+
+    writeFileSync(filePath, '{ broken', 'utf8');
+    expect(store.readBinding('codex_ses_read')).toBeUndefined();
   });
 
   it('写锁被活进程持有时拒绝写盘（不无锁覆盖），成功写完不留锁文件', () => {
