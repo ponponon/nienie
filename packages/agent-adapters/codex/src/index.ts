@@ -138,6 +138,9 @@ export class CodexAdapter implements AgentAdapter {
   /** 落盘索引路径（只用于诊断信息，不参与读写）。 */
   private readonly sessionStorePath: string | undefined;
   private storedSessionsLoaded = false;
+  /** 加载失败后的重试时间点（成功即清空），避免每次 listSessions 都打一次磁盘。 */
+  private storedSessionsRetryAt = 0;
+  private storedSessionsRetryDelayMs = 1_000;
   private readonly loadedHistoryThreads = new Set<string>();
   private historyLoaded = false;
   /** 历史库暂不可用（未安装 / 还没建库）时的低频重试时间点。 */
@@ -324,53 +327,73 @@ export class CodexAdapter implements AgentAdapter {
    *
    * 重启时进程都不在了：`running` / `starting` / `waiting` 一律降级成 `idle`，
    * 不能假装它还在跑（手机端会一直转圈等一个不存在的进程）。
+   *
+   * 标记只在**收敛**（采用成功 / 确认没有文件 / 成功隔离）后才置位：
+   * 读失败、锁被别的实例占用、隔离失败都保留可重试状态，配合退避 1s → 60s。
+   * 之前是「进来就置位」，一次临时错误就能让这个实例永远不再加载。
    */
   private ensureStoredSessionsLoaded(): void {
     if (!this.sessionStore || this.storedSessionsLoaded) return;
-    this.storedSessionsLoaded = true;
+    const now = Date.now();
+    if (now < this.storedSessionsRetryAt) return;
+    if (this.loadStoredSessions()) {
+      this.storedSessionsLoaded = true;
+      this.storedSessionsRetryDelayMs = 1_000;
+      return;
+    }
+    this.storedSessionsRetryAt = now + this.storedSessionsRetryDelayMs;
+    this.storedSessionsRetryDelayMs = Math.min(this.storedSessionsRetryDelayMs * 2, 60_000);
+  }
+
+  /** 真正做一次加载。返回是否已收敛（true = 不必再试）。 */
+  private loadStoredSessions(): boolean {
+    const store = this.sessionStore!;
     let result: ReturnType<CodexSessionStore['load']>;
     try {
-      result = this.sessionStore.load();
+      result = store.load();
     } catch (error) {
       this.emitDiagnosticWarning(
         `codex session store load failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return;
+      return false;
     }
-    if (result.status === 'missing') return;
-    if (result.status !== 'ok') {
-      // 读不动 / 版本不认识：走 store 的锁内隔离——它会在临界区里**重新读一遍**再决定，
-      // 如果另一个实例已经把文件修好并写入会话，这里直接采用最新内容，绝不把有效文件挪走。
-      let recovery: ReturnType<CodexSessionStore['quarantineIfUnusable']>;
-      try {
-        recovery = this.sessionStore.quarantineIfUnusable();
-      } catch (error) {
-        this.emitDiagnosticWarning(
-          `codex session store ${result.status}; quarantine skipped: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return;
-      }
-      if (recovery.status === 'ok') {
-        this.adoptStoredSessions(recovery.sessions);
-        return;
-      }
-      if (recovery.status === 'missing') return;
+    if (result.status === 'missing') return true;
+    if (result.status === 'ok') {
+      this.adoptStoredSessions(result.sessions);
+      return true;
+    }
+    // 读不动 / 版本不认识：走 store 的锁内隔离——它会在临界区里**重新读一遍**再决定，
+    // 如果另一个实例已经把文件修好并写入会话，这里直接采用最新内容，绝不把有效文件挪走。
+    let recovery: ReturnType<CodexSessionStore['quarantineIfUnusable']>;
+    try {
+      recovery = store.quarantineIfUnusable();
+    } catch (error) {
+      // 抢不到写锁（另一个实例正在写）属于暂时状态：保留可重试，别把标记写成已加载
+      this.emitDiagnosticWarning(
+        `codex session store ${result.status}; quarantine skipped: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
+    if (recovery.status === 'ok') {
+      this.adoptStoredSessions(recovery.sessions);
+      return true;
+    }
+    if (recovery.status === 'missing' || recovery.status === 'quarantined') {
       if (recovery.status === 'quarantined') {
         this.emitDiagnosticWarning(
           `codex session store ${recovery.reason}; old file quarantined to ${recovery.backupPath}`,
         );
-        return;
       }
-      // 隔离失败 → 文件还在原地，save() 会 fail-closed 拒绝写入；
-      // 这里必须说清楚「持久化已不可用」，不能让用户以为会话还在正常保存
-      this.emitDiagnosticWarning(
-        `codex session store ${recovery.reason}; quarantine FAILED, persistence disabled until ${this.sessionStorePath} is fixed manually`,
-      );
-      return;
+      return true;
     }
-    this.adoptStoredSessions(result.sessions);
+    // 隔离失败（目录只读等）→ 文件还在原地，save() 会 fail-closed 拒绝写入。
+    // 用户修好权限后应能自动恢复，所以这里不置位终态，继续按退避重试。
+    this.emitDiagnosticWarning(
+      `codex session store ${recovery.reason}; quarantine FAILED, persistence disabled until ${this.sessionStorePath} is fixed manually`,
+    );
+    return false;
   }
 
   /** 把落盘会话装进内存（已存在的 id 不覆盖，内存状态更新）。 */

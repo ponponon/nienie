@@ -950,11 +950,18 @@
 | 项 | 要点 |
 | --- | --- |
 | 持久化失败的用户可见反馈 | `starting` 失败已经不启动（硬失败）；`threadId` 落盘失败仍继续运行，需要把「恢复能力降级」变成手机端可见状态，而不是只躺在 diagnostics 里 |
-| `storedSessionsLoaded` 失败重试 | 当前在读取前就置位，遇到临时错误或锁被占用后会「永不再加载」；应改为「成功采用 / 确认 missing / 成功隔离」后才置位，失败保留可重试状态 + 退避 |
-| 锁文件元数据校验 | `pid` 要求正安全整数、`at` 要求有限数字且能转成有效日期、`token` 要求非空；`releaseLock` 在内容不可读时不应删除（当前会删，不符合「只删自己那把」约定） |
+| ~~`storedSessionsLoaded` 失败重试~~ | ✅ 已完成（见下节 P2 第一批） |
+| ~~锁文件元数据校验~~ | ✅ 已完成（见下节 P2 第一批） |
 | 真实 Codex resume 断言 | 重启后断言真的传了 `exec resume <threadId>`，而不只是内部状态正确 |
 | Codex archived / deleted 同步 | 归档线程不再当普通活动会话展示；不存在的 thread 不伪装成可恢复 |
 | 文件权限 0600 断言 | 写入后断言最终文件权限（不仅临时文件） |
 | 非法 session ID 校验 | `load` 时拒绝非 `codex_ses_*` 记录（当前在 adapter 层过滤） |
 | 状态降级完整覆盖 | `starting` / `running` / `waiting` / `completed` / `failed` / `cancelled` 六态各有断言 |
 | 多 Bridge 同一 session 执行租约 | 文件写锁 ≠ 执行锁；产品语义先定：允许多 Bridge、允许管理不同会话、不允许同一会话被两个 Bridge 同时执行 |
+
+### 2026-11-23 P2 第一批（封板后从路线图取的三条真实缺陷）
+
+- **加载标记不再提前置位**：`ensureStoredSessionsLoaded()` 之前一进来就写 `storedSessionsLoaded = true`，只要第一次撞上临时错误（读失败 / 锁被别的实例占用 / 隔离失败），这个适配器实例就**永远不再加载**，用户重启 Bridge 才能恢复。现在拆成 `loadStoredSessions()` 返回「是否收敛」：采用成功、确认没有文件、成功隔离才算收敛；失败保留可重试状态，按 1s → 2s → … → 60s 退避重试。顺带覆盖「用户修好目录权限后自动恢复」这个真实场景。
+- **锁元数据严格校验**：`tryReadLockHolder()` 现在要求 `pid` 是正安全整数、`at` 是有限数字且能转成有效日期、`token` 非空。之前只检查 `typeof`，`{"at":1e999}` 会被 `JSON.parse` 成 `Infinity`，随后 `describeLock()` 里的 `new Date(Infinity).toISOString()` 抛 `RangeError`，把真正的「锁被占用」信息整个覆盖掉——报错本身变成了事故。
+- **释放只删能确认是自己的锁**：`releaseLock()` 从 `if (holder && token 不符) return` 改为 `if (!holder || token 不符) return`。内容读不出来说明不是我们写的（我们的锁先写完整内容再 `link`，不存在半成品），删下去可能删到别人的锁。
+- 测试（`session-store.test.ts` 27 个用例）新增：首次加载失败后自动重试并恢复会话（含「锁还在时仍读不到」的反向断言）、五种非法锁元数据都降级成「内容不可读」而不是抛 RangeError、落盘文件权限 `0600`、非 `codex_ses_*` 记录不被当成可恢复会话、六种状态的重启降级规则全覆盖。加载标记与元数据校验两处做了变异测试（改坏即变红）。

@@ -241,23 +241,35 @@ export class CodexSessionStore {
     }
   }
 
-  /** 释放：只删自己那把（token 对不上说明锁已被别人换掉，动了就会误伤）。 */
+  /**
+   * 释放：**只删能确认是自己的那把**。
+   *
+   * 内容是空的/读不出来时说明这不是我们写的（我们的锁是先写完整内容再 `link`，
+   * 不存在半成品），这种情况下删掉就可能删到别人的锁，所以宁可留一个残留锁
+   * 让它走「人工确认后删除」的路径。
+   */
   private releaseLock(lockPath: string, token: string): void {
     const holder = tryReadLockHolder(lockPath);
-    if (holder && holder.token !== token) return;
+    if (!holder || holder.token !== token) return;
     rmSync(lockPath, { force: true });
   }
 }
 
 type LockHolder = { pid: number; at: number; token: string };
 
+/**
+ * 解析锁内容。任何一项不合法都当作「读不出来」——`describeLock()` 会把它拼进错误信息，
+ * 所以这里的校验直接决定了错误信息本身会不会抛异常（`new Date(Infinity).toISOString()`
+ * 会抛 RangeError，把真正的「锁被占用」信息覆盖掉）。
+ */
 function tryReadLockHolder(lockPath: string): LockHolder | undefined {
   try {
     const raw = JSON.parse(readFileSync(lockPath, 'utf8')) as Partial<LockHolder>;
-    if (typeof raw.pid !== 'number' || typeof raw.at !== 'number' || typeof raw.token !== 'string') {
-      return undefined;
-    }
-    return { pid: raw.pid, at: raw.at, token: raw.token };
+    if (!Number.isSafeInteger(raw.pid) || (raw.pid ?? 0) <= 0) return undefined;
+    if (typeof raw.at !== 'number' || !Number.isFinite(raw.at)) return undefined;
+    if (!Number.isFinite(new Date(raw.at).getTime())) return undefined;
+    if (typeof raw.token !== 'string' || raw.token.length === 0) return undefined;
+    return { pid: raw.pid as number, at: raw.at, token: raw.token };
   } catch {
     return undefined;
   }

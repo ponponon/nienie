@@ -1,10 +1,20 @@
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync, chmodSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CanonicalAgentEvent } from '@nienie/protocol';
 import {
   CodexAdapter,
@@ -696,6 +706,140 @@ describe('CodexAdapter 会话持久化', () => {
     } finally {
       chmodSync(dir, 0o700);
     }
+  });
+
+  it('首次加载失败不是终态：退避后会自动重试并恢复会话', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const dir = makeDir('nienie-store-');
+    const storePath = join(dir, 'codex-sessions.json');
+    const original = JSON.stringify({ version: 99, sessions: [] });
+    writeFileSync(storePath, original, 'utf8');
+    // 另一个实例正持锁 → 这一轮连隔离都做不了（quarantineIfUnusable 抢不到锁）
+    const lockPath = `${storePath}.lock`;
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }), 'utf8');
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+
+    vi.useFakeTimers();
+    try {
+      // 第 1 次：隔离被跳过，绝不能把「已加载」写死
+      await adapter.listSessions();
+      expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toMatch(/quarantine skipped/);
+
+      // 锁还在时即便过了退避窗口也仍然读不到（证明它是真的在重试，不是假成功）
+      rmSync(lockPath);
+      writeFileSync(
+        storePath,
+        JSON.stringify({
+          version: 1,
+          sessions: [
+            {
+              id: 'codex_ses_late',
+              title: '恢复出来的会话',
+              projectPath: PROJECT,
+              status: 'idle',
+              createdAt: '2026-11-23T00:00:00.000Z',
+              updatedAt: '2026-11-23T00:01:00.000Z',
+            },
+          ],
+        }),
+        'utf8',
+      );
+      vi.advanceTimersByTime(1_100);
+
+      const sessions = await adapter.listSessions();
+      expect(sessions.map((session) => session.id)).toEqual(['codex_ses_late']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('锁元数据非法时降级为「内容不可读」，不会因为格式化时间抛错', () => {
+    const dir = makeDir('nienie-store-');
+    const filePath = join(dir, 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    const cases = [
+      '{"pid":123,"at":1e999,"token":"x"}', // JSON.parse → Infinity，new Date(Infinity).toISOString() 会抛
+      '{"pid":"123","at":1,"token":"x"}', // pid 是字符串
+      '{"pid":-1,"at":1,"token":"x"}', // 非正
+      '{"pid":1.5,"at":1,"token":"x"}', // 非整数
+      '{"pid":123,"at":1,"token":""}', // token 空
+    ];
+    for (const content of cases) {
+      writeFileSync(`${filePath}.lock`, content, 'utf8');
+      // 关键：抛出的是「锁被占用」的正常信息，而不是 RangeError
+      expect(() =>
+        store.save([{ ...STORE_BASE, id: 'codex_ses_x', title: 'x', status: 'idle' }]),
+      ).toThrow(/锁内容不可读/);
+      expect(existsSync(`${filePath}.lock`)).toBe(true);
+    }
+  });
+
+  it('落盘文件权限是 0600（会话标题与项目路径属于本地隐私）', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_perm', title: '权限', status: 'idle' },
+    ]);
+    expect(statSync(filePath).mode & 0o777).toBe(0o600);
+  });
+
+  it('非 codex_ses_* 的记录不会被当成 Nienie 会话（防止被塞入任意 threadId）', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_own',
+        title: '自己的会话',
+        status: 'idle',
+        threadId: 'th_own',
+      },
+      // 伪造记录：id 用别人的 threadId 形式，不能被当成可恢复会话
+      { ...STORE_BASE, id: 'th_someone_else', title: '伪造', status: 'idle' },
+    ]);
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+    expect((await adapter.listSessions()).map((session) => session.id)).toEqual(['codex_ses_own']);
+  });
+
+  it('六种状态的重启降级规则', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_starting', title: 's', status: 'starting', threadId: 'th_a', runState: 'starting' },
+      { ...STORE_BASE, id: 'codex_ses_running', title: 'r', status: 'running', threadId: 'th_b', runState: 'started' },
+      { ...STORE_BASE, id: 'codex_ses_waiting', title: 'w', status: 'waiting', threadId: 'th_c', runState: 'started' },
+      { ...STORE_BASE, id: 'codex_ses_completed', title: 'c', status: 'completed', threadId: 'th_d', runState: 'started' },
+      { ...STORE_BASE, id: 'codex_ses_failed', title: 'f', status: 'failed', threadId: 'th_e', runState: 'started' },
+      { ...STORE_BASE, id: 'codex_ses_cancelled', title: 'x', status: 'cancelled', threadId: 'th_f', runState: 'started' },
+    ]);
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+    const statuses = new Map(
+      (await adapter.listSessions()).map((session) => [session.id, session.status]),
+    );
+
+    // 进程都不在了：进行中/等待一律降级 idle
+    expect(statuses.get('codex_ses_starting')).toBe('idle');
+    expect(statuses.get('codex_ses_running')).toBe('idle');
+    expect(statuses.get('codex_ses_waiting')).toBe('idle');
+    // 终态保留，不能被「降级」洗掉
+    expect(statuses.get('codex_ses_completed')).toBe('completed');
+    expect(statuses.get('codex_ses_failed')).toBe('failed');
+    expect(statuses.get('codex_ses_cancelled')).toBe('cancelled');
   });
 
   it('没有 sessionStorePath 时行为不变（不落盘、也不读历史文件）', async () => {
