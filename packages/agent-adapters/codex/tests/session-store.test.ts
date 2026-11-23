@@ -204,6 +204,41 @@ describe('CodexSessionStore', () => {
       'codex_ses_b',
     ]);
   });
+
+  it('写锁被活进程持有时拒绝写盘（不无锁覆盖），成功写完不留锁文件', () => {
+    const dir = makeDir('nienie-store-');
+    const filePath = join(dir, 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([{ ...STORE_BASE, id: 'codex_ses_keep', title: '原有会话', status: 'idle' }]);
+    // 正常路径写完必须清掉锁，否则下次启动会以为有人一直持锁
+    expect(existsSync(`${filePath}.lock`)).toBe(false);
+
+    // 另一个「活着的进程」（用当前 pid 冒充）正持锁
+    writeFileSync(`${filePath}.lock`, JSON.stringify({ pid: process.pid, at: Date.now() }), 'utf8');
+    expect(() =>
+      store.save([{ ...STORE_BASE, id: 'codex_ses_new', title: '抢不到锁', status: 'idle' }]),
+    ).toThrow(/locked by another writer/);
+    // 拒绝而不是覆盖：原数据必须完好
+    expect(loadOk(store).map((session) => session.id)).toEqual(['codex_ses_keep']);
+  });
+
+  it('崩溃残留的旧锁会被接管（不让一次崩溃永久禁用持久化）', () => {
+    const dir = makeDir('nienie-store-');
+    const filePath = join(dir, 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    // 持锁进程已不存在（pid 999999 基本不可能存在）+ 时间戳很旧
+    writeFileSync(
+      `${filePath}.lock`,
+      JSON.stringify({ pid: 999999, at: Date.now() - 60_000 }),
+      'utf8',
+    );
+
+    store.save([{ ...STORE_BASE, id: 'codex_ses_after_crash', title: '接管后写入', status: 'idle' }]);
+
+    expect(loadOk(store).map((session) => session.id)).toEqual(['codex_ses_after_crash']);
+    expect(existsSync(`${filePath}.lock`)).toBe(false);
+  });
 });
 
 describe('CodexAdapter 会话持久化', () => {

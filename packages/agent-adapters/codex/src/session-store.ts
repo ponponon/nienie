@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import type { AgentStatus } from '@nienie/protocol';
 
@@ -48,6 +57,10 @@ export type CodexSessionStoreOptions = {
 
 const STORE_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
+/** 抢锁重试间隔（毫秒）。同步路径上用 Atomics.wait 阻塞，总等待上限约 70ms。 */
+const LOCK_RETRY_DELAYS_MS = [10, 20, 40] as const;
+/** 锁文件超过这个年龄视为崩溃残留（正常持锁只有几毫秒）。 */
+const LOCK_STALE_MS = 10_000;
 const RUN_STATES: readonly CodexSessionRunState[] = ['never_started', 'starting', 'started'];
 const KNOWN_STATUSES: readonly AgentStatus[] = [
   'starting',
@@ -103,40 +116,125 @@ export class CodexSessionStore {
   }
 
   /**
-   * 全量写入：先与磁盘上的现有内容按 `id` 合并（`updatedAt` 较新的赢），再原子替换。
-   * 单进程、200 条上限的规模下，没必要引入 append-only 或跨进程文件锁。
+   * 全量写入：**持写锁**读盘合并（`updatedAt` 较新的赢）→ 截断 → 原子替换。
+   *
+   * 为什么还要锁：只做「读盘 → 合并 → 写」不足以防并发——两个进程可能读到同一份旧快照，
+   * 后写的那个仍会丢掉对方的记录。锁把这段读-改-写变成临界区，配合合并语义，
+   * 单文件 + 200 条的规模下足够，不需要换成 SQLite 或事件日志。
    */
   save(sessions: readonly CodexStoredSession[]): void {
-    const merged = new Map<string, CodexStoredSession>();
-    const existing = this.load();
-    if (existing.status === 'ok') {
-      for (const session of existing.sessions) merged.set(session.id, session);
-    }
-    for (const session of sessions) {
-      const current = merged.get(session.id);
-      if (!current || session.updatedAt >= current.updatedAt) {
-        merged.set(session.id, session);
+    this.withWriteLock(() => {
+      const merged = new Map<string, CodexStoredSession>();
+      const existing = this.load();
+      if (existing.status === 'ok') {
+        for (const session of existing.sessions) merged.set(session.id, session);
+      }
+      for (const session of sessions) {
+        const current = merged.get(session.id);
+        if (!current || session.updatedAt >= current.updatedAt) {
+          merged.set(session.id, session);
+        }
+      }
+
+      const payload: CodexSessionStoreFile = {
+        version: STORE_VERSION,
+        sessions: [...merged.values()]
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+          .slice(0, this.maxSessions),
+      };
+      mkdirSync(dirname(this.filePath), { recursive: true });
+      const tmpPath = `${this.filePath}.${process.pid}.tmp`;
+      try {
+        // 0600：会话标题与项目路径属于本地隐私信息，不给同机其他用户读
+        writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, {
+          encoding: 'utf8',
+          mode: 0o600,
+        });
+        renameSync(tmpPath, this.filePath);
+      } finally {
+        rmSync(tmpPath, { force: true });
+      }
+    });
+  }
+
+  /**
+   * 临界区：`<file>.lock` 的 `O_EXCL` 创建即持锁。
+   *
+   * 锁只覆盖一次写入（毫秒级），不做进程生命周期独占——那样一次崩溃就会把用户永久锁在门外，
+   * 而 CLI 与 GUI 共用一个 Bridge 时也不该互相拒绝启动。
+   * 抢不到锁有两次重试；仍失败就抛错（由调用方写诊断），绝不「无锁照样覆盖」。
+   */
+  private withWriteLock<T>(fn: () => T): T {
+    const lockPath = `${this.filePath}.lock`;
+    mkdirSync(dirname(lockPath), { recursive: true });
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        const fd = openSync(lockPath, 'wx', 0o600);
+        try {
+          writeFileSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+        } finally {
+          closeSync(fd);
+        }
+        try {
+          return fn();
+        } finally {
+          rmSync(lockPath, { force: true });
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        lastError = error;
+        // 持锁进程崩溃会留下锁文件：陈旧就清掉再抢，别让一次崩溃永久禁用持久化
+        if (this.clearStaleLock(lockPath)) continue;
+        const delay = LOCK_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) break;
+        sleepSync(delay);
       }
     }
+    throw new Error(
+      `codex session store is locked by another writer (${lockPath}): ${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }`,
+    );
+  }
 
-    const payload: CodexSessionStoreFile = {
-      version: STORE_VERSION,
-      sessions: [...merged.values()]
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .slice(0, this.maxSessions),
-    };
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const tmpPath = `${this.filePath}.${process.pid}.tmp`;
+  /** 锁文件的持有进程已不在、或锁过旧 → 删除。返回是否已清掉。 */
+  private clearStaleLock(lockPath: string): boolean {
+    let holderPid: number | undefined;
+    let lockedAt: number | undefined;
     try {
-      // 0600：会话标题与项目路径属于本地隐私信息，不给同机其他用户读
-      writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, {
-        encoding: 'utf8',
-        mode: 0o600,
-      });
-      renameSync(tmpPath, this.filePath);
-    } finally {
-      rmSync(tmpPath, { force: true });
+      const raw = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid?: number; at?: number };
+      holderPid = typeof raw.pid === 'number' ? raw.pid : undefined;
+      lockedAt = typeof raw.at === 'number' ? raw.at : undefined;
+    } catch {
+      // 内容读不出来（刚创建还没写完）——按「可能有效」处理，交给重试/超时
+      return false;
     }
+    const expired = lockedAt !== undefined && Date.now() - lockedAt > LOCK_STALE_MS;
+    if (expired) {
+      rmSync(lockPath, { force: true });
+      return true;
+    }
+    if (holderPid !== undefined && !isProcessAlive(holderPid)) {
+      rmSync(lockPath, { force: true });
+      return true;
+    }
+    return false;
+  }
+}
+
+/** 同步 wait：save() 在同步路径上，不能靠 await 退避。 */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // ESRCH = 进程不存在；EPERM = 存在但无权限（仍算活着）
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 
