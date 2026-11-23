@@ -135,6 +135,8 @@ export class CodexAdapter implements AgentAdapter {
   private readonly discoverLocalHistory: boolean;
   /** Nienie 自建会话的落盘索引（可选）。 */
   private readonly sessionStore: CodexSessionStore | undefined;
+  /** 落盘索引路径（只用于诊断信息，不参与读写）。 */
+  private readonly sessionStorePath: string | undefined;
   private storedSessionsLoaded = false;
   private readonly loadedHistoryThreads = new Set<string>();
   private historyLoaded = false;
@@ -166,6 +168,7 @@ export class CodexAdapter implements AgentAdapter {
     this.normalizer = new CodexEventNormalizer(options);
     this.discoverLocalHistory =
       options.discoverLocalHistory ?? (!options.spawnProcess && !options.detectVersion);
+    this.sessionStorePath = options.sessionStorePath;
     this.sessionStore = options.sessionStorePath
       ? new CodexSessionStore({ filePath: options.sessionStorePath })
       : undefined;
@@ -340,7 +343,11 @@ export class CodexAdapter implements AgentAdapter {
       // 绝不能当成「空列表」直接覆盖（否则会把用户或新版本的数据抹掉）
       const backupPath = this.sessionStore.quarantine(result.status);
       this.emitDiagnosticWarning(
-        `codex session store ${result.status}; old file quarantined${backupPath ? ` to ${backupPath}` : ' (quarantine failed)'}`,
+        backupPath
+          ? `codex session store ${result.status}; old file quarantined to ${backupPath}`
+          : // 隔离失败 → 文件还在原地，save() 会 fail-closed 拒绝写入；
+            // 这里必须说清楚「持久化已不可用」，不能让用户以为会话还在正常保存
+            `codex session store ${result.status}; quarantine FAILED, persistence disabled until ${this.sessionStorePath} is fixed manually`,
       );
       return;
     }
@@ -364,15 +371,18 @@ export class CodexAdapter implements AgentAdapter {
     }
   }
 
-  /** 只落盘 Nienie 自己创建的会话；Codex 桌面端会话由 state 库负责，不做二次存储。 */
-  private persistOwnedSessions(): void {
-    if (!this.sessionStore) return;
+  /**
+   * 只落盘 Nienie 自己创建的会话；Codex 桌面端会话由 state 库负责，不做二次存储。
+   * 返回是否真的写成功——关键状态（spawn 前的 starting）必须能据此阻止执行。
+   */
+  private persistOwnedSessions(): boolean {
+    if (!this.sessionStore) return true;
     // 先恢复再写：否则「新建会话 → 立刻落盘」会把上一次运行存的会话整份覆盖掉
     this.ensureStoredSessionsLoaded();
     const owned = [...this.sessions.values()].filter((record) =>
       record.id.startsWith(NIENIE_SESSION_ID_PREFIX),
     );
-    if (owned.length === 0) return;
+    if (owned.length === 0) return true;
     try {
       this.sessionStore.save(
         owned.map((record) => ({
@@ -386,10 +396,12 @@ export class CodexAdapter implements AgentAdapter {
           updatedAt: record.updatedAt,
         })),
       );
+      return true;
     } catch (error) {
       this.emitDiagnosticWarning(
         `codex session store save failed: ${error instanceof Error ? error.message : String(error)}`,
       );
+      return false;
     }
   }
 
@@ -668,9 +680,17 @@ export class CodexAdapter implements AgentAdapter {
       // thread.started 时电脑断电/崩溃，重启后这条记录仍是 never_started + 无 threadId，
       // 会被当成「没跑过」的空会话——用户以为消息没发出去，其实 Codex 侧可能已经在跑。
       // 先写 starting，重启时才能识别为「被中断」（见 restoreStatus）。
+      // 这一笔是安全边界本身：没落盘成功就不许 spawn，否则整个保证失效。
+      const previousRunState = record.runState;
       record.runState = 'starting';
       record.updatedAt = new Date().toISOString();
-      this.persistOwnedSessions();
+      if (!this.persistOwnedSessions()) {
+        record.runState = previousRunState;
+        record.status = 'failed';
+        record.updatedAt = new Date().toISOString();
+        this.emitRunError(sessionId, '会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
+        throw new Error('会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
+      }
 
       proc = this.spawnProcessImpl(args, { cwd: record.projectPath });
       this.activeProcesses.set(sessionId, proc);

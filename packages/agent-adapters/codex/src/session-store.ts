@@ -1,11 +1,11 @@
 import {
-  closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
-  openSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
@@ -59,8 +59,11 @@ const STORE_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 /** 抢锁重试间隔（毫秒）。同步路径上用 Atomics.wait 阻塞，总等待上限约 70ms。 */
 const LOCK_RETRY_DELAYS_MS = [10, 20, 40] as const;
-/** 锁文件超过这个年龄视为崩溃残留（正常持锁只有几毫秒）。 */
-const LOCK_STALE_MS = 10_000;
+/**
+ * 「内容不可读的锁」多久算孤儿（正常持锁只有几毫秒）。
+ * 注意：这只用于**读不出持有者**的锁；能读出 pid 的锁只按进程存活判断，不看年龄。
+ */
+const LOCK_ORPHAN_MS = 10_000;
 const RUN_STATES: readonly CodexSessionRunState[] = ['never_started', 'starting', 'started'];
 const KNOWN_STATUSES: readonly AgentStatus[] = [
   'starting',
@@ -100,7 +103,11 @@ export class CodexSessionStore {
     const parsed = raw as Partial<CodexSessionStoreFile>;
     if (parsed.version !== STORE_VERSION) return { status: 'unsupported' };
     if (!Array.isArray(parsed.sessions)) return { status: 'corrupt' };
-    return { status: 'ok', sessions: parsed.sessions.filter(isStoredSession) };
+    const sessions = parsed.sessions.filter(isStoredSession);
+    // 只要有一条记录结构非法就整份判 corrupt：静默丢弃那条，下一次 save 就永久删掉了它。
+    // 宁可让调用方先隔离原文件（内容一字不动），也不要在校验阶段做数据裁剪。
+    if (sessions.length !== parsed.sessions.length) return { status: 'corrupt' };
+    return { status: 'ok', sessions };
   }
 
   /** 把读不动 / 版本不认识的文件改名隔离，避免随后的写盘把它覆盖掉。返回备份路径。 */
@@ -126,13 +133,23 @@ export class CodexSessionStore {
     this.withWriteLock(() => {
       const merged = new Map<string, CodexStoredSession>();
       const existing = this.load();
+      // fail-closed：读不动的文件绝不当作空集合覆盖。必须由调用方先隔离（quarantine）成
+      // missing 才允许重建——否则「隔离失败 → 照写」会整条绕开版本保护。
+      if (existing.status === 'corrupt' || existing.status === 'unsupported') {
+        throw new Error(
+          `codex session store is ${existing.status}; refusing to overwrite ${this.filePath}`,
+        );
+      }
       if (existing.status === 'ok') {
         for (const session of existing.sessions) merged.set(session.id, session);
       }
       for (const session of sessions) {
         const current = merged.get(session.id);
         if (!current || session.updatedAt >= current.updatedAt) {
-          merged.set(session.id, session);
+          // threadId 只增不减：另一实例的旧快照（还没有 threadId）即使 updatedAt 更新，
+          // 也不能把已绑定的 Codex 线程抹掉——这是恢复上下文唯一的依据。
+          const keepThreadId = current?.threadId && !session.threadId ? current.threadId : undefined;
+          merged.set(session.id, keepThreadId ? { ...session, threadId: keepThreadId } : session);
         }
       }
 
@@ -158,67 +175,137 @@ export class CodexSessionStore {
   }
 
   /**
-   * 临界区：`<file>.lock` 的 `O_EXCL` 创建即持锁。
+   * 临界区：`<file>.lock` 的排他创建即持锁。
    *
-   * 锁只覆盖一次写入（毫秒级），不做进程生命周期独占——那样一次崩溃就会把用户永久锁在门外，
-   * 而 CLI 与 GUI 共用一个 Bridge 时也不该互相拒绝启动。
-   * 抢不到锁有两次重试；仍失败就抛错（由调用方写诊断），绝不「无锁照样覆盖」。
+   * 锁只覆盖一次写入（毫秒级），不做进程生命周期独占——一次崩溃不该把用户永久锁在门外，
+   * CLI 与 GUI 共用同一个 Bridge 时也不该互相拒绝启动。抢不到锁退避重试，仍失败就抛错
+   * （由调用方写诊断），绝不「无锁照样覆盖」。
    */
   private withWriteLock<T>(fn: () => T): T {
     const lockPath = `${this.filePath}.lock`;
     mkdirSync(dirname(lockPath), { recursive: true });
-    let lastError: unknown;
+    // 本次调用的唯一标识：既用于临时文件名，也用于「只释放/只回收自己的锁」
+    const token = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     for (let attempt = 0; attempt <= LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
-      try {
-        const fd = openSync(lockPath, 'wx', 0o600);
-        try {
-          writeFileSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-        } finally {
-          closeSync(fd);
-        }
+      if (this.tryAcquireLock(lockPath, token)) {
         try {
           return fn();
         } finally {
-          rmSync(lockPath, { force: true });
+          this.releaseLock(lockPath, token);
         }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        lastError = error;
-        // 持锁进程崩溃会留下锁文件：陈旧就清掉再抢，别让一次崩溃永久禁用持久化
-        if (this.clearStaleLock(lockPath)) continue;
-        const delay = LOCK_RETRY_DELAYS_MS[attempt];
-        if (delay === undefined) break;
-        sleepSync(delay);
       }
+      if (this.reclaimStaleLock(lockPath, token)) continue;
+      const delay = LOCK_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined) break;
+      sleepSync(delay);
     }
     throw new Error(
-      `codex session store is locked by another writer (${lockPath}): ${
-        lastError instanceof Error ? lastError.message : String(lastError)
-      }`,
+      `codex session store is locked by another writer (${lockPath}); ` +
+        '若确认没有其他 Nienie 实例在运行，删除该锁文件后重试',
     );
   }
 
-  /** 锁文件的持有进程已不在、或锁过旧 → 删除。返回是否已清掉。 */
-  private clearStaleLock(lockPath: string): boolean {
-    let holderPid: number | undefined;
-    let lockedAt: number | undefined;
+  /**
+   * 抢锁：先把完整内容写进临时文件，再 `link` 到锁路径。
+   *
+   * `link` 是原子的，且失败（`EEXIST`）时不留痕迹；更重要的是锁文件一经出现内容就是完整的，
+   * 不会出现「刚 open 就被 kill -9」留下的空锁——空锁没法判断持有者，是锁回收的最大麻烦。
+   */
+  private tryAcquireLock(lockPath: string, token: string): boolean {
+    const tmpPath = `${lockPath}.${token}.new`;
     try {
-      const raw = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid?: number; at?: number };
-      holderPid = typeof raw.pid === 'number' ? raw.pid : undefined;
-      lockedAt = typeof raw.at === 'number' ? raw.at : undefined;
-    } catch {
-      // 内容读不出来（刚创建还没写完）——按「可能有效」处理，交给重试/超时
+      writeFileSync(tmpPath, JSON.stringify({ pid: process.pid, at: Date.now(), token }), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+      linkSync(tmpPath, lockPath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    } finally {
+      // 内容随 inode 一起留在了 lockPath（硬链接），临时名可以立刻删掉
+      rmSync(tmpPath, { force: true });
+    }
+  }
+
+  /** 释放：只删自己那把（token 对不上说明锁已被别人换掉，动了就会误伤）。 */
+  private releaseLock(lockPath: string, token: string): void {
+    const holder = tryReadLockHolder(lockPath);
+    if (holder && holder.token !== token) return;
+    rmSync(lockPath, { force: true });
+  }
+
+  /**
+   * 回收陈旧锁。返回 true 表示「已处理，可以立刻重试抢锁」。
+   *
+   * 两条安全规则：
+   * 1. **存活进程的锁绝不按年龄抢**——持锁进程可能只是被系统挂起，超过 10 秒不代表它死了；
+   * 2. 回收时先 `rename` 成自己独有的名字，只有 rename 成功的一方拿到回收权，且**只删自己
+   *    挪走的那个文件**。若挪走后发现内容已经不是刚才判定的那把锁（别人在这瞬间换了新锁），
+   *    原样 `link` 放回去，绝不删除——否则两个回收者会互相删掉对方新建的锁，互斥直接失效。
+   */
+  private reclaimStaleLock(lockPath: string, token: string): boolean {
+    const observed = tryReadLockHolder(lockPath);
+    if (!isStaleLock(lockPath, observed)) return false;
+
+    const reclaimPath = `${lockPath}.${token}.reclaim`;
+    try {
+      renameSync(lockPath, reclaimPath);
+    } catch (error) {
+      // ENOENT：别人已经回收了，直接重试抢锁
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
       return false;
     }
-    const expired = lockedAt !== undefined && Date.now() - lockedAt > LOCK_STALE_MS;
-    if (expired) {
-      rmSync(lockPath, { force: true });
-      return true;
+
+    const moved = tryReadLockHolder(reclaimPath);
+    const sameLock = sameLockHolder(observed, moved);
+    if (!sameLock) {
+      // 挪走的是别人刚换上的新锁：放回原位（仅在原位空着时），保住对方的持有权
+      try {
+        linkSync(reclaimPath, lockPath);
+      } catch {
+        // EEXIST 等：原位已被占用，放弃放回（那份锁已被新持有者替代，不必恢复）
+      } finally {
+        rmSync(reclaimPath, { force: true });
+      }
+      return false;
     }
-    if (holderPid !== undefined && !isProcessAlive(holderPid)) {
-      rmSync(lockPath, { force: true });
-      return true;
+    rmSync(reclaimPath, { force: true });
+    return true;
+  }
+}
+
+type LockHolder = { pid: number; at: number; token: string };
+
+function tryReadLockHolder(lockPath: string): LockHolder | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(lockPath, 'utf8')) as Partial<LockHolder>;
+    if (typeof raw.pid !== 'number' || typeof raw.at !== 'number' || typeof raw.token !== 'string') {
+      return undefined;
     }
+    return { pid: raw.pid, at: raw.at, token: raw.token };
+  } catch {
+    return undefined;
+  }
+}
+
+function sameLockHolder(a: LockHolder | undefined, b: LockHolder | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.token === b.token && a.pid === b.pid;
+}
+
+/**
+ * 陈旧判定：
+ * - 内容可读 → **只看持有进程是否还活着**，不看年龄；
+ * - 内容不可读（旧版本残留 / 非本程序创建）→ 只有文件确实放够了时间才敢回收，
+ *   避免抢走「正在被写入」的锁。
+ */
+function isStaleLock(lockPath: string, holder: LockHolder | undefined): boolean {
+  if (holder) return !isProcessAlive(holder.pid);
+  try {
+    return Date.now() - statSync(lockPath).mtimeMs > LOCK_ORPHAN_MS;
+  } catch {
     return false;
   }
 }

@@ -914,3 +914,16 @@
 - **单写者约束**：`save()` 在 `<file>.lock`（`O_EXCL` 创建）临界区内做「读盘合并 → 截断 → 原子替换」，`updatedAt` 较新的赢。只 merge 不锁不够——两个进程可能读到同一份旧快照，后写的仍会丢对方的记录；锁把读-改-写变成真正的原子段。锁只覆盖一次写入（毫秒级），不做进程生命周期独占：一次崩溃不会把用户永久锁在门外，CLI 与 GUI 共用同一个 Bridge 时也不必互相拒绝启动。陈旧锁（持锁 pid 已不存在，或锁超过 10s）会被接管，抢锁失败重试 10/20/40ms 后抛错，由适配器写进诊断（可见，不静默覆盖）。
 - **兼容首版文件**：缺 `runState` 时按 `threadId ? 'started' : 'never_started'` 推断，老文件不用迁移。
 - 测试（`tests/session-store.test.ts`，15 个用例）新增：四态区分（missing / corrupt / 两处 corrupt 形态 / unsupported）、坏文件隔离后可读回原内容、`version: 99` 不被本版本覆盖且留下 `quarantined` 诊断、`starting` 无 `threadId` 恢复为 `failed`（对照：`starting` 有 `threadId` 仍降级 `idle`）、spawn 失败落盘 `failed` + `never_started`、跨实例 save 合并不互相覆盖、活锁拒绝写盘且原数据完好、崩溃残留锁被接管。隔离 / 中断识别 / 写锁三处都做了变异测试校验（改坏即变红）。
+
+### 2026-11-23 会话存储再补六个边界（fail-closed / 锁回收安全）
+
+第二轮 review 在上一版基础上找出 6 个会破坏「不静默丢数据」保证的边界，逐条修：
+
+- **`save()` fail-closed**：读盘结果是 `corrupt` / `unsupported` 时直接抛错拒绝写入，不再当空集合覆盖。之前只靠调用方先 `quarantine()`，一旦隔离失败（目录只读等）就整条绕开版本保护。
+- **非法记录整份判 corrupt**：`sessions` 数组里只要有一条结构不合法，`load()` 返回 `corrupt`（原文件被隔离、内容一字不动），不再 `filter` 掉那条——静默丢弃等于下次 `save` 永久删除它。
+- **关键状态落盘失败阻止 spawn**：`persistOwnedSessions()` 改为返回布尔；`sendMessage()` 写 `starting` 时若落盘失败，回滚 `runState`、置 `failed`、发错误事件并抛错，**不 spawn**。否则「锁竞争/磁盘满 → 只记诊断 → 照常启动 → 崩溃」会让 P1-2 的保证失效。其余路径（新建元数据、`dispose`）仍是告警策略。
+- **锁回收不再按年龄抢活锁**：`isStaleLock()` 只要能读出持有者，就只按 `process.kill(pid, 0)` 判断存活；`at` 时间戳不再参与判定（持锁进程可能只是被系统挂起）。时间上限只用于「内容读不出持有者」的孤儿锁（10s）。
+- **锁回收 ABA 安全**：先 `rename` 到本次调用独有的 `.reclaim` 路径（原子，只有一个回收者能成功），再核对内容是否仍是刚才判定为陈旧的那把；一致才删除，不一致（说明这瞬间已被别人换成新锁）用 `link` 原样放回。回调全程**从不删除 `lockPath` 本身**，杜绝「两个回收者互删对方新锁」。释放也只删 `token` 对得上的那把。
+- **锁文件永不残缺**：锁内容先写进临时文件再 `link` 到锁路径（原子且失败不留痕），因此不会出现「刚 open 就被 kill -9」留下的空锁。
+- **`threadId` 只增不减**：合并时若磁盘上的记录有 `threadId`、新写入的没有，保留磁盘值（其余字段仍按 `updatedAt` 新者赢）。另一个实例的旧快照不会抹掉已绑定的 Codex 线程。
+- 测试（`tests/session-store.test.ts`，23 个用例）新增：单条记录非法整份隔离、`save()` 对 unsupported/corrupt fail-closed 且原文件不变、隔离失败（只读目录）时仍不覆盖且写诊断、`starting` 落盘失败拒绝 spawn（`spawnCount === 0`）、活锁 10 分钟后仍不被抢、空锁放够时间能恢复/还新时不抢、`threadId` 不被旧快照抹掉。fail-closed、spawn 前置校验、年龄抢锁三处都做了变异测试（改坏即变红）。

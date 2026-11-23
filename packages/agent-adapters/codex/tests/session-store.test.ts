@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -172,6 +172,33 @@ describe('CodexSessionStore', () => {
 
     writeFileSync(filePath, JSON.stringify({ version: 1, sessions: 'nope' }), 'utf8');
     expect(new CodexSessionStore({ filePath }).load()).toEqual({ status: 'corrupt' });
+
+    // 数组里只要有一条结构非法，整份都算 corrupt——静默过滤掉那条，下次 save 就永久丢了
+    writeFileSync(
+      filePath,
+      JSON.stringify({ version: 1, sessions: [{ id: 'codex_ses_a', title: '缺字段' }] }),
+      'utf8',
+    );
+    expect(new CodexSessionStore({ filePath }).load()).toEqual({ status: 'corrupt' });
+  });
+
+  it('save 对读不动的文件 fail-closed：拒绝覆盖，原文件一字不动', () => {
+    const dir = makeDir('nienie-store-');
+    const filePath = join(dir, 'codex-sessions.json');
+    const futureContent = JSON.stringify({ version: 99, sessions: [] });
+    writeFileSync(filePath, futureContent, 'utf8');
+    const store = new CodexSessionStore({ filePath });
+
+    expect(() => store.save([{ ...STORE_BASE, id: 'codex_ses_new', title: '新', status: 'idle' }]))
+      .toThrow(/refusing to overwrite/);
+    // 核心断言：覆盖没发生（这层保护不能依赖调用方先隔离）
+    expect(readFileSync(filePath, 'utf8')).toBe(futureContent);
+
+    // 损坏文件同理
+    writeFileSync(filePath, '{"version":1,"sessions":', 'utf8');
+    expect(() => store.save([{ ...STORE_BASE, id: 'codex_ses_x', title: 'x', status: 'idle' }]))
+      .toThrow(/refusing to overwrite/);
+    expect(readFileSync(filePath, 'utf8')).toBe('{"version":1,"sessions":');
   });
 
   it('坏文件可以被隔离改名，原内容不丢', () => {
@@ -223,21 +250,100 @@ describe('CodexSessionStore', () => {
     expect(loadOk(store).map((session) => session.id)).toEqual(['codex_ses_keep']);
   });
 
+  it('threadId 只增不减：旧快照不能抹掉已绑定的线程', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_bound',
+        title: '已绑定线程',
+        status: 'idle',
+        threadId: 'th_bound',
+        runState: 'started',
+        updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+    ]);
+    // 另一个实例拿着「还没有 threadId」的旧快照后写，且时间戳更新
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_bound',
+        title: '已绑定线程',
+        status: 'running',
+        runState: 'starting',
+        updatedAt: '2026-11-23T00:05:00.000Z',
+      },
+    ]);
+
+    expect(loadOk(store)[0]).toMatchObject({
+      threadId: 'th_bound',
+      status: 'running',
+      updatedAt: '2026-11-23T00:05:00.000Z',
+    });
+  });
+
+  it('活锁不会被年龄抢走，只有持有进程消失才算陈旧', () => {
+    const dir = makeDir('nienie-store-');
+    const filePath = join(dir, 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_keep', title: '原有', status: 'idle' }]);
+
+    // 持有者还活着，但锁已经存在 10 分钟：仍然不许抢（持锁进程可能只是被挂起）
+    writeFileSync(
+      `${filePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now() - 600_000, token: 'other' }),
+      'utf8',
+    );
+    expect(() =>
+      store.save([{ ...STORE_BASE, id: 'codex_ses_new', title: '新', status: 'idle' }]),
+    ).toThrow(/locked by another writer/);
+    expect(loadOk(store).map((session) => session.id)).toEqual(['codex_ses_keep']);
+  });
+
   it('崩溃残留的旧锁会被接管（不让一次崩溃永久禁用持久化）', () => {
     const dir = makeDir('nienie-store-');
     const filePath = join(dir, 'codex-sessions.json');
     const store = new CodexSessionStore({ filePath });
-    // 持锁进程已不存在（pid 999999 基本不可能存在）+ 时间戳很旧
+    // 持锁进程已不存在（pid 999999 基本不可能存在）
     writeFileSync(
       `${filePath}.lock`,
-      JSON.stringify({ pid: 999999, at: Date.now() - 60_000 }),
+      JSON.stringify({ pid: 999999, at: Date.now(), token: 'dead' }),
       'utf8',
     );
 
     store.save([{ ...STORE_BASE, id: 'codex_ses_after_crash', title: '接管后写入', status: 'idle' }]);
 
     expect(loadOk(store).map((session) => session.id)).toEqual(['codex_ses_after_crash']);
+    // 回收过程不留垃圾：没有 .lock / .reclaim / .new 残留
+    expect(readdirSync(dir).filter((name) => name !== 'codex-sessions.json')).toEqual([]);
+  });
+
+  it('空锁文件（写入内容前就崩溃）放够时间后能自动恢复', () => {
+    const dir = makeDir('nienie-store-');
+    const filePath = join(dir, 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    // 旧版本/异常残留：内容为空，读不出持有者
+    writeFileSync(`${filePath}.lock`, '', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(`${filePath}.lock`, old, old);
+
+    store.save([{ ...STORE_BASE, id: 'codex_ses_after_empty', title: '恢复', status: 'idle' }]);
+
+    expect(loadOk(store).map((session) => session.id)).toEqual(['codex_ses_after_empty']);
     expect(existsSync(`${filePath}.lock`)).toBe(false);
+  });
+
+  it('空锁文件还很新时不抢（可能正被写入）', () => {
+    const dir = makeDir('nienie-store-');
+    const filePath = join(dir, 'codex-sessions.json');
+    writeFileSync(`${filePath}.lock`, '', 'utf8');
+    expect(() =>
+      new CodexSessionStore({ filePath }).save([
+        { ...STORE_BASE, id: 'codex_ses_x', title: 'x', status: 'idle' },
+      ]),
+    ).toThrow(/locked by another writer/);
   });
 });
 
@@ -483,6 +589,88 @@ describe('CodexAdapter 会话持久化', () => {
       (await restarted.listSessions()).map((session) => [session.id, session.status]),
     );
     expect(statuses.get(created.id)).toBe('failed');
+  });
+
+  it('数组里单条记录损坏时整份隔离，不静默丢弃那一条', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const dir = makeDir('nienie-store-');
+    const storePath = join(dir, 'codex-sessions.json');
+    const original = JSON.stringify({
+      version: 1,
+      sessions: [
+        { id: 'codex_ses_ok', title: '正常', projectPath: PROJECT, status: 'idle', createdAt: 'x', updatedAt: 'y' },
+        { id: 'codex_ses_broken', title: '缺字段' },
+      ],
+    });
+    writeFileSync(storePath, original, 'utf8');
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+    // 坏的那条不能「消失」——整份被隔离，原文件完整保留
+    await expect(adapter.listSessions()).resolves.toEqual([]);
+    const backup = readdirSync(dir).find((name) => name.includes('.corrupt.'));
+    expect(backup).toBeDefined();
+    expect(readFileSync(join(dir, backup!), 'utf8')).toBe(original);
+  });
+
+  it('starting 落盘失败时拒绝 spawn（安全边界不能靠尽力而为）', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const dir = makeDir('nienie-store-');
+    const storePath = join(dir, 'codex-sessions.json');
+    let spawnCount = 0;
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => {
+        spawnCount += 1;
+        return createFakeProcess('th_should_not_happen');
+      },
+    });
+    const created = await adapter.createSession({ title: '锁被占用', projectPath: PROJECT });
+
+    // 另一个活进程正持锁 → 落盘必失败
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+
+    await expect(adapter.sendMessage(created.id, '你好')).rejects.toThrow(/持久化失败/);
+    expect(spawnCount).toBe(0);
+    // 内存里这一轮也该是 failed，不能停在「发送中」
+    const session = await adapter.loadSession(created.id);
+    expect(session.status).toBe('failed');
+  });
+
+  it('隔离失败时也不覆盖原文件，并明确写进诊断', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const dir = makeDir('nienie-store-');
+    const storePath = join(dir, 'codex-sessions.json');
+    const futureContent = JSON.stringify({ version: 99, sessions: [] });
+    writeFileSync(storePath, futureContent, 'utf8');
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+
+    // 目录只读 → rename 隔离失败 → save 必须 fail-closed
+    chmodSync(dir, 0o500);
+    try {
+      await adapter.createSession({ title: '隔离失败', projectPath: PROJECT });
+      expect(readFileSync(storePath, 'utf8')).toBe(futureContent);
+      expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toMatch(
+        /quarantine FAILED|save failed/,
+      );
+    } finally {
+      chmodSync(dir, 0o700);
+    }
   });
 
   it('没有 sessionStorePath 时行为不变（不落盘、也不读历史文件）', async () => {
