@@ -56,6 +56,28 @@ function createFakeProcess(threadId: string): CodexProcessHandle {
   };
 }
 
+/** 假 Codex 进程：spawn 成功后再也不吐任何东西（模拟「新线程已起、threadId 还没回来就崩溃」）。 */
+function createSilentProcess(): CodexProcessHandle {
+  const emitter = new EventEmitter();
+  return {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill() {
+      emitter.emit('exit', 130);
+    },
+    onExit(listener) {
+      emitter.once('exit', listener);
+    },
+    onError(listener) {
+      emitter.once('error', listener);
+    },
+    onSpawn(listener) {
+      emitter.once('spawn', listener);
+      emitter.emit('spawn');
+    },
+  };
+}
+
 /** 建一个只有 threads 表的 state 库，用来验证「线程是否还存在」。 */
 function seedThreads(codexHome: string, ids: string[]): void {
   const dbPath = join(codexHome, 'state_5.sqlite');
@@ -218,5 +240,90 @@ describe('Codex 线程恢复的真实性', () => {
 
     // threads 表不存在 → 查询报错 → fail-open，仍然 resume（交给 Codex 自己判断）
     expect(calls[0]?.slice(0, 2)).toEqual(['exec', 'resume']);
+  });
+
+  it('确认旧线程不存在后把 threadMissing 落盘（否则死 id 会被合并回来）', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_lost', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => createSilentProcess(),
+    });
+
+    await adapter.loadSession('codex_ses_lost');
+    await adapter.sendMessage('codex_ses_lost', '继续');
+
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({
+      threadId: 'th_gone', // 最后已知身份保留，便于诊断
+      threadMissing: true, // 但明确标记「不许再 resume」
+      runState: 'starting',
+    });
+  });
+
+  it('新线程起来但 threadId 还没回来就崩溃 → 重启恢复成 failed 而不是 idle', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_crash', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    // 第一次运行：检测到旧线程不存在 → 开新线程 → 进程起来了但不吐 thread.started（崩溃）
+    const first = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => createSilentProcess(),
+    });
+    await first.loadSession('codex_ses_crash');
+    await first.sendMessage('codex_ses_crash', '继续');
+
+    // 重启：磁盘上是 threadId=th_gone + threadMissing + runState=starting。
+    // 不能因为「threadId 非空」就当成没跑过 —— 新线程的身份已经丢了。
+    const second = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+    const statuses = new Map(
+      (await second.listSessions()).map((session) => [session.id, session.status]),
+    );
+    expect(statuses.get('codex_ses_crash')).toBe('failed');
+  });
+
+  it('新线程绑定成功后清掉 threadMissing，并持久化新 threadId', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_rebind', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => createFakeProcess('th_new'),
+    });
+    await adapter.loadSession('codex_ses_rebind');
+    await adapter.sendMessage('codex_ses_rebind', '继续');
+    await adapter.waitForRun('codex_ses_rebind');
+
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]?.threadId).toBe('th_new');
+    expect(stored.sessions[0]?.threadMissing).toBeUndefined();
+    expect(stored.sessions[0]?.runState).toBe('started');
   });
 });

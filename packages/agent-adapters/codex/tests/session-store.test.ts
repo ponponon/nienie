@@ -276,6 +276,66 @@ describe('CodexSessionStore', () => {
     ]);
   });
 
+  it('threadMissing 是粘性标记：旧快照的 undefined 抹不掉它', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_lost',
+        threadId: 'th_gone',
+        threadMissing: true,
+        status: 'idle',
+        updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+    ]);
+    // 另一个实例手里是「还不知道线程失效」的旧快照，时间戳更新
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_lost',
+        threadId: 'th_gone',
+        status: 'running',
+        updatedAt: '2026-11-23T00:05:00.000Z',
+      },
+    ]);
+
+    const [session] = loadOk(store);
+    expect(session).toMatchObject({ threadId: 'th_gone', threadMissing: true, status: 'running' });
+  });
+
+  it('绑定到新 threadId 时解除 threadMissing', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_rebind',
+        threadId: 'th_gone',
+        threadMissing: true,
+        status: 'idle',
+        updatedAt: '2026-11-23T00:00:00.000Z',
+      },
+    ]);
+    store.save([
+      {
+        ...STORE_BASE,
+        id: 'codex_ses_rebind',
+        threadId: 'th_new',
+        runState: 'started',
+        status: 'running',
+        updatedAt: '2026-11-23T00:05:00.000Z',
+      },
+    ]);
+
+    const sessions = loadOk(store);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.threadId).toBe('th_new');
+    expect(sessions[0]?.threadMissing).toBeUndefined();
+  });
+
   it('写锁被活进程持有时拒绝写盘（不无锁覆盖），成功写完不留锁文件', () => {
     const dir = makeDir('nienie-store-');
     const filePath = join(dir, 'codex-sessions.json');

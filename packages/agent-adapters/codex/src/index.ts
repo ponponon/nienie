@@ -104,6 +104,8 @@ const CODEX_INTERACTIVE_SOURCES_SQL = `source IN (${CODEX_INTERACTIVE_SOURCES.ma
 
 type CodexSessionRecord = AgentSession & {
   threadId?: string | undefined;
+  /** 已确认该 threadId 在 Codex 侧不存在：仍保留作「最后已知身份」，但禁止再 resume。 */
+  threadMissing?: boolean | undefined;
   /** 执行阶段：用于识别「spawn 后、threadId 落盘前」的崩溃窗口。 */
   runState?: CodexSessionRunState | undefined;
 };
@@ -412,8 +414,9 @@ export class CodexAdapter implements AgentAdapter {
         agentId: 'codex',
         title: session.title,
         projectPath: session.projectPath,
-        status: restoreStatus(session.status, runState, session.threadId),
+        status: restoreStatus(session.status, runState, session.threadId, session.threadMissing),
         runState,
+        ...(session.threadMissing ? { threadMissing: true } : {}),
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
       });
@@ -437,6 +440,7 @@ export class CodexAdapter implements AgentAdapter {
         owned.map((record) => ({
           id: record.id,
           ...(record.threadId ? { threadId: record.threadId } : {}),
+          ...(record.threadMissing ? { threadMissing: true } : {}),
           title: record.title,
           projectPath: record.projectPath,
           status: record.status,
@@ -727,9 +731,11 @@ export class CodexAdapter implements AgentAdapter {
       if (boundThreadId && !this.codexThreadExists(boundThreadId)) {
         const lostThreadId = boundThreadId;
         boundThreadId = undefined;
-        // 内存里解绑，避免下一轮继续拿这个死 id 去 resume（磁盘上的绑定由 store 的
-        // 「threadId 只增不减」保留，下次启动会再检测一次，不会误删用户数据）
-        delete record.threadId;
+        // 关键：**保留** threadId（最后已知身份）但打上失效标记并持久化。
+        // 只解绑不落盘会让 store 的「threadId 只增不减」把死 id 又合并回来，
+        // 于是「spawn 了新线程但还没拿到 id 就崩溃」重启后 threadId 仍在，
+        // 崩溃窗口判定失效、被误降级成 idle（把之前修好的 P1-2 又破坏掉）。
+        record.threadMissing = true;
         record.runState = 'never_started';
         this.emitDiagnosticWarning(
           `codex thread ${lostThreadId} no longer exists; starting a new thread for ${sessionId}`,
@@ -1017,6 +1023,8 @@ export class CodexAdapter implements AgentAdapter {
     const threadId = this.normalizer.getThreadId(sessionId);
     if (threadId && record.threadId !== threadId) {
       record.threadId = threadId;
+      // 绑定到新线程 = 失效标记解除（旧线程的 id 已经被更可信的新身份取代）
+      record.threadMissing = false;
       record.runState = 'started';
       // 本进程亲眼看到 thread.started：它就是存在的，不必再查库（见 codexThreadExists）
       this.verifiedThreads.add(threadId);
@@ -1064,8 +1072,11 @@ function restoreStatus(
   status: AgentStatus,
   runState: CodexSessionRunState,
   threadId: string | undefined,
+  threadMissing: boolean | undefined,
 ): AgentStatus {
-  const interrupted = runState === 'starting' && !threadId;
+  // 「跑了一半被打断」= 正在启动、但手里没有**可用的** threadId。
+  // threadMissing 也算没有：那句话是真的（线程已不存在），新线程的 id 在崩溃前没拿到。
+  const interrupted = runState === 'starting' && (!threadId || threadMissing === true);
   if (interrupted) return 'failed';
   return status === 'running' || status === 'starting' || status === 'waiting' ? 'idle' : status;
 }

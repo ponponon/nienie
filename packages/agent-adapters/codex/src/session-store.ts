@@ -24,6 +24,14 @@ export type CodexStoredSession = {
   id: string;
   /** Codex 真实线程 id；会话创建后、首个 `thread.started` 到达前可能还没有。 */
   threadId?: string | undefined;
+  /**
+   * 已确认这个 `threadId` 在 Codex 侧不存在（线程被删 / 换机器 / 库被重置）。
+   *
+   * 与 `threadId` 并存而不是删掉 `threadId`：后者是「最后已知身份」，仍要留给诊断与去重；
+   * 而 `threadMissing` 是「不许再拿它 resume」的持久标记。合并时它是粘性的，
+   * 只有绑定到新的 threadId 才解除。
+   */
+  threadMissing?: boolean | undefined;
   title: string;
   projectPath: string;
   status: AgentStatus;
@@ -159,7 +167,17 @@ export class CodexSessionStore {
           // threadId 只增不减：另一实例的旧快照（还没有 threadId）即使 updatedAt 更新，
           // 也不能把已绑定的 Codex 线程抹掉——这是恢复上下文唯一的依据。
           const keepThreadId = current?.threadId && !session.threadId ? current.threadId : undefined;
-          merged.set(session.id, keepThreadId ? { ...session, threadId: keepThreadId } : session);
+          const threadId = keepThreadId ?? session.threadId;
+          // 换了新线程 = 重新绑定，失效标记自然解除；否则 threadMissing 是**粘性**的：
+          // 它表达「这个 threadId 已被确认不存在」，不能因为另一个实例的旧快照是 undefined
+          // 就被抹掉，否则「死 id 仍被当可恢复」会重新出现。
+          const rebound = Boolean(session.threadId && session.threadId !== current?.threadId);
+          const threadMissing = rebound ? Boolean(session.threadMissing) : current?.threadMissing === true || session.threadMissing === true;
+          merged.set(session.id, {
+            ...session,
+            ...(threadId ? { threadId } : {}),
+            ...(threadMissing ? { threadMissing: true } : {}),
+          });
         }
       }
 
@@ -317,6 +335,7 @@ function isStoredSession(value: unknown): value is CodexStoredSession {
     typeof candidate.createdAt === 'string' &&
     typeof candidate.updatedAt === 'string' &&
     (candidate.threadId === undefined || typeof candidate.threadId === 'string') &&
+    (candidate.threadMissing === undefined || typeof candidate.threadMissing === 'boolean') &&
     (candidate.runState === undefined ||
       RUN_STATES.includes(candidate.runState as CodexSessionRunState)) &&
     KNOWN_STATUSES.includes(candidate.status as AgentStatus)
