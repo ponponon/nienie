@@ -977,3 +977,15 @@
 - **查询失败 fail-open**：state 库不存在、`sqlite3` 缺失、查询报错一律按「线程存在」处理，照旧 resume 交给 Codex 判断——不能因为一次抖动就判用户上下文死刑。只有「查询成功且确实没有这一行」才降级。
 - **不做多余查询**：本进程亲眼见过 `thread.started` 的 threadId 直接标记为已确认（`verifiedThreads` 缓存），只有从磁盘恢复出来的绑定才会查一次；查不到的结果不缓存（线程可能被同步回来）。
 - **archived 的处理**：Nienie 自建会话在 Codex 侧被归档后数据仍在、仍可 resume，所以在 Nienie 里**不隐藏**——用户是在 Codex 里整理列表，不等于要在手机端删掉这个会话。Codex 原生会话的归档过滤仍由历史查询的 `archived = 0` 负责。
+
+### 2026-11-23 第三方 review 第五轮：两条 P1（失效标记落盘 / 提示不误判失败）
+
+上一节（`032345a`）把「线程消失」从「假装可恢复」改成了「开新线程 + 提示」，review 在这条链路上又抓出两个 P1——都出在**修复本身的副作用**上：
+
+- **`threadId` 失效标记必须落盘（否则崩溃窗口又被破开）**：原实现只 `delete record.threadId` 做内存解绑，注释里指望「下次启动会再检测一次」。但 store 的合并规则是「`threadId` 只增不减」（这是保住用户上下文的唯一依据），于是下次 `persist` 会把内存里已经没有的旧 id 从磁盘**合并回来**。此时若正好卡在「新线程已 spawn、`thread.started` 还没回来就崩溃」，重启后磁盘上是 `threadId=<死 id> + runState=starting`，`restoreStatus()` 判定「有 id ⇒ 没被打断」→ 会话被降级成 `idle`，把第二轮修好的崩溃窗口 P1-2 又破开一次，同时下一轮还会再拿死 id 去 `exec resume`。
+  - 现在改为保留 `threadId`（最后已知身份，便于诊断与去重）并打上 `threadMissing` 标记，**同一次 `starting` 持久化里落盘**。
+  - store 侧 `threadMissing` 是**粘性**的：只有记录绑定了新 `threadId`（`rebound`）才允许清除，否则另一个实例手里「还不知道线程失效」的旧快照（`undefined`）抹不掉它——与 `threadId` 只增不减同源，都是「不能让旧快照回退已知事实」。
+  - `restoreStatus()` 的打断判定改为 `runState === 'starting' && (!threadId || threadMissing)`：线程已确认不存在时，那个 id 不算有效身份。
+- **`THREAD_LOST` 是提示，不是执行失败**：手机端 `case 'error'` 之前的语义是「错误事件同步落终态」（置 `failed`、终止 Thinking 计时、resolve 等待占位）。`THREAD_LOST` 复用了 `error` 这个唯一能承载自由文本的事件类型，于是「Bridge 已改用新线程继续跑这一轮」被渲染成红色失败卡片，会话被判定失败、计时被掐断——**降级动作比原问题更吓人**。
+  - 协议侧不新增事件类型（避免版本兼容负担），改为在 `error.payload.code` 上区分语义：`kSessionNoticeCodes = {'THREAD_LOST'}` 走「只落卡片」分支，不改状态、不终止计时、不清等待占位，让后续 `running` / `idle` 自己收敛；其余 `code` 保持原语义不变。
+- 测试：`thread-health.test.ts` 新增三条（`threadMissing` 落盘、崩溃窗口恢复成 `failed`、绑定新线程后清除标记）、`session-store.test.ts` 新增两条（粘性合并、rebind 解除）、`mobile_app_test.dart` 新增一条（`THREAD_LOST` 只落卡片 + 对照组 `RUN_FAILED` 仍置 `failed`）。三处都做了变异验证（把守卫改坏即变红）。
