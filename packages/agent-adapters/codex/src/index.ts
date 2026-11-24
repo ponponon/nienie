@@ -30,6 +30,7 @@ import { CodexEventNormalizer, type CodexNormalizerOptions } from './normalizer.
 import {
   CodexSessionStore,
   isRunOwnerAlive,
+  withFileWriteLock,
   type CodexBeginRunResult,
   type CodexBindingRead,
   type CodexExpectedBinding,
@@ -238,7 +239,13 @@ export class CodexAdapter implements AgentAdapter {
   /** 运行期失败意图的挂起队列（store 无法确认归属时先挂着，确认后才登记/发事件）。 */
   private readonly pendingRunFailures = new Map<
     string,
-    { attempt: string | undefined; error: unknown; retries: number; apply: () => void }
+    {
+      attempt: string | undefined;
+      error: unknown;
+      retries: number;
+      apply: () => void;
+      defer: () => void;
+    }
   >();
   private readonly runFailureConfirmTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
@@ -255,6 +262,14 @@ export class CodexAdapter implements AgentAdapter {
   }> = [];
   /** 本实例已领取（rename 到手）的 sidecar 副本；全部送达后才删除。 */
   private readonly claimedStaleFiles: string[] = [];
+  /**
+   * 本 Adapter 实例的领取文件名标识。
+   *
+   * 同一进程里可以有多个 Adapter 实例（测试、重建），只靠 pid 时它们会生成同名
+   * claim 文件——`renameSync` 静默覆盖目的地，后领的批次把先领的批次顶掉（提示丢失）
+   * 或共用一个删除入口（把对方未确认的副本删掉）。claim 文件名必须跨实例唯一。
+   */
+  private readonly claimOwnerId = randomUUID();
   private staleClaimSeq = 0;
   /**
    * F5：Session 串行锁——sendMessage 入口同步加锁，直到**真实进程退出**（onExit）才释放。
@@ -756,18 +771,30 @@ export class CodexAdapter implements AgentAdapter {
     this.pendingRetryTimers.set(sessionId, { attempt: pendingAttempt, timer });
   }
 
-  /** 终态最终写不进磁盘的记录落盘（sidecar），供下一个 Adapter 加载后展示。 */
+  /**
+   * 终态最终写不进磁盘的记录落盘（sidecar），供下一个 Adapter 加载后展示。
+   *
+   * append 与 claim 的 rename 共用 sidecar 锁：打开的 fd 一旦被 rename 带走，
+   * 这条字节就写进别人的 claim 副本、随副本一起删掉——记到最后的提示不能这样消失。
+   */
   private persistStaleOutcomeNotice(sessionId: string): void {
     if (!this.sessionStorePath) return;
+    const sidecar = `${this.sessionStorePath}.stale-outcomes`;
     try {
-      writeFileSync(
-        `${this.sessionStorePath}.stale-outcomes`,
-        `${JSON.stringify({
-          sessionId,
-          at: new Date().toISOString(),
-          message: `codex session ${sessionId}: 终态最终未能写入本地索引（重试已放弃），其他窗口可能仍把它显示成运行中`,
-        })}\n`,
-        { flag: 'a' },
+      withFileWriteLock(
+        `${sidecar}.lock`,
+        () => {
+          writeFileSync(
+            sidecar,
+            `${JSON.stringify({
+              sessionId,
+              at: new Date().toISOString(),
+              message: `codex session ${sessionId}: 终态最终未能写入本地索引（重试已放弃），其他窗口可能仍把它显示成运行中`,
+            })}\n`,
+            { flag: 'a' },
+          );
+        },
+        'codex stale-outcomes sidecar',
       );
     } catch (error) {
       this.emitDiagnosticWarning(
@@ -782,11 +809,19 @@ export class CodexAdapter implements AgentAdapter {
    * 领取（claim）sidecar 里的「终态没写进索引」记录。
    *
    * **原子 rename 领取**：`<store>.stale-outcomes` 一次性 rename 成本实例的
-   * `<…>.<pid>.<seq>.claim` 副本——两个进程同时抢同一个 sidecar 只有一个成功，
+   * `<…>.<pid>.<实例UUID>.<seq>.claim` 副本——两个进程同时抢同一个 sidecar 只有一个成功，
    * 读-发-删的旧做法会让同一条提示被发两次；而写入方永远 append 到原路径，
    * 「读取后有人追加、旧读取者把新记录一起删掉」的窗口也随之消失。
+   * 文件名里的实例 UUID 保证同进程的多个 Adapter 也不会撞名（rename 会静默覆盖
+   * 同名目的地，撞名 = 后领的批次顶掉先领的批次）。
    *
-   * 持有进程已死的孤儿 claim 文件在这里一并收编（崩溃恢复）。
+   * **所有 rename 与写入方的 append 共用 sidecar 锁**：append 的 fd 若在 rename
+   * 窗口里还开着，追加的字节会落进被领走的 claim 副本、随副本一起删掉——记到最后
+   * 的提示不能这样消失。锁被占时这轮不领取（提示留在原地），等下一轮 flush。
+   *
+   * 持有进程已死的孤儿 claim 文件在这里一并收编（崩溃恢复）——收编同样是原子
+   * rename 到本实例名下：两个实例先后看中同一个孤儿时，只有 rename 成功的拿到，
+   * 原地认领会让他们各解析一份、同一提示发两次。
    * **领取 ≠ 消费**：记录只在 `flushStaleOutcomeNotices` 确认送达之后才删副本。
    */
   private claimStaleOutcomeFiles(): void {
@@ -796,29 +831,48 @@ export class CodexAdapter implements AgentAdapter {
     const dir = dirname(file);
     /** 本次新领到的副本（只有它们才解析入队，旧副本的提示早已在队列里）。 */
     const fresh: string[] = [];
-    if (existsSync(file)) {
-      const claim = `${file}.${process.pid}.${++this.staleClaimSeq}.claim`;
-      try {
-        renameSync(file, claim);
-        this.claimedStaleFiles.push(claim);
-        fresh.push(claim);
-      } catch {
-        // 抢输（别的进程刚领走）：不是我们的
-      }
-    }
     try {
-      for (const name of readdirSync(dir)) {
-        if (!name.startsWith(`${base}.`) || !name.endsWith('.claim')) continue;
-        const full = join(dir, name);
-        if (this.claimedStaleFiles.includes(full)) continue;
-        const pid = Number(name.slice(base.length + 1).split('.')[0]);
-        // 只收编持有者已经不在的孤儿；活着的（含本进程其他实例）不抢
-        if (Number.isFinite(pid) && pid > 0 && (pid === process.pid || isPidAlive(pid))) continue;
-        this.claimedStaleFiles.push(full);
-        fresh.push(full);
-      }
+      withFileWriteLock(
+        `${file}.lock`,
+        () => {
+          if (existsSync(file)) {
+            const claim = `${file}.${process.pid}.${this.claimOwnerId}.${++this.staleClaimSeq}.claim`;
+            try {
+              renameSync(file, claim);
+              this.claimedStaleFiles.push(claim);
+              fresh.push(claim);
+            } catch {
+              // 抢输（别的进程刚领走）：不是我们的
+            }
+          }
+          try {
+            for (const name of readdirSync(dir)) {
+              if (!name.startsWith(`${base}.`) || !name.endsWith('.claim')) continue;
+              const full = join(dir, name);
+              if (this.claimedStaleFiles.includes(full)) continue;
+              const pid = Number(name.slice(base.length + 1).split('.')[0]);
+              // 只收编持有者已经不在的孤儿；活着的（含本进程其他实例）不抢
+              if (Number.isFinite(pid) && pid > 0 && (pid === process.pid || isPidAlive(pid))) continue;
+              // 孤儿收编走 rename：rename 成功才算认领成功，对方再扫时文件已挂上
+              // 本实例的名字（活人 pid），不会再收编第二遍
+              const adopt = `${file}.${process.pid}.${this.claimOwnerId}.${++this.staleClaimSeq}.claim`;
+              try {
+                renameSync(full, adopt);
+              } catch {
+                continue; // 刚被别的实例收编/删除
+              }
+              this.claimedStaleFiles.push(adopt);
+              fresh.push(adopt);
+            }
+          } catch {
+            // 目录读不了不影响主流程
+          }
+        },
+        'codex stale-outcomes sidecar',
+      );
     } catch {
-      // 目录读不了不影响主流程
+      // sidecar 锁一直被占：这轮不领取（提示留在原地），下一轮 flush 再来
+      return;
     }
     for (const claim of fresh) {
       let raw: string;
@@ -1182,7 +1236,27 @@ export class CodexAdapter implements AgentAdapter {
 
   private emitEvent(event: CanonicalAgentEvent): void {
     for (const listener of this.listeners) {
-      listener(event);
+      this.safeCallListener(listener, event);
+    }
+  }
+
+  /**
+   * 单个监听器抛异常必须就地隔离：不能让一个坏监听器毁掉整次派发、更不能让异常
+   * 冒充「所有权无法确认」把失败意图重复登记。异常视为未送达（ack 语义）+ 诊断。
+   */
+  private safeCallListener(
+    listener: (event: CanonicalAgentEvent) => unknown,
+    event: CanonicalAgentEvent,
+  ): boolean {
+    try {
+      return listener(event) !== false;
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `event listener threw for ${event.type}/${event.sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
     }
   }
 
@@ -1318,6 +1392,12 @@ export class CodexAdapter implements AgentAdapter {
       let runClosed = false;
       /** 运行期 error 的失败意图：RUN_FAILED 即时反馈，磁盘终态到 close 才落。 */
       let runError: Error | undefined;
+      /**
+       * 归属始终无法确认的失败（fail-closed）：终态**照常按 failed 落盘**（finishRun
+       * 的 fencing 会拒绝过期写入），但不发任何失败语义事件、waitForRun 不以失败
+       * reject——没有栅栏确认就产生确定失败语义，等于把结果发进可能已易主的会话。
+       */
+      let unverifiedRunError: unknown;
 
       proc.stdout.on('data', (chunk: Buffer | string) => {
         buffer += chunk.toString();
@@ -1360,16 +1440,18 @@ export class CodexAdapter implements AgentAdapter {
             `Codex 运行失败: ${error instanceof Error ? error.message : String(error)}`,
           );
         };
+        /** 归属无法确认时的降级登记：只留终态意图，不发事件、不改内存状态。 */
+        const deferFailureIntent = () => {
+          unverifiedRunError = error;
+        };
         const attempt = runStart?.attempt;
         if (!this.sessionStore || !this.isOwnedSession(sessionId) || !attempt) {
           // 没有跨实例竞争对象（无 store / 这一轮没开起来）：直接登记
-          applyFailureIntent();
+          this.guardRunFailureRegister(sessionId, applyFailureIntent);
           return;
         }
-        const outcome = this.sessionStore.withRunFailureOwnership(
-          sessionId,
-          { attempt },
-          applyFailureIntent,
+        const outcome = this.sessionStore.withRunFailureOwnership(sessionId, { attempt }, () =>
+          this.guardRunFailureRegister(sessionId, applyFailureIntent),
         );
         if (outcome === 'current') {
           return; // 已在锁内登记并发出
@@ -1383,6 +1465,7 @@ export class CodexAdapter implements AgentAdapter {
           error,
           retries: 0,
           apply: applyFailureIntent,
+          defer: deferFailureIntent,
         });
         this.scheduleRunFailureConfirm(sessionId);
         // 不 settle：waitForRun 的语义是「这轮执行真正收尾」，由 onExit（close）统一兑现
@@ -1431,10 +1514,11 @@ export class CodexAdapter implements AgentAdapter {
         // 终态 runState 只表达「这轮走到过哪」（threadId 在，含刚重试成功，就是 started）；
         // 终态写入同时清掉 runOwner——进程都退出了还留着它，重启会把已结束的轮次当成还在跑。
         const endedRunState = record!.threadId ? ('started' as const) : ('never_started' as const);
-        if (runError) {
-          // 运行期 error 的失败意图到这一刻才落盘（RUN_FAILED 已在 onError 即时反馈，不重发）：
-          // error ≠ 已退出，提前 finishRun 会清 runOwner 放掉跨实例执行保护。
-          // 过期执行由 finishRun 的 attempt fencing 挡成 stale，本地状态也不会被动。
+        if (runError || unverifiedRunError !== undefined) {
+          // 运行期 error 的失败意图到这一刻才落盘（RUN_FAILED 已在 onError 即时反馈，不重发；
+          // 归属无法确认的降级意图只落盘、不发事件）：error ≠ 已退出，提前 finishRun 会
+          // 清 runOwner 放掉跨实例执行保护。过期执行由 finishRun 的 attempt fencing 挡成
+          // stale，本地状态也不会被动。
           this.persistRunOutcome(sessionId, record!, runStart?.attempt, {
             status: 'failed',
             runState: endedRunState,
@@ -1452,8 +1536,10 @@ export class CodexAdapter implements AgentAdapter {
             status: 'failed',
             runState: endedRunState,
           });
-          // 过期执行的失败不冒充当前 attempt 的失败（本地状态也没动）
-          if (outcome !== 'stale') {
+          // 失败语义的事件只在**栅栏确认通过**（applied）后才发：stale 是过期执行
+          // 不冒充当前轮；persist-failed 是归属未经确认（锁被占/写不动），同样不许把
+          // 确定失败语义发进可能已易主的会话——终态挂起重试，磁盘由 finishRun fencing 收尾
+          if (outcome === 'applied') {
             this.emitRunError(
               sessionId,
               code === null ? 'Codex 进程被信号终止' : `Codex 异常退出（退出码 ${code}）`,
@@ -1553,7 +1639,7 @@ export class CodexAdapter implements AgentAdapter {
   private emitEventWithAck(event: CanonicalAgentEvent): boolean {
     let delivered = false;
     for (const listener of this.listeners) {
-      if (listener(event) !== false) {
+      if (this.safeCallListener(listener, event)) {
         delivered = true;
       }
     }
@@ -1908,6 +1994,24 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
+   * 失败意图登记的异常边界：`register` 回调自身抛异常**不许当成「归属无法确认」**——
+   * 后者会挂起重试，把同一失败意图再登记一次、RUN_FAILED 再发一次。逐监听器
+   * 隔离（safeCallListener）后监听器异常已经到不了这里，能到这的是登记逻辑自身
+   * 的 bug：如实记诊断、就此收尾，绝不重试登记。
+   */
+  private guardRunFailureRegister(sessionId: string, register: () => void): void {
+    try {
+      register();
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `codex session ${sessionId}: run failure register threw: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
    * 失败意图的挂起重试：store 无法确认归属时先挂着（fail-closed），定时重新确认。
    * 确认通过才登记 + 发 RUN_FAILED；确认已过期（stale / not-found）就地作废。
    */
@@ -1927,11 +2031,13 @@ export class CodexAdapter implements AgentAdapter {
     const attempt = pending.attempt;
     if (!this.sessionStore || !this.isOwnedSession(sessionId) || !attempt) {
       this.pendingRunFailures.delete(sessionId);
-      pending.apply();
+      this.guardRunFailureRegister(sessionId, pending.apply);
       return;
     }
     let outcome: 'current' | 'stale-attempt' | 'not-found' | 'unavailable';
-    outcome = this.sessionStore.withRunFailureOwnership(sessionId, { attempt }, pending.apply);
+    outcome = this.sessionStore.withRunFailureOwnership(sessionId, { attempt }, () =>
+      this.guardRunFailureRegister(sessionId, pending.apply),
+    );
     if (outcome === 'current') {
       this.pendingRunFailures.delete(sessionId);
       return;
@@ -1942,13 +2048,22 @@ export class CodexAdapter implements AgentAdapter {
       return;
     }
     if (finalTry) {
-      // close 的最后一次确认仍无法确认归属：按失败收尾（磁盘由 finishRun fencing 保护），
-      // 不把失败永远藏在挂起队列里；如实记诊断。
+      // close 的最后一次确认仍无法确认归属：**不许 apply**——失败意图没过栅栏就发
+      // RUN_FAILED，等于把未经确认的失败语义打进可能已经易主的会话（B 接管后 A 的
+      // 事件照样污染 B，finishRun 只护得住磁盘、撤不回事件）。降级为 defer：
+      // 终态**照常按 failed 落盘**（finishRun fencing 拒绝过期写入），但不发任何
+      // 失败语义事件、waitForRun 不以失败 reject；只如实记诊断 + RUN_OUTCOME_UNKNOWN
+      // 会话提示（不置 failed）。
       this.pendingRunFailures.delete(sessionId);
+      pending.defer();
       this.emitDiagnosticWarning(
-        `codex session ${sessionId}: run failure ownership unconfirmed at close; applying failure intent (disk terminal still fenced by finishRun)`,
+        `codex session ${sessionId}: run failure ownership unconfirmed at close; failure event suppressed (disk terminal still fenced by finishRun)`,
       );
-      pending.apply();
+      this.emitSessionNotice(
+        sessionId,
+        'RUN_OUTCOME_UNKNOWN',
+        '执行结果无法确认：运行失败发生在本地索引被其他写入者占用期间，归属核对始终未通过，本次不按失败上报',
+      );
       return;
     }
     pending.retries += 1;
@@ -2008,14 +2123,18 @@ export class CodexAdapter implements AgentAdapter {
       for (const claim of this.claimedStaleFiles.splice(0)) {
         let released = false;
         try {
-          writeFileSync(
-            `${this.sessionStorePath}.stale-outcomes`,
-            readFileSync(claim, 'utf8'),
-            { flag: 'a' },
+          // 放回共享池的 append 同样持 sidecar 锁（不与任何 claim 的 rename 交错）
+          const content = readFileSync(claim, 'utf8');
+          withFileWriteLock(
+            `${this.sessionStorePath}.stale-outcomes.lock`,
+            () => {
+              writeFileSync(`${this.sessionStorePath}.stale-outcomes`, content, { flag: 'a' });
+            },
+            'codex stale-outcomes sidecar',
           );
           released = true;
         } catch {
-          // 放不回去就留着 claim 文件，持有者 pid 已退出后可被孤儿收编
+          // 放不回去（含锁被占）就留着 claim 文件，持有者 pid 已退出后可被孤儿收编
         }
         if (released) {
           try {

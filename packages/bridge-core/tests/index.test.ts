@@ -1150,6 +1150,104 @@ describe('bridge core', () => {
     expect(received[499]?.eventId).toBe('ev_cap_501');
     expect(registry.getDiagnostics()['registryBuffer']).toMatchObject({ droppedEvents: 1 });
   });
+
+  it('补发遵守 false 回执：没确认送达的事件留在缓冲，下一个真正下游收得到', () => {
+    const registry = new AgentRegistry();
+    const opencode = adapter('opencode');
+    registry.register(opencode);
+    opencode.emit({
+      version: 1,
+      eventId: 'ev_ack_1',
+      streamEpoch: 'ep1',
+      sequence: 1,
+      agentId: 'opencode',
+      sessionId: 'ses_ack',
+      timestamp: '2026-11-24T05:10:00.000Z',
+      type: 'text_delta',
+      payload: { delta: 'hi', partId: 'p1', partRevision: 0 },
+    });
+    // 中间层：收到但明确「没真正送到下游」（return false）——事件必须留在缓冲
+    const middle: string[] = [];
+    registry.onEvent((event) => {
+      middle.push(event.eventId);
+      return false;
+    });
+    expect(middle).toEqual(['ev_ack_1']);
+    // 真正下游接上：从缓冲补发，这一次确认送达
+    const downstream: string[] = [];
+    registry.onEvent((event) => {
+      downstream.push(event.eventId);
+    });
+    expect(downstream).toEqual(['ev_ack_1']);
+    // 已确认送达：再有新监听器也不重复补发
+    const late: string[] = [];
+    registry.onEvent((event) => {
+      late.push(event.eventId);
+    });
+    expect(late).toEqual([]);
+  });
+
+  it('所有监听器 return false 的 live 事件也退回缓冲，不静默丢弃', () => {
+    const registry = new AgentRegistry();
+    const opencode = adapter('opencode');
+    registry.register(opencode);
+    const middle: string[] = [];
+    registry.onEvent((event) => {
+      middle.push(event.eventId);
+      return false;
+    });
+    opencode.emit({
+      version: 1,
+      eventId: 'ev_allfalse_1',
+      streamEpoch: 'ep1',
+      sequence: 1,
+      agentId: 'opencode',
+      sessionId: 'ses_af',
+      timestamp: '2026-11-24T05:12:00.000Z',
+      type: 'text_delta',
+      payload: { delta: 'x', partId: 'p1', partRevision: 0 },
+    });
+    expect(middle).toEqual(['ev_allfalse_1']); // live 送达过中间层，但回执是未送达
+    // 一个成功回执都没有：事件退回缓冲，真正下游接上时补发
+    const downstream: string[] = [];
+    registry.onEvent((event) => {
+      downstream.push(event.eventId);
+    });
+    expect(downstream).toEqual(['ev_allfalse_1']);
+  });
+
+  it('监听器抛异常视为未送达：其他监听器照常收到，无一确认时事件留在缓冲', () => {
+    const registry = new AgentRegistry();
+    const opencode = adapter('opencode');
+    registry.register(opencode);
+    // 监听器 1 见到事件就炸：不许把监听器 2 一起拖下水
+    registry.onEvent(() => {
+      throw new Error('监听器炸了');
+    });
+    const second: string[] = [];
+    registry.onEvent((event) => {
+      second.push(event.eventId);
+      return false; // 也明确未送达：没有任何成功回执
+    });
+    opencode.emit({
+      version: 1,
+      eventId: 'ev_thrown_1',
+      streamEpoch: 'ep1',
+      sequence: 1,
+      agentId: 'opencode',
+      sessionId: 'ses_throw',
+      timestamp: '2026-11-24T05:14:00.000Z',
+      type: 'text_delta',
+      payload: { delta: 'y', partId: 'p1', partRevision: 0 },
+    });
+    expect(second).toEqual(['ev_thrown_1']); // 异常被隔离，监听器 2 照常收到
+    // 异常与 false 都不算成功回执：事件留在缓冲，下一个真正下游收得到
+    const downstream: string[] = [];
+    registry.onEvent((event) => {
+      downstream.push(event.eventId);
+    });
+    expect(downstream).toEqual(['ev_thrown_1']);
+  });
 });
 
 async function connectWsClient(url: string) {

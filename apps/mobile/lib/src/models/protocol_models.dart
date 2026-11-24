@@ -9,9 +9,15 @@ const String DEFAULT_RELAY_URL = 'wss://nienie-replay.quniv.cn';
 /// 例如 `THREAD_LOST` 表示原 Codex 线程已不存在、Bridge 已改用新线程继续执行。
 /// 手机端只把它渲染成卡片，不改会话状态、不终止 Thinking 计时、不清等待占位。
 ///
-/// `BIND_LOST`（线程身份落盘失败）、`PERSIST_FAILED`（终态最终未能写入本地索引）
-/// 同理：它们是持久化/身份类提示，把 cancelled/running 打成 failed 就是状态机语义错误。
-const Set<String> kSessionNoticeCodes = {'THREAD_LOST', 'BIND_LOST', 'PERSIST_FAILED'};
+/// `BIND_LOST`（线程身份落盘失败）、`PERSIST_FAILED`（终态最终未能写入本地索引）、
+/// `RUN_OUTCOME_UNKNOWN`（执行结果无法确认，归属核对未通过）同理：它们是持久化/
+/// 身份类提示，把 cancelled/running 打成 failed 就是状态机语义错误。
+const Set<String> kSessionNoticeCodes = {
+  'THREAD_LOST',
+  'BIND_LOST',
+  'PERSIST_FAILED',
+  'RUN_OUTCOME_UNKNOWN',
+};
 
 class PairingQrPayload {
   final int version;

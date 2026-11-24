@@ -962,6 +962,44 @@ describe('CodexSessionStore', () => {
     ).toBe('started');
   });
 
+  it('register 回调自身抛异常不得吞成 unavailable：业务回调异常≠归属无法确认（吞了会重试重复登记）', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_regerr', status: 'idle' }]);
+    const begun = store.beginRun(
+      'codex_ses_regerr',
+      at(store, 'codex_ses_regerr'),
+      '2026-11-23T01:00:00.000Z',
+      OWNER,
+    );
+    expect(begun.outcome).toBe('started');
+    if (begun.outcome !== 'started') return;
+
+    // register 抛异常：原样抛给调用方（同一个错误对象），不是返回 'unavailable'——
+    // 调用方把 'unavailable' 当成「归属没确认成」去挂起重试，同一失败意图就会登记两次
+    const boom = new Error('register 炸了');
+    let caught: unknown;
+    try {
+      store.withRunFailureOwnership('codex_ses_regerr', { attempt: begun.attempt }, () => {
+        throw boom;
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(boom);
+
+    // 对照：锁被第三方占着才是 unavailable（归属确实没确认成，可以挂起重试）
+    writeFileSync(
+      `${filePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    expect(
+      store.withRunFailureOwnership('codex_ses_regerr', { attempt: begun.attempt }, () => undefined),
+    ).toBe('unavailable');
+    rmSync(`${filePath}.lock`, { force: true });
+  });
+
   it('finishRun 是一次性终结：同一个 attempt 不许结束两次（cancelled 不被 failed 覆盖）', () => {
     const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     const store = new CodexSessionStore({ filePath });

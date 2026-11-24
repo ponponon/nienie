@@ -167,6 +167,24 @@ const STORE_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 /** 抢锁重试间隔（毫秒）。同步路径上用 Atomics.wait 阻塞，总等待上限约 70ms。 */
 const LOCK_RETRY_DELAYS_MS = [10, 20, 40] as const;
+
+/**
+ * `register` 业务回调自身抛出的异常标记。
+ *
+ * 外层 catch 必须把它与「锁抢不到 / 读盘失败」区分开：后者映射 `'unavailable'`
+ * （归属没确认成，挂起重试），前者原样抛给调用方——业务回调异常被吞成
+ * `'unavailable'` 会触发重试 → 同一失败意图重复登记、RUN_FAILED 重复发送。
+ */
+class RegisterCallbackError extends Error {
+  /** 原始异常：重抛时必须原样交还（不能吞成 'unavailable'，也不能换错误对象）。 */
+  readonly original: unknown;
+
+  constructor(original: unknown) {
+    super('run-failure register callback threw');
+    this.name = 'RegisterCallbackError';
+    this.original = original;
+  }
+}
 const RUN_STATES: readonly CodexSessionRunState[] = ['never_started', 'starting', 'started'];
 const KNOWN_STATUSES: readonly AgentStatus[] = [
   'starting',
@@ -555,6 +573,12 @@ export class CodexSessionStore {
    *   调用方必须挂起失败意图等重试确认，不许 fail-open 放行：最需要 fencing
    *   的时候恰恰是锁被别人占着的时候（比如另一个进程正在 `beginRun` 接管）。
    *
+   * **异常按来源分开，不能一律吞成 `'unavailable'`**：
+   * - 锁抢不到 / 读盘失败 / store 损坏 → `'unavailable'`（归属确实没确认成）；
+   * - `register` 回调自身抛出 → **原样抛给调用方**。业务回调异常不是「归属无法
+   *   确认」，吞成 `'unavailable'` 会让调用方挂起重试 → 同一失败意图登记两次、
+   *   RUN_FAILED 发两次。逐监听器隔离后监听器异常也到不了这里。
+   *
    * **只确认、不写终态**：真正的终态仍由 close 的 `finishRun` 落盘（fencing 不变）。
    * `register` 必须严格同步，且**不得从事件监听器里重入 Session Store**（此刻
    * 写锁还开着，重入只会撞上自己）。
@@ -576,10 +600,16 @@ export class CodexSessionStore {
         const record = sessions.find((session) => session.id === sessionId);
         if (!record) return 'not-found';
         if (record.runAttempt !== expected.attempt || !record.runOwner) return 'stale-attempt';
-        register();
+        try {
+          register();
+        } catch (error) {
+          // 业务回调异常单独标记：外层 catch 只把锁/读盘失败映射成 'unavailable'
+          throw new RegisterCallbackError(error);
+        }
         return 'current';
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof RegisterCallbackError) throw error.original;
       return 'unavailable';
     }
   }
@@ -715,61 +745,72 @@ export class CodexSessionStore {
    * 删除锁文件。代价是崩溃在临界区内会暂时挡住持久化，收益是互斥永远不会静默失效。
    */
   private withWriteLock<T>(fn: () => T): T {
-    const lockPath = `${this.filePath}.lock`;
-    mkdirSync(dirname(lockPath), { recursive: true });
-    // 本次调用的唯一标识：既用于临时文件名，也用于「只释放自己的锁」
-    const token = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    for (let attempt = 0; attempt <= LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
-      if (this.tryAcquireLock(lockPath, token)) {
-        try {
-          return fn();
-        } finally {
-          this.releaseLock(lockPath, token);
-        }
+    return withFileWriteLock(`${this.filePath}.lock`, fn, 'codex session store');
+  }
+}
+
+/**
+ * 通用「写锁文件」临界区：`<lockPath>` 的排他创建即持锁，机制与会话索引写锁
+ * 完全一致（link 原子抢锁、只释放自己的锁、抢不到退避后拒绝执行）。
+ *
+ * sidecar 的 append / claim / 归还也必须共用同一把锁：append 的 fd 一旦带着
+ * rename 进行（claim 领取），写进去的字节会落进被领走的 claim 文件，随副本
+ * 一起被删——记到最后的提示就这样消失。append 与 rename 都持锁就不存在交错。
+ */
+export function withFileWriteLock<T>(lockPath: string, fn: () => T, description: string): T {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  // 本次调用的唯一标识：既用于临时文件名，也用于「只释放自己的锁」
+  const token = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  for (let attempt = 0; attempt <= LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (tryAcquireLock(lockPath, token)) {
+      try {
+        return fn();
+      } finally {
+        releaseLock(lockPath, token);
       }
-      const delay = LOCK_RETRY_DELAYS_MS[attempt];
-      if (delay === undefined) break;
-      sleepSync(delay);
     }
-    throw new Error(`codex session store 被其他写入者占用：${describeLock(lockPath)}`);
+    const delay = LOCK_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined) break;
+    sleepSync(delay);
   }
+  throw new Error(`${description} 被其他写入者占用：${describeLock(lockPath)}`);
+}
 
-  /**
-   * 抢锁：先把完整内容写进临时文件，再 `link` 到锁路径。
-   *
-   * `link` 是原子的，且失败（`EEXIST`）时不留痕迹；更重要的是锁文件一经出现内容就是完整的，
-   * 不会出现「刚 open 就被 kill -9」留下的空锁——空锁没法判断持有者，是锁回收的最大麻烦。
-   */
-  private tryAcquireLock(lockPath: string, token: string): boolean {
-    const tmpPath = `${lockPath}.${token}.new`;
-    try {
-      writeFileSync(tmpPath, JSON.stringify({ pid: process.pid, at: Date.now(), token }), {
-        encoding: 'utf8',
-        mode: 0o600,
-      });
-      linkSync(tmpPath, lockPath);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
-      throw error;
-    } finally {
-      // 内容随 inode 一起留在了 lockPath（硬链接），临时名可以立刻删掉
-      rmSync(tmpPath, { force: true });
-    }
+/**
+ * 抢锁：先把完整内容写进临时文件，再 `link` 到锁路径。
+ *
+ * `link` 是原子的，且失败（`EEXIST`）时不留痕迹；更重要的是锁文件一经出现内容就是完整的，
+ * 不会出现「刚 open 就被 kill -9」留下的空锁——空锁没法判断持有者，是锁回收的最大麻烦。
+ */
+function tryAcquireLock(lockPath: string, token: string): boolean {
+  const tmpPath = `${lockPath}.${token}.new`;
+  try {
+    writeFileSync(tmpPath, JSON.stringify({ pid: process.pid, at: Date.now(), token }), {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    linkSync(tmpPath, lockPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
+  } finally {
+    // 内容随 inode 一起留在了 lockPath（硬链接），临时名可以立刻删掉
+    rmSync(tmpPath, { force: true });
   }
+}
 
-  /**
-   * 释放：**只删能确认是自己的那把**。
-   *
-   * 内容是空的/读不出来时说明这不是我们写的（我们的锁是先写完整内容再 `link`，
-   * 不存在半成品），这种情况下删掉就可能删到别人的锁，所以宁可留一个残留锁
-   * 让它走「人工确认后删除」的路径。
-   */
-  private releaseLock(lockPath: string, token: string): void {
-    const holder = tryReadLockHolder(lockPath);
-    if (!holder || holder.token !== token) return;
-    rmSync(lockPath, { force: true });
-  }
+/**
+ * 释放：**只删能确认是自己的那把**。
+ *
+ * 内容是空的/读不出来时说明这不是我们写的（我们的锁是先写完整内容再 `link`，
+ * 不存在半成品），这种情况下删掉就可能删到别人的锁，所以宁可留一个残留锁
+ * 让它走「人工确认后删除」的路径。
+ */
+function releaseLock(lockPath: string, token: string): void {
+  const holder = tryReadLockHolder(lockPath);
+  if (!holder || holder.token !== token) return;
+  rmSync(lockPath, { force: true });
 }
 
 type LockHolder = { pid: number; at: number; token: string };

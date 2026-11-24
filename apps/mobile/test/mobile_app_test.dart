@@ -4417,7 +4417,7 @@ void main() {
     await tester.pumpAndSettle();
 
     var seq = 1;
-    for (final code in ['BIND_LOST', 'PERSIST_FAILED']) {
+    for (final code in ['BIND_LOST', 'PERSIST_FAILED', 'RUN_OUTCOME_UNKNOWN']) {
       transport.emitServerEvent({
         'version': 1, 'eventId': 'nl_$code', 'sessionId': 'ses_alpha',
         'sequence': ++seq, 'timestamp': DateTime.now().toIso8601String(),

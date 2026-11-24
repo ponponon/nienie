@@ -21,6 +21,10 @@ export class AgentRegistry {
    * 转发层不能把这些事件发进空监听器集合静默丢掉）。缓冲在第一个下游监听器
    * 注册时补发；容量上限防无限增长，溢出走诊断计数。
    *
+   * **补发遵守送达回执**：只有监听器给出非 `false` 回执才移出缓冲——`false`
+   * （中间层还没有真正下游）与异常都算未送达，事件留在缓冲等下一个真正下游。
+   * 回执没确认就删事件，等于把事件丢进虚空。
+   *
    * **PERSIST_FAILED 不进缓冲**：它的可靠送达由 Adapter 侧的 sidecar 磁盘队列
    * 负责（下游接上后 `flushPendingNotices` 重发）——同一条提示不允许既走缓存
    * 又走磁盘队列被送达两次。
@@ -46,9 +50,19 @@ export class AgentRegistry {
       }
       let delivered = false;
       for (const listener of this.listeners) {
-        if (listener(event) !== false) {
-          delivered = true;
+        // 逐监听器隔离：单个监听器抛异常不打断其他监听器，异常视为未送达回执
+        try {
+          if (listener(event) !== false) {
+            delivered = true;
+          }
+        } catch {
+          // 异常 = 未送达：不冒充成功回执，也不毁掉整批派发
         }
+      }
+      if (!delivered && !isSidecarNoticeEvent(event)) {
+        // 一个成功回执都没收到：普通事件退回缓冲等真正下游
+        //（PERSIST_FAILED 的可靠副本在 Adapter 的 sidecar 队列，这里不重复缓冲）
+        this.bufferEvent(event);
       }
       return delivered;
     });
@@ -93,13 +107,24 @@ export class AgentRegistry {
 
   onEvent(listener: (event: CanonicalAgentEvent) => unknown): () => void {
     this.listeners.add(listener);
-    // 补发下游缺席期间缓冲的事件（只补给刚注册的这个监听器，不重复打扰老监听器）
+    // 补发下游缺席期间缓冲的事件（只补给刚注册的这个监听器，不重复打扰老监听器）。
+    // 只有收到成功回执才移出缓冲：`false`（中间层还没有真正下游）与异常都算
+    // 未送达，事件留在缓冲等下一个真正下游——回执没确认就删事件等于把它丢进虚空。
     if (this.pendingEvents.length > 0) {
       const pending = this.pendingEvents;
       this.pendingEvents = [];
+      const undelivered: CanonicalAgentEvent[] = [];
       for (const event of pending) {
-        listener(event);
+        let delivered = false;
+        try {
+          delivered = listener(event) !== false;
+        } catch {
+          delivered = false;
+        }
+        if (!delivered) undelivered.push(event);
       }
+      // 未送达的放回缓冲（同步补发期间没有新事件插队，相对顺序不变）
+      this.pendingEvents.push(...undelivered);
     }
     // PERSIST_FAILED 等持久化提示此前被退回 Adapter 等重试：下游到了，重发
     for (const adapter of this.adapters.values()) {
