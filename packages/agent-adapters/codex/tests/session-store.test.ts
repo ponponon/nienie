@@ -962,6 +962,50 @@ describe('CodexSessionStore', () => {
     ).toBe('started');
   });
 
+  it('finishRun 是一次性终结：同一个 attempt 不许结束两次（cancelled 不被 failed 覆盖）', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_once', threadId: 'th_x', status: 'idle' }]);
+    const begun = store.beginRun(
+      'codex_ses_once',
+      at(store, 'codex_ses_once'),
+      '2026-11-23T01:00:00.000Z',
+      OWNER,
+    );
+    expect(begun.outcome).toBe('started');
+    if (begun.outcome !== 'started') return;
+
+    // 第一次终结（用户取消）落盘
+    expect(
+      store.finishRun(
+        'codex_ses_once',
+        { attempt: begun.attempt },
+        { status: 'cancelled', runState: 'started', updatedAt: '2026-11-23T02:00:00.000Z' },
+      ),
+    ).toBe('finished');
+    // 第二次终结（cancel 后 kill 失败触发的 onError）必须被拒：
+    // 否则用户主动取消会被迟到的 failed 覆盖成「执行失败」
+    expect(
+      store.finishRun(
+        'codex_ses_once',
+        { attempt: begun.attempt },
+        { status: 'failed', runState: 'started', updatedAt: '2026-11-23T03:00:00.000Z' },
+      ),
+    ).toBe('stale-attempt');
+    expect(loadOk(store)[0]).toMatchObject({ status: 'cancelled', runState: 'started' });
+
+    // runAttempt 故意保留：迟到的 thread.started 仍能交身份（身份提交与执行终结是两件事）
+    expect(
+      store.commitThreadStarted(
+        'codex_ses_once',
+        { attempt: begun.attempt, revision: 0 },
+        'th_late',
+        '2026-11-23T03:00:00.000Z',
+      ).outcome,
+    ).toBe('committed');
+    expect(loadOk(store)[0]?.threadId).toBe('th_late');
+  });
+
   it('写锁被活进程持有时拒绝写盘（不无锁覆盖），成功写完不留锁文件', () => {
     const dir = makeDir('nienie-store-');
     const filePath = join(dir, 'codex-sessions.json');

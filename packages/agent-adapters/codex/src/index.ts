@@ -68,6 +68,13 @@ export type CodexProcessHandle = {
   stdout: Readable;
   stderr: Readable;
   kill(): void;
+  /**
+   * 进程收尾点：**进程已退出且 stdio 已关闭**之后才触发（Node `close` 的语义，不是 `exit`）。
+   *
+   * 为什么不能用 `exit`：`exit` 不保证 stdout 交付完毕——`thread.started` 可能还在
+   * 管道里、比 `exit` 晚到。收尾（最终重试 + 终态写入）必须等所有输出都处理完，
+   * 否则最终重试会早于最后一条数据，Codex 侧已建好的线程照样丢。
+   */
   onExit(listener: (code: number | null) => void): void;
   onError(listener: (error: Error) => void): void;
   /** R3-3：确认进程真正启动成功（Node 'spawn' 事件）。spawn 是异步确认，error 事件才暴露启动失败。 */
@@ -191,6 +198,24 @@ export class CodexAdapter implements AgentAdapter {
   private readonly sessions = new Map<string, CodexSessionRecord>();
   private readonly activeProcesses = new Map<string, CodexProcessHandle>();
   /**
+   * 落盘失败的执行终态（cancel / dispose / 运行期 error / 退出收尾写不进去时挂起）。
+   *
+   * 终态写入失败**不许声称 attempt 已结束**：本地状态不推进，patch 留在这，
+   * 收尾点（进程真正退出、锁释放后）重试补交（`drainPendingRunOutcome`）。
+   * 否则内存是 cancelled、磁盘还是 starting + runOwner，别的 Bridge 会把
+   * 已取消的任务显示成 running，身份操作也被在飞保护永久挡死。
+   */
+  private readonly pendingRunOutcomes = new Map<
+    string,
+    {
+      attempt: string | undefined;
+      patch: {
+        status: AgentStatus;
+        runState?: Exclude<CodexSessionRunState, 'starting'> | undefined;
+      };
+    }
+  >();
+  /**
    * F5：Session 串行锁——sendMessage 入口同步加锁，直到**真实进程退出**（onExit）才释放。
    * cancel 不释放锁（kill≠已退出），封死「kill 后 exit 前双进程」窗口。
    */
@@ -271,7 +296,10 @@ export class CodexAdapter implements AgentAdapter {
             child.kill('SIGTERM');
           },
           onExit(listener) {
-            child.once('exit', (code) => listener(code));
+            // close = 进程已退出 且 stdio 已关闭：收尾（最终重试/终态写入）才能
+            // 排在最后一条 stdout 数据之后。exit 可能先于数据交付，会把重试排在
+            // pendingThreadId 填好之前，线程 ID 照样丢。
+            child.once('close', (code) => listener(code));
           },
           onError(listener) {
             child.once('error', (err) => listener(err));
@@ -540,13 +568,18 @@ export class CodexAdapter implements AgentAdapter {
    * 主人，把它的失败写进本地记录会让自己的会话列表显示成失败（`toAgentSession` 对 failed
    * 优先），冒充当前 attempt 的终态。返回 `'stale'` 让调用方决定要不要发事件——过期执行的
    * 失败不冒充当前轮的失败。
+   *
+   * **落盘失败不许声称成功**：`finishRun` 抛错（锁被占等）时返回 `'persist-failed'`，
+   * 本地状态同样不推进，patch 挂进 `pendingRunOutcomes` 等收尾点重试。
+   * 返回 `'applied'` 却没写进磁盘，会让内存说 cancelled、磁盘还停在 starting + runOwner——
+   * 别的 Bridge 重启后把已取消的任务显示成 running，身份操作也被在飞保护永久挡死。
    */
   private persistRunOutcome(
     sessionId: string,
     record: CodexSessionRecord,
     attempt: string | undefined,
     patch: { status: AgentStatus; runState?: Exclude<CodexSessionRunState, 'starting'> | undefined },
-  ): 'applied' | 'stale' {
+  ): 'applied' | 'stale' | 'persist-failed' {
     const updatedAt = new Date().toISOString();
     const runState: Exclude<CodexSessionRunState, 'starting'> =
       patch.runState ?? (record.threadId ? 'started' : 'never_started');
@@ -579,11 +612,36 @@ export class CodexAdapter implements AgentAdapter {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      this.pendingRunOutcomes.set(sessionId, { attempt, patch });
+      return 'persist-failed';
     }
     record.status = patch.status;
     record.runState = runState;
     record.updatedAt = updatedAt;
     return 'applied';
+  }
+
+  /**
+   * 补交之前落盘失败的执行终态。只在收尾点调用：进程已退出、写锁已释放，
+   * 此刻必须把磁盘上的 attempt 收干净（清 runOwner + 终态 runState）。
+   *
+   * 成功（或 `stale-attempt`：已被新一轮接管）就清掉挂起；仍写不进去则保留挂起，
+   * 由调用方暴露持久化失败——绝不假装已经收干净。
+   */
+  private drainPendingRunOutcome(
+    sessionId: string,
+  ): 'applied' | 'stale' | 'persist-failed' | 'none' {
+    const pending = this.pendingRunOutcomes.get(sessionId);
+    if (!pending) return 'none';
+    const record = this.sessions.get(sessionId);
+    if (!record) {
+      this.pendingRunOutcomes.delete(sessionId);
+      return 'none';
+    }
+    const result = this.persistRunOutcome(sessionId, record, pending.attempt, pending.patch);
+    if (result === 'persist-failed') return 'persist-failed';
+    this.pendingRunOutcomes.delete(sessionId);
+    return result;
   }
 
   /**
@@ -992,6 +1050,12 @@ export class CodexAdapter implements AgentAdapter {
       });
 
       proc.onError((error) => {
+        // 用户主动取消后 kill 失败/迟到的 error 不得翻案：终态归 cancel 路径所有，
+        // 把 cancelled 覆盖成 failed（还发 RUN_FAILED）就是把「用户停止」伪装成「执行失败」。
+        if (this.cancelRequested.has(sessionId) || record!.status === 'cancelled') {
+          resolve();
+          return;
+        }
         // F3-1：运行期失败必须持久化 failed（不能只改本地状态/发事件），
         // 且不能把 activeProcesses 删除伪装成取消路径——真正释放等 onExit。
         // runState 必须写终态（never_started/started），把 starting 带进终态会让
@@ -1039,6 +1103,9 @@ export class CodexAdapter implements AgentAdapter {
         this.activeProcesses.delete(sessionId);
         // F5-2：真实进程退出才释放串行锁
         this.sessionLocks.delete(sessionId);
+        // 收尾点是补交挂起终态的最后机会（cancel/dispose/运行期 error 落盘失败留下的）：
+        // 进程已退出、锁已释放，磁盘上的 attempt 必须在这里收干净（清 runOwner + 终态）。
+        this.drainPendingRunOutcome(sessionId);
         const wasCancelled =
           this.cancelRequested.delete(sessionId) || record!.status === 'cancelled';
         // 终态 runState 只表达「这轮走到过哪」（threadId 在，含刚重试成功，就是 started）；
@@ -1057,6 +1124,7 @@ export class CodexAdapter implements AgentAdapter {
               code === null ? 'Codex 进程被信号终止' : `Codex 异常退出（退出码 ${code}）`,
             );
           }
+          this.noticeIfTerminalUnpersisted(sessionId);
           resolve();
           return;
         }
@@ -1067,11 +1135,25 @@ export class CodexAdapter implements AgentAdapter {
             runState: endedRunState,
           });
         }
+        this.noticeIfTerminalUnpersisted(sessionId);
         resolve();
       });
     });
     this.runs.set(sessionId, run);
     void run.catch(() => undefined); // 错误已经由 emitRunError 事件上报
+  }
+
+  /**
+   * 终态最终仍没写进磁盘时如实暴露：其他窗口可能把这个会话显示成运行中、
+   * 并把身份操作挡成 in-flight。收尾点已经没有下一次重试机会，必须让人知道。
+   */
+  private noticeIfTerminalUnpersisted(sessionId: string): void {
+    if (!this.pendingRunOutcomes.has(sessionId)) return;
+    this.emitSessionNotice(
+      sessionId,
+      'PERSIST_FAILED',
+      '这一轮的结束状态未能写入本地索引，其他窗口可能仍把它显示成运行中；请以 Codex 侧实际状态为准，必要时重启 Nienie 桌面端',
+    );
   }
 
   /** R3-3/F3：运行失败必须反馈到手机——错误事件 + 终态 status 事件（终止 Thinking 计时/置失败）。 */

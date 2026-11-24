@@ -509,6 +509,12 @@ export class CodexSessionStore {
    * 一轮执行的收尾（进程退出 / spawn 失败 / 取消）：带 attempt 的 fencing 写入。
    *
    * 迟到的旧执行在这里被挡住（`stale-attempt`），不会把新一轮的 `runState` / `status` 改回去。
+   *
+   * **一次性终结**：`runOwner` 在场才算「这一轮还没终结」。第一次终态写入会清掉它，
+   * 同一个 attempt 的后续终态一律 `stale-attempt`——否则 cancel 之后 kill 失败触发的
+   * onError 会把 `cancelled` 覆盖成 `failed`（用户主动取消被翻成执行失败）。
+   * `runAttempt` 故意保留：进程退出前迟到的 `thread.started` 仍要用它交身份
+   * （`commitThreadStarted` 只看 attempt，身份提交与执行终结是两件事）。
    */
   finishRun(
     sessionId: string,
@@ -525,7 +531,7 @@ export class CodexSessionStore {
       const sessions = existing.status === 'ok' ? existing.sessions : [];
       const record = sessions.find((session) => session.id === sessionId);
       if (!record) return 'not-found';
-      if (record.runAttempt !== expected.attempt) return 'stale-attempt';
+      if (record.runAttempt !== expected.attempt || !record.runOwner) return 'stale-attempt';
       record.status = patch.status;
       record.runState = patch.runState ?? 'started';
       // 终态 = 这一轮执行结束：清掉归属标记，「执行是否还活着」从此由 runOwner 表达，

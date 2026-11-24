@@ -27,69 +27,51 @@ function sqlText(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-/** 假 Codex 进程：只吐 thread.started，然后正常退出。 */
-function createFakeProcess(threadId: string): CodexProcessHandle {
+/**
+ * 假 Codex 进程：收尾语义与真实 ChildProcess 的 `close` 对齐——**「进程退出」与
+ * 「stdout 关闭」都到了才触发 onExit**。真实进程的 `exit` 可能早于最后一条 stdout
+ * 数据（`thread.started` 还在管道里），收尾逻辑必须等 stdio 关完，否则最终重试会
+ * 排在晚到的数据之前，线程 ID 照样丢。
+ *
+ * 输出行（`stdout.write`）、运行期报错（`fail`）和退出时机都由测试手动控制；
+ * `kill()` 异步收尾（真实 kill 的 exit/close 是异步到达的，测试可以先释放写锁、
+ * 再等收尾补交落盘失败的终态）。
+ */
+function createTestProcess(): CodexProcessHandle & {
+  finish(code?: number): void;
+  fail(error?: Error): void;
+  emitExit(code?: number): void;
+  endStdout(): void;
+} {
   const emitter = new EventEmitter();
   const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  setTimeout(() => {
-    stdout.write(`${JSON.stringify({ type: 'thread.started', thread_id: threadId })}\n`);
-    stdout.end();
-    emitter.emit('exit', 0);
-  }, 0);
-  return {
-    stdout,
-    stderr,
-    kill() {
-      emitter.emit('exit', 130);
-    },
-    onExit(listener) {
-      emitter.once('exit', listener);
-    },
-    onError(listener) {
-      emitter.once('error', listener);
-    },
-    onSpawn(listener) {
-      emitter.once('spawn', listener);
-      emitter.emit('spawn');
-    },
+  let exitCode: number | null = null;
+  let exited = false;
+  let stdoutClosed = false;
+  const exitListeners: Array<(code: number | null) => void> = [];
+  const tryFire = () => {
+    if (!exited || !stdoutClosed) return;
+    for (const listener of exitListeners.splice(0)) listener(exitCode);
   };
-}
-
-/** 假 Codex 进程：spawn 成功后再也不吐任何东西（模拟「新线程已起、threadId 还没回来就崩溃」）。 */
-function createSilentProcess(): CodexProcessHandle {
-  const emitter = new EventEmitter();
-  return {
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-    kill() {
-      emitter.emit('exit', 130);
-    },
-    onExit(listener) {
-      emitter.once('exit', listener);
-    },
-    onError(listener) {
-      emitter.once('error', listener);
-    },
-    onSpawn(listener) {
-      emitter.once('spawn', listener);
-      emitter.emit('spawn');
-    },
-  };
-}
-
-/** 假 Codex 进程：输出行、运行期报错和退出时机都由测试手动控制。 */
-function createManualProcess(): CodexProcessHandle & { finish(code?: number): void; fail(error?: Error): void } {
-  const emitter = new EventEmitter();
-  const stdout = new PassThrough();
+  // 'end' 在所有已排队的 data 交付完之后才触发——正是「stdout 已关闭」的判据
+  stdout.on('end', () => {
+    stdoutClosed = true;
+    tryFire();
+  });
   return {
     stdout,
     stderr: new PassThrough(),
     kill() {
-      emitter.emit('exit', 130);
+      setImmediate(() => {
+        exited = true;
+        exitCode = 130;
+        stdout.end();
+        tryFire();
+      });
     },
     onExit(listener) {
-      emitter.once('exit', listener);
+      exitListeners.push(listener);
+      tryFire();
     },
     onError(listener) {
       emitter.once('error', listener);
@@ -99,13 +81,46 @@ function createManualProcess(): CodexProcessHandle & { finish(code?: number): vo
       emitter.emit('spawn');
     },
     finish(code = 0) {
+      exited = true;
+      exitCode = code;
       stdout.end();
-      emitter.emit('exit', code);
+      tryFire();
     },
     fail(error = new Error('stdio crashed')) {
       emitter.emit('error', error);
     },
+    emitExit(code = 0) {
+      exited = true;
+      exitCode = code;
+      tryFire();
+    },
+    endStdout() {
+      stdout.end();
+      tryFire();
+    },
   };
+}
+
+/** 假 Codex 进程：只吐 thread.started，然后正常退出。 */
+function createFakeProcess(threadId: string): CodexProcessHandle {
+  const proc = createTestProcess();
+  setTimeout(() => {
+    (proc.stdout as PassThrough).write(
+      `${JSON.stringify({ type: 'thread.started', thread_id: threadId })}\n`,
+    );
+    proc.finish(0);
+  }, 0);
+  return proc;
+}
+
+/** 假 Codex 进程：spawn 成功后再也不吐任何东西（模拟「新线程已起、threadId 还没回来就崩溃」）。 */
+function createSilentProcess(): CodexProcessHandle {
+  return createTestProcess();
+}
+
+/** 假 Codex 进程：输出行、运行期报错和退出时机都由测试手动控制。 */
+function createManualProcess(): ReturnType<typeof createTestProcess> {
+  return createTestProcess();
 }
 
 /** 建一个只有 threads 表的 state 库，用来验证「线程是否还存在」。 */
@@ -1285,5 +1300,223 @@ describe('Codex 线程恢复的真实性', () => {
       status: 'idle',
       runState: 'starting',
     });
+  });
+
+  it('exit 先于最后一条 stdout 数据：收尾必须等 stdout 关完，线程 ID 不丢', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']); // th_gone 不在库里 → 开新线程
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_race3', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_race3');
+    await adapter.sendMessage('codex_ses_race3', '继续');
+
+    // 另一个 Bridge 正在写索引（持锁）→ thread.started 的换绑必然写失败
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    // API 允许的事件顺序：exit 先到，thread.started 还在 stdout 管道里
+    proc.emitExit(0);
+    (proc.stdout as PassThrough).write(
+      `${JSON.stringify({ type: 'thread.started', thread_id: 'th_fresh' })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20)); // 晚到的数据被处理（落盘失败，pendingThreadId 记下）
+    expect(peekThreadId(adapter, 'codex_ses_race3')).toBe('th_gone');
+
+    // 锁释放后 stdout 才关——最终重试必须发生在这一刻，而不是 exit 那一刻
+    rmSync(`${storePath}.lock`, { force: true });
+    proc.endStdout();
+    await adapter.waitForRun('codex_ses_race3');
+
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]?.threadId).toBe('th_fresh');
+    expect(peekThreadId(adapter, 'codex_ses_race3')).toBe('th_fresh');
+  });
+
+  it('cancel 的终态落盘失败：进程退出、锁释放后必须把磁盘上的 attempt 收干净', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_cancelfail', threadId: 'th_live', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_cancelfail');
+    await adapter.sendMessage('codex_ses_cancelfail', '继续'); // resume → beginRun
+
+    // 另一个 Bridge 正在写索引（持锁）→ cancel 的终态写入必然失败
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    await adapter.cancel('codex_ses_cancelfail');
+    // 落盘失败不许声称 attempt 已结束：本地终态不推进（磁盘没写成，内存不能先说 cancelled）
+    expect(peekStatus(adapter, 'codex_ses_cancelfail')).toBe('running');
+
+    // 进程退出（kill 异步收尾）→ 释放锁 → 收尾补交终态
+    rmSync(`${storePath}.lock`, { force: true });
+    await adapter.waitForRun('codex_ses_cancelfail');
+
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    // 磁盘上的 attempt 必须收干净：终态 + 清 runOwner
+    expect(stored.sessions[0]).toMatchObject({ status: 'cancelled', runState: 'started' });
+    expect(stored.sessions[0]?.runOwner).toBeUndefined();
+    // 别的 Bridge 不再把它显示成 running，身份操作不再被在飞保护挡住
+    const restarted = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const statuses = new Map(
+      (await restarted.listSessions()).map((session) => [session.id, session.status]),
+    );
+    expect(statuses.get('codex_ses_cancelfail')).toBe('cancelled');
+    const other = new CodexSessionStore({ filePath: storePath });
+    expect(
+      other.confirmThreadPresent('codex_ses_cancelfail', 'th_live', at(other, 'codex_ses_cancelfail'))
+        .outcome,
+    ).not.toBe('in-flight');
+  });
+
+  it('dispose 的终态落盘失败：kill 收尾后同样要把磁盘收干净', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_disposefail', threadId: 'th_live', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_disposefail');
+    await adapter.sendMessage('codex_ses_disposefail', '继续');
+
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    await adapter.dispose(); // fence-close 写失败 → 终态挂起；kill 异步收尾
+    expect(peekStatus(adapter, 'codex_ses_disposefail')).toBe('running');
+
+    rmSync(`${storePath}.lock`, { force: true });
+    await adapter.waitForRun('codex_ses_disposefail');
+
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({ status: 'cancelled' });
+    expect(stored.sessions[0]?.runOwner).toBeUndefined();
+  });
+
+  it('运行期 error 的终态落盘失败：进程退出后收尾补交，磁盘终态干净', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_errfail' }, // 全新会话：还没有 threadId
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_errfail');
+    await adapter.sendMessage('codex_ses_errfail', '继续');
+
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    proc.fail(new Error('stdio 崩了')); // onError → 终态写入失败 → 挂起
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(peekStatus(adapter, 'codex_ses_errfail')).toBe('running');
+
+    rmSync(`${storePath}.lock`, { force: true });
+    proc.finish(1); // 进程随后退出 → 收尾补交
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({ status: 'failed', runState: 'never_started' });
+    expect(stored.sessions[0]?.runOwner).toBeUndefined();
+  });
+
+  it('cancel 之后 kill 失败触发 onError：不得把 cancelled 翻成 failed', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_killfail', threadId: 'th_live', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_killfail');
+    await adapter.sendMessage('codex_ses_killfail', '继续');
+
+    // 持锁：cancel 的终态也写不进去（挂起 {cancelled}）。kill 失败的 onError 若不被
+    // 「已取消」守卫挡住，会把挂起的终态覆盖成 failed——用户主动取消被翻成执行失败。
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    await adapter.cancel('codex_ses_killfail');
+    proc.fail(new Error('kill 失败：进程无法终止'));
+    rmSync(`${storePath}.lock`, { force: true });
+
+    await adapter.waitForRun('codex_ses_killfail').catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 30)); // 等异步收尾补交挂起终态
+
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
+    ).toHaveLength(0);
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    // 最终状态必须是 cancelled（挂起的取消终态），绝不能是 onError 写的 failed
+    expect(stored.sessions[0]).toMatchObject({ status: 'cancelled' });
+    expect(stored.sessions[0]?.runOwner).toBeUndefined();
   });
 });
