@@ -873,12 +873,26 @@ export class CodexAdapter implements AgentAdapter {
    *
    * 到限**不再只留诊断**：落 claim 兜底（独立 finalizer）——写成即持久化
    *（实例注销/进程退出后由孤儿收编送达），兜底成功就停链；此后 append 只在
-   * flush/dispose 的机会里做（成功则删兜底副本保持单副本）。兜底也写不进才
-   * 留队列 + 明确诊断（不假装完成）。
+   * flush/dispose 的机会里做（成功则删兜底副本保持单副本）。
+   * **兜底也失败不停链**：仅仅留在内存队列不叫持久化（进程一死就没了），
+   * 必须继续低频退避重试（`NOTICE_RETRY_BACKOFF_MS`，unref 不吊住进程），
+   * append 与兜底每一轮都再试，直到其一写成；dispose 是最后的 LOST 报告点。
    */
+  private static readonly NOTICE_RETRY_FAST_MS = 50;
+  private static readonly NOTICE_RETRY_BACKOFF_MS = [50, 100, 250, 500, 1_000, 5_000];
   private scheduleNoticeWriteRetry(sessionId: string): void {
     const pending = this.pendingNoticeWrites.get(sessionId);
     if (!pending || pending.timer) return;
+    // 前 5 次快试（50ms，吞掉短暂的锁占用）；到限后转入低频退避（50ms→100ms→250ms→500ms→1s→5s 封顶）
+    const delay =
+      pending.attempts < 5
+        ? CodexAdapter.NOTICE_RETRY_FAST_MS
+        : CodexAdapter.NOTICE_RETRY_BACKOFF_MS[
+            Math.min(
+              pending.attempts - 5,
+              CodexAdapter.NOTICE_RETRY_BACKOFF_MS.length - 1,
+            )
+          ];
     const timer = setTimeout(() => {
       const current = this.pendingNoticeWrites.get(sessionId);
       if (!current) return;
@@ -889,18 +903,18 @@ export class CodexAdapter implements AgentAdapter {
         return;
       }
       current.attempts += 1;
-      if (current.attempts >= 5) {
-        if (this.ensureNoticeFallback(current)) {
-          // 兜底已落盘：通知不会再丢。停链，等 flush/dispose 的机会性补写
-          return;
-        }
-        this.emitDiagnosticWarning(
-          `codex session ${sessionId}: stale outcome notice still unwritten after ${current.attempts} attempts; kept for retry (claim fallback also failed)`,
-        );
+      if (current.attempts >= 5 && this.ensureNoticeFallback(current)) {
+        // 兜底已落盘：通知不会再丢。停链，等 flush/dispose 的机会性补写
         return;
       }
+      if (current.attempts >= 5) {
+        // 兜底也写不进：内存队列不是持久化——继续低频重试，措辞不许暗示已经安全
+        this.emitDiagnosticWarning(
+          `codex session ${sessionId}: stale outcome notice unwritten after ${current.attempts} attempts (append and claim fallback both failed); still retrying at low frequency (not yet persisted)`,
+        );
+      }
       this.scheduleNoticeWriteRetry(sessionId);
-    }, 50);
+    }, delay);
     timer.unref?.();
     pending.timer = timer;
   }
@@ -1007,9 +1021,15 @@ export class CodexAdapter implements AgentAdapter {
           }
           try {
             for (const name of readdirSync(dir)) {
-              if (!name.startsWith(`${base}.`) || !name.endsWith('.claim')) continue;
+              if (!name.startsWith(`${base}.`)) continue;
+              // `.claim.new` 是兜底 claim 的临时文件（写完 rename 之前崩溃的残留）；
+              // 正式副本以 `.claim` 结尾。`.corrupt` 隔离件两者都不匹配，不会被碰
+              const isTmp = name.endsWith('.claim.new');
+              if (!isTmp && !name.endsWith('.claim')) continue;
               const full = join(dir, name);
               if (this.claimedStaleFiles.includes(full)) continue;
+              // `.claim.new` 的段是 [pid, ownerUuid, seq, 'claim', 'new']，
+              // `.claim` 的段是 [pid, ownerUuid, seq, 'claim']——liveness 只看前两段
               const segments = name.slice(base.length + 1).split('.');
               const pid = Number(segments[0]);
               const ownerUuid = segments[1];
@@ -1024,10 +1044,15 @@ export class CodexAdapter implements AgentAdapter {
               // 孤儿收编走 rename：rename 成功才算认领成功，对方再扫时文件已挂上
               // 本实例的名字（活人 pid），不会再收编第二遍
               const adopt = `${file}.${process.pid}.${this.claimOwnerId}.${++this.staleClaimSeq}.claim`;
-              try {
-                renameSync(full, adopt);
-              } catch {
-                continue; // 刚被别的实例收编/删除
+              if (isTmp) {
+                // 崩溃在「临时文件写完、正式 rename 之前」的残留：校验内容后收编
+                if (!this.recoverTmpClaim(full, adopt)) continue;
+              } else {
+                try {
+                  renameSync(full, adopt);
+                } catch {
+                  continue; // 刚被别的实例收编/删除
+                }
               }
               this.claimedStaleFiles.push(adopt);
               fresh.push(adopt);
@@ -1097,6 +1122,26 @@ export class CodexAdapter implements AgentAdapter {
           anyMalformed = true;
         }
       }
+      if (!anyQueued && !anyDuplicate && anyMalformed) {
+        // 全损坏：整份副本解析不出任何有效记录——没有可送内容，「送达后隔离」永远
+        // 不会触发（flush 没东西可发会提前返回），留着只会被 dispose 归还共享池、
+        // 下个实例再领再解析空转。立即隔离改名保留证据（可能是唯一副本），不等送达。
+        try {
+          renameSync(claim, `${claim}.corrupt`);
+          const index = this.claimedStaleFiles.indexOf(claim);
+          if (index >= 0) this.claimedStaleFiles.splice(index, 1);
+          this.emitDiagnosticWarning(
+            `stale-outcomes claim quarantined immediately (malformed only, nothing to deliver): ${claim}.corrupt`,
+          );
+        } catch {
+          // 改名失败：退回「送达后隔离」路径继续留证据
+          this.corruptClaims.add(claim);
+          this.emitDiagnosticWarning(
+            `stale-outcomes claim kept for quarantine (malformed records): ${claim}`,
+          );
+        }
+        continue;
+      }
       if (anyMalformed) {
         this.corruptClaims.add(claim);
         this.emitDiagnosticWarning(
@@ -1115,6 +1160,56 @@ export class CodexAdapter implements AgentAdapter {
         }
       }
     }
+  }
+
+  /**
+   * 收编崩溃残留的 `.claim.new` 临时文件（`fallbackNoticeToClaim` 写完临时文件、
+   * 正式 rename 之前进程没了）。校验通过才算收编成功。
+   *
+   * **完整合法记录才 rename 成正式 claim**：写入方的产出是「单行 JSON + 换行」，
+   * 缺尾换行或任一行解析不动都是崩溃撕裂的半截——不合法的**保留并隔离**
+   *（改名 `.corrupt` 留证据），不能静默删除，它可能是这条提示的唯一副本。
+   * 收编走 rename：两个实例同时恢复同一个 `.new` 时只有一个成功（对方 ENOENT）。
+   */
+  private recoverTmpClaim(tmpPath: string, adoptPath: string): boolean {
+    let content: string;
+    try {
+      content = readFileSync(tmpPath, 'utf8');
+    } catch {
+      return false;
+    }
+    const lines = content.split('\n');
+    const complete = lines[lines.length - 1] === ''; // 写入方必以换行收尾
+    const records = complete ? lines.slice(0, -1).filter((line) => line.trim()) : [];
+    let legal = complete;
+    if (legal) {
+      for (const line of records) {
+        try {
+          JSON.parse(line);
+        } catch {
+          legal = false;
+          break;
+        }
+      }
+    }
+    if (legal) {
+      try {
+        renameSync(tmpPath, adoptPath);
+        return true;
+      } catch {
+        return false; // 刚被别的实例收编/删除
+      }
+    }
+    // 不合法：隔离保留证据（`…claim.new.corrupt`，扫描不会再碰它），绝不静默删
+    try {
+      renameSync(tmpPath, `${tmpPath}.corrupt`);
+      this.emitDiagnosticWarning(
+        `stale-outcomes .claim.new quarantined (incomplete or malformed crash leftover, evidence kept): ${tmpPath}.corrupt`,
+      );
+    } catch {
+      // 隔离改名也失败：留在原地下一轮再试，同样不删
+    }
+    return false;
   }
 
   /**

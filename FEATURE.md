@@ -1180,3 +1180,13 @@
 - **P3 旧格式 noticeId 确定性迁移**：旧记录没有 noticeId，随机 UUID 会让崩溃双副本各得一个 ID 照样发两次。改为对原始 JSON 行取 **SHA-256** 作确定性 ID——同内容两份自然去重。按 review 定调：at-least-once + 稳定 ID 幂等，不引入跨崩溃 exactly-once 的复杂事务。
 - **测试**：TS 全仓 409（codex 135：thread-health 61 + session-store 53、bridge-core 86、desktop 8）、Flutter 121。变异验证 5 处全红：M1 到限不落兜底、M2 parse 时损坏副本照删、M2b 送达后不隔离直接删、M3 旧格式回随机 UUID、M4 兜底写临时文件不做 rename。变异过程再获一条教训（记 FailureExperience.md）：M2 第一版没打红是被 flush 隔离逻辑掩盖——删除规则的观测面必须落在「全损坏副本」上（好记录 + 损坏行的混合副本走的是隔离路径）。
 - **冻结确认**（review 要求）：本轮未动 Registry、Flutter、执行状态机、session-store CAS、Bridge 事件协议；跨进程租约与 fsync 仍留路线图。
+
+### 2026-11-24 第三方 review 第二十二轮：.claim.new 崩溃残留收编、兜底失败不停链、全损坏副本即时隔离
+
+第二十一轮 review 判「48c443a 三项处方全部落实」，收尾前最后指出 2 个 P2 + 1 个 P3，并明确「第二十二轮完成上述两项 P2 后，我倾向于正式封板，不再继续挖掘理论上的极端故障组合」。
+
+- **P2-1 `.claim.new` 崩溃遗留永不收编**：兜底 claim 的「临时文件写完、正式 rename 之前」崩溃会留下 `…claim.new` 残留，孤儿扫描只认 `.claim` 后缀——残留永久失联。修法：孤儿扫描同时认领 `.claim.new`——先按实例 liveness 判归属（同进程只跳过仍活跃实例，`activeClaimOwners`；他进程 pid 探活），死实例残留先**校验内容完整性**（写入方产出是「单行 JSON + 收尾换行」，缺尾换行/任一行解析不动即撕裂），合法则原子 rename 成正式 `.claim`（两个实例同时恢复同一个 `.new` 只有一个成功，对方 ENOENT），不合法**隔离改名 `.claim.new.corrupt` 保留证据，绝不静默删**（可能是唯一副本）。liveness 校验保证活跃实例（含自己）写到一半的临时文件不被抢走。测试三条：崩溃残留合法记录被收编、PERSIST_FAILED 恰好送达一次（eventId 保留原 noticeId）；撕裂半截隔离保留、不误送不静默删；活跃实例的 `.new` 不动、实例注销后才收编送达（进程活着 ≠ 实例活着）。
+- **P2-2 claim 兜底也失败时重试链停摆**：5 次 append 到限 + claim 兜底失败后，重试链 `return` 停表——内存队列成唯一副本、无自动恢复，诊断还写着「kept for retry」（暗示会重试，实际已停）。修法：**claim 成功才叫通知已持久化，仅仅留在 `pendingNoticeWrites` 不叫持久化**——兜底失败继续低频退避重试（`50ms→100ms→250ms→500ms→1s→5s` 封顶，`unref()` 不吊进程），每轮 append 与兜底都再试，直到其一写成；dispose 是最后的 LOST 报告点。诊断措辞同步改为「still retrying at low frequency (not yet persisted)」。测试：目录只读使 append 与兜底同时失败 → 观察到低频续试诊断 → 目录恢复可写后链条**自动**补写送达（不手动重调、不换新实例）。
+- **P3 全损坏 claim 不必等送达**：「送达后隔离」的触发前提是 flush 有东西可发；整份副本全是损坏行时没有任何可送内容，flush 提前返回、隔离永不触发，dispose 还会把它归还共享池被下个实例反复领取空转。修法：解析后「零有效记录 + ≥1 损坏行」**立即改名 `.corrupt` 保留证据**（不再进 `corruptClaims` 等送达）；混合副本维持原策略（好记录送达后再隔离）。测试：全损坏副本即时隔离 + dispose 不归还共享池。
+- **测试**：TS 全仓 414（codex 140：thread-health 66 + session-store 53、bridge-core 86、desktop 8）、Flutter 121。变异验证 5 处全红：M1 扫描跳过 `.claim.new`、M2 收编不校验内容、M3 收编不看实例活性、M4 兜底失败后停链（旧缺陷本身）、M5 全损坏不即时隔离。旧「损坏副本不静默删」测试的全损坏段按新语义拆出重写（不再断言「kept for quarantine」滞留）。
+- **冻结确认**：本轮未动 Registry、Flutter、执行状态机、session-store CAS、Bridge 事件协议；跨进程租约与 fsync 仍留路线图。
