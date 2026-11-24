@@ -215,6 +215,9 @@ export class CodexAdapter implements AgentAdapter {
       };
     }
   >();
+  /** 挂起终态的补交定时器（每会话一个，避免叠跑）。 */
+  private readonly pendingRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pendingRetryCounts = new Map<string, number>();
   /**
    * F5：Session 串行锁——sendMessage 入口同步加锁，直到**真实进程退出**（onExit）才释放。
    * cancel 不释放锁（kill≠已退出），封死「kill 后 exit 前双进程」窗口。
@@ -579,7 +582,7 @@ export class CodexAdapter implements AgentAdapter {
     record: CodexSessionRecord,
     attempt: string | undefined,
     patch: { status: AgentStatus; runState?: Exclude<CodexSessionRunState, 'starting'> | undefined },
-  ): 'applied' | 'stale' | 'persist-failed' {
+  ): 'applied' | 'stale' | 'persist-failed' | 'not-found' {
     const updatedAt = new Date().toISOString();
     const runState: Exclude<CodexSessionRunState, 'starting'> =
       patch.runState ?? (record.threadId ? 'started' : 'never_started');
@@ -606,19 +609,82 @@ export class CodexAdapter implements AgentAdapter {
         );
         return 'stale';
       }
+      if (result === 'not-found') {
+        // 记录被别的实例删了：本地照常收尾（展示不能卡在 running），但绝不谎称写盘成功。
+        // 重试也不可能找回（索引里已无此记录），同 attempt 的挂起一并清掉，避免收尾误报。
+        this.emitDiagnosticWarning(
+          `codex session ${sessionId}: run outcome not persisted (record missing from index)`,
+        );
+        record.status = patch.status;
+        record.runState = runState;
+        record.updatedAt = updatedAt;
+        const pending = this.pendingRunOutcomes.get(sessionId);
+        if (pending?.attempt === attempt) this.pendingRunOutcomes.delete(sessionId);
+        return 'not-found';
+      }
     } catch (error) {
       this.emitDiagnosticWarning(
         `codex session run outcome persist failed for ${sessionId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      this.pendingRunOutcomes.set(sessionId, { attempt, patch });
+      this.stashPendingRunOutcome(sessionId, attempt, patch);
+      this.schedulePendingRetry(sessionId);
       return 'persist-failed';
     }
     record.status = patch.status;
     record.runState = runState;
     record.updatedAt = updatedAt;
+    // 真正写进去了：同一个 attempt 的挂起终态（更早的失败留下的）已经过时，清掉，
+    // 否则收尾告警会对着一份已经落盘的终态误报「未持久化」
+    const pending = this.pendingRunOutcomes.get(sessionId);
+    if (pending?.attempt === attempt) this.pendingRunOutcomes.delete(sessionId);
     return 'applied';
+  }
+
+  /**
+   * 挂起一次没写进磁盘的终态（单槽：同一会话只留最后一次写入意图，apply 时仍被
+   * `finishRun` 的 attempt fencing 拦截旧轮次）。
+   *
+   * **「用户取消」不可翻案成「执行失败」**由调用方守卫保证，不靠这里的排名：
+   * dispose 记入 `cancelRequested`、onError 的取消守卫、close 后迟到 error 的
+   * `runClosed` 忽略——三者把降级写入的路径都封死了（排名守卫在它们面前不可达，
+   * 留着只会变成测不到的死代码）。
+   */
+  private stashPendingRunOutcome(
+    sessionId: string,
+    attempt: string | undefined,
+    patch: {
+      status: AgentStatus;
+      runState?: Exclude<CodexSessionRunState, 'starting'> | undefined;
+    },
+  ): void {
+    this.pendingRunOutcomes.set(sessionId, { attempt, patch });
+  }
+
+  /** 挂起终态的补交重试：写锁通常只被占很短，收尾点没赶上就定时再试几次。 */
+  private schedulePendingRetry(sessionId: string): void {
+    if (this.pendingRetryTimers.has(sessionId)) return;
+    const timer = setTimeout(() => {
+      this.pendingRetryTimers.delete(sessionId);
+      const result = this.drainPendingRunOutcome(sessionId);
+      if (result === 'persist-failed') {
+        const count = (this.pendingRetryCounts.get(sessionId) ?? 0) + 1;
+        this.pendingRetryCounts.set(sessionId, count);
+        if (count >= 5) {
+          this.pendingRetryCounts.delete(sessionId);
+          this.emitDiagnosticWarning(
+            `codex session ${sessionId}: pending run outcome still unpersisted after retries; giving up`,
+          );
+          return;
+        }
+        this.schedulePendingRetry(sessionId);
+        return;
+      }
+      this.pendingRetryCounts.delete(sessionId);
+    }, 50);
+    timer.unref?.();
+    this.pendingRetryTimers.set(sessionId, timer);
   }
 
   /**
@@ -630,7 +696,7 @@ export class CodexAdapter implements AgentAdapter {
    */
   private drainPendingRunOutcome(
     sessionId: string,
-  ): 'applied' | 'stale' | 'persist-failed' | 'none' {
+  ): 'applied' | 'stale' | 'persist-failed' | 'not-found' | 'none' {
     const pending = this.pendingRunOutcomes.get(sessionId);
     if (!pending) return 'none';
     const record = this.sessions.get(sessionId);
@@ -1023,11 +1089,9 @@ export class CodexAdapter implements AgentAdapter {
     }
 
     if (this.cancelRequested.has(sessionId)) {
-      // F3-2：spawn 确认前已被取消——立即终止刚确认的进程，终态 cancelled，锁等真实退出释放
-      this.persistRunOutcome(sessionId, record, runStart?.attempt, {
-        status: 'cancelled',
-        runState: record.threadId ? 'started' : 'never_started',
-      });
+      // F3-2：spawn 确认前已被取消——立即终止刚确认的进程。
+      // 磁盘终态同样不在这里写：kill ≠ 已退出，终态（清 runOwner）由 onExit（close）统一落盘，
+      // 否则 kill/close 窗口里跨实例执行保护被提前放掉（与 cancel 的推迟语义一致）。
       proc.kill();
     } else {
       record.status = 'running';
@@ -1038,6 +1102,8 @@ export class CodexAdapter implements AgentAdapter {
     // 完成/失败经事件流上报，sendMessage 不等待整个 Agent 执行
     const run = new Promise<void>((resolve, reject) => {
       let buffer = '';
+      /** onExit（对应 close）已收尾：此后迟到的 error 不许再改这一轮的终态。 */
+      let runClosed = false;
 
       proc.stdout.on('data', (chunk: Buffer | string) => {
         buffer += chunk.toString();
@@ -1050,10 +1116,18 @@ export class CodexAdapter implements AgentAdapter {
       });
 
       proc.onError((error) => {
-        // 用户主动取消后 kill 失败/迟到的 error 不得翻案：终态归 cancel 路径所有，
+        // close 之后的迟到 error：这一轮已经收尾（终态已写或已挂起补交），
+        // 再写 failed 就是翻案（挂起的取消终态会被覆盖、已收尾的轮次被改判）。
+        if (runClosed) {
+          return;
+        }
+        // 用户主动取消后 kill 失败的 error 不得翻案：终态归 cancel 路径所有，
         // 把 cancelled 覆盖成 failed（还发 RUN_FAILED）就是把「用户停止」伪装成「执行失败」。
-        if (this.cancelRequested.has(sessionId) || record!.status === 'cancelled') {
-          resolve();
+        // 这里也不能 resolve：waitForRun 的语义是「这轮执行真正收尾」，error 之后进程
+        // 可能还活着/还在收尾（kill 也未必立刻退），resolve 由 onExit（对应 close）统一做。
+        //（close 之后的窗口由上面的 runClosed 守卫；不再叠加 record.status 条件——
+        // 与这两者互为冗余的条件只会互相掩盖变异，守卫要各自有打得红的观测面。）
+        if (this.cancelRequested.has(sessionId)) {
           return;
         }
         // F3-1：运行期失败必须持久化 failed（不能只改本地状态/发事件），
@@ -1074,6 +1148,7 @@ export class CodexAdapter implements AgentAdapter {
       });
 
       proc.onExit((code) => {
+        runClosed = true; // 迟到 error 到此为止（见 onError 的 runClosed 守卫）
         if (buffer.trim().length > 0) {
           this.processJsonLine(sessionId, record!, buffer, runStart);
           buffer = '';
@@ -1106,13 +1181,22 @@ export class CodexAdapter implements AgentAdapter {
         // 收尾点是补交挂起终态的最后机会（cancel/dispose/运行期 error 落盘失败留下的）：
         // 进程已退出、锁已释放，磁盘上的 attempt 必须在这里收干净（清 runOwner + 终态）。
         this.drainPendingRunOutcome(sessionId);
-        const wasCancelled =
-          this.cancelRequested.delete(sessionId) || record!.status === 'cancelled';
+        // cancelRequested 到此消费掉：close 之前只有 onExit 会消费它，
+        // 不再叠加 record.status 条件（与之互为冗余的条件只会互相掩盖变异）
+        const wasCancelled = this.cancelRequested.delete(sessionId);
         // 终态 runState 只表达「这轮走到过哪」（threadId 在，含刚重试成功，就是 started）；
         // 终态写入同时清掉 runOwner——进程都退出了还留着它，重启会把已结束的轮次当成还在跑。
         const endedRunState = record!.threadId ? ('started' as const) : ('never_started' as const);
-        // R3-3/F3：非零退出码或信号终止（code=null，非主动取消）按失败处理并上报
-        if (!wasCancelled && record!.status !== 'failed' && (code === null || code !== 0)) {
+        if (wasCancelled) {
+          // 取消的执行终结在这一刻才落盘（cancel 只表达意图，kill ≠ 已退出）：
+          // 提前写终态会把跨实例执行保护放掉，另一个 Bridge 会立刻开出第二轮。
+          // 已经写过终态的（dispose 的 fence-close）会被 finishRun 的一次性栅栏挡成 stale。
+          this.persistRunOutcome(sessionId, record!, runStart?.attempt, {
+            status: 'cancelled',
+            runState: endedRunState,
+          });
+        } else if (record!.status !== 'failed' && (code === null || code !== 0)) {
+          // R3-3/F3：非零退出码或信号终止（code=null）按失败处理并上报
           const outcome = this.persistRunOutcome(sessionId, record!, runStart?.attempt, {
             status: 'failed',
             runState: endedRunState,
@@ -1124,11 +1208,7 @@ export class CodexAdapter implements AgentAdapter {
               code === null ? 'Codex 进程被信号终止' : `Codex 异常退出（退出码 ${code}）`,
             );
           }
-          this.noticeIfTerminalUnpersisted(sessionId);
-          resolve();
-          return;
-        }
-        if (!wasCancelled && record!.status !== 'failed') {
+        } else if (record!.status !== 'failed') {
           const normStatus = this.normalizer.getSessionStatus(sessionId);
           this.persistRunOutcome(sessionId, record!, runStart?.attempt, {
             status: normStatus ?? (record!.status === 'running' ? 'idle' : record!.status),
@@ -1555,21 +1635,20 @@ export class CodexAdapter implements AgentAdapter {
     // F5-1：cancel 不释放锁/占位——kill≠已退出，锁由 onExit 真实退出释放，封死双进程窗口
     if (!this.sessionLocks.has(sessionId)) return;
     this.cancelRequested.add(sessionId);
-    // F3-2：启动中（spawn 确认前）或运行中被取消——都持久化 cancelled。
-    // 有 attempt 走带 fencing 的终态写入（清 owner，身份操作不再被在飞保护挡）；
-    // 没有 attempt 是「这一轮根本没开始」，走无 fencing 的状态写入。
     const record = this.sessions.get(sessionId);
     if (record && record.status !== 'failed') {
-      if (record.runAttempt) {
-        this.persistRunOutcome(sessionId, record, record.runAttempt, {
-          status: 'cancelled',
-          runState: record.threadId ? 'started' : 'never_started',
-        });
-      } else {
-        record.status = 'cancelled';
+      // UI 立即呈现「已取消」——但只在内存/cancelRequested 维度表达，
+      // 不靠磁盘终态冒充（见下）。
+      record.status = 'cancelled';
+      record.updatedAt = new Date().toISOString();
+      if (!record.runAttempt) {
+        // 这一轮根本没开始：没有执行身份要保护，直接落盘 cancelled
         this.persistStatus(sessionId, record);
       }
     }
+    // 有 attempt 的一轮：**磁盘终态推迟到进程真正退出（close）再写**——
+    // kill 只是发信号，此刻清 runOwner 等于提前放掉跨实例执行保护，
+    // 另一个 Bridge 会以为这一轮已结束、立刻开出第二轮（两个 Codex 进程抢同一个会话）。
     const proc = this.activeProcesses.get(sessionId);
     if (proc) {
       proc.kill(); // 不删除 activeProcesses——onExit 统一释放
@@ -1581,6 +1660,9 @@ export class CodexAdapter implements AgentAdapter {
     // dispose 可能只是 Adapter 重建（同一个 Bridge 进程），不清 owner 的话
     // 新实例会把旧执行当成还在跑，显示 running 并拒绝身份操作。
     for (const sessionId of [...this.activeProcesses.keys()]) {
+      // dispose 的语义就是「这一轮到此为止」：记入取消意图，退出收尾才不会把
+      // 130/信号退出翻案成 failed（pending 里的 cancelled 也不被覆盖）
+      this.cancelRequested.add(sessionId);
       const record = this.sessions.get(sessionId);
       if (record && record.runAttempt) {
         this.persistRunOutcome(sessionId, record, record.runAttempt, {
@@ -1589,6 +1671,9 @@ export class CodexAdapter implements AgentAdapter {
         });
       }
     }
+    // 补交定时器**不能清**：dispose 可能只是 Adapter 重建，挂起的终态补交
+    // （进程退出后把磁盘上的 attempt 收干净）必须跑完——清掉定时器就等于把
+    // 「dispose 时落盘失败」的终态永远留在 starting + runOwner 上。
     this.persistOwnedSessions();
     for (const proc of this.activeProcesses.values()) {
       proc.kill();

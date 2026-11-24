@@ -1346,7 +1346,7 @@ describe('Codex 线程恢复的真实性', () => {
     expect(peekThreadId(adapter, 'codex_ses_race3')).toBe('th_fresh');
   });
 
-  it('cancel 的终态落盘失败：进程退出、锁释放后必须把磁盘上的 attempt 收干净', async () => {
+  it('cancel 的终态落盘失败：close 时磁盘保护不放，锁释放后定时补交收干净', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     seedThreads(codexHome, ['th_live']);
@@ -1364,24 +1364,33 @@ describe('Codex 线程恢复的真实性', () => {
     await adapter.loadSession('codex_ses_cancelfail');
     await adapter.sendMessage('codex_ses_cancelfail', '继续'); // resume → beginRun
 
-    // 另一个 Bridge 正在写索引（持锁）→ cancel 的终态写入必然失败
+    // 另一个 Bridge 正在写索引（持锁）→ 任何终态写入必然失败
     writeFileSync(
       `${storePath}.lock`,
       JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
       'utf8',
     );
     await adapter.cancel('codex_ses_cancelfail');
-    // 落盘失败不许声称 attempt 已结束：本地终态不推进（磁盘没写成，内存不能先说 cancelled）
-    expect(peekStatus(adapter, 'codex_ses_cancelfail')).toBe('running');
+    // UI 立即呈现取消意图（内存/cancelRequested 维度），不靠磁盘终态冒充
+    expect(peekStatus(adapter, 'codex_ses_cancelfail')).toBe('cancelled');
 
-    // 进程退出（kill 异步收尾）→ 释放锁 → 收尾补交终态
-    rmSync(`${storePath}.lock`, { force: true });
+    // kill → close（130）在锁被占下收尾：终态写不进去 → 挂起待补交。
+    // 此刻磁盘上的 attempt 仍然在飞（runOwner 在场）——不许谎称已收尾，
+    // 也不许提前放掉跨实例保护（confirmThreadPresent 要抢写锁，锁被占时观测不了，
+    // 这里直接看 runOwner；在飞保护的完整断言见「close 前保护不许放」那条）。
     await adapter.waitForRun('codex_ses_cancelfail');
+    const held = new CodexSessionStore({ filePath: storePath }).load();
+    expect(held.status).toBe('ok');
+    if (held.status !== 'ok') return;
+    expect(held.sessions[0]?.runOwner).toBeDefined();
+
+    // 放开锁 → 定时补交把磁盘上的 attempt 收干净（终态 + 清 runOwner）
+    rmSync(`${storePath}.lock`, { force: true });
+    await new Promise((resolve) => setTimeout(resolve, 120));
 
     const stored = new CodexSessionStore({ filePath: storePath }).load();
     expect(stored.status).toBe('ok');
     if (stored.status !== 'ok') return;
-    // 磁盘上的 attempt 必须收干净：终态 + 清 runOwner
     expect(stored.sessions[0]).toMatchObject({ status: 'cancelled', runState: 'started' });
     expect(stored.sessions[0]?.runOwner).toBeUndefined();
     // 别的 Bridge 不再把它显示成 running，身份操作不再被在飞保护挡住
@@ -1402,7 +1411,7 @@ describe('Codex 线程恢复的真实性', () => {
     ).not.toBe('in-flight');
   });
 
-  it('dispose 的终态落盘失败：kill 收尾后同样要把磁盘收干净', async () => {
+  it('dispose 的终态落盘失败且锁占到进程退出：退出不得把取消翻成失败，锁释放后补交', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     seedThreads(codexHome, ['th_live']);
@@ -1420,20 +1429,28 @@ describe('Codex 线程恢复的真实性', () => {
     await adapter.loadSession('codex_ses_disposefail');
     await adapter.sendMessage('codex_ses_disposefail', '继续');
 
+    // 锁**一直占到 close 之后**：dispose 的 fence-close 和退出收尾的终态写入都会失败。
+    //（把锁提前放掉就只测到「补交能成功」，测不到「退出不得翻案」。）
     writeFileSync(
       `${storePath}.lock`,
       JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
       'utf8',
     );
-    await adapter.dispose(); // fence-close 写失败 → 终态挂起；kill 异步收尾
-    expect(peekStatus(adapter, 'codex_ses_disposefail')).toBe('running');
+    await adapter.dispose(); // fence-close 写失败 → 挂起 {cancelled}；kill 异步收尾
+    expect(peekStatus(adapter, 'codex_ses_disposefail')).toBe('running'); // 落盘失败不推进本地终态
+
+    // close（退出码 130）在锁被占下完成：没有 cancelRequested 守卫的话，
+    // 130 会被判成执行失败、把挂起的 cancelled 翻成 failed——用户停止被伪装成执行失败。
+    // dispose 会清掉事件监听，RUN_FAILED 在事件面观测不到；这里判别断言是磁盘终态。
+    await adapter.waitForRun('codex_ses_disposefail');
 
     rmSync(`${storePath}.lock`, { force: true });
-    await adapter.waitForRun('codex_ses_disposefail');
+    await new Promise((resolve) => setTimeout(resolve, 120)); // 定时补交
 
     const stored = new CodexSessionStore({ filePath: storePath }).load();
     expect(stored.status).toBe('ok');
     if (stored.status !== 'ok') return;
+    // 必须是 cancelled（取消意图胜出），绝不能是退出码翻案出来的 failed
     expect(stored.sessions[0]).toMatchObject({ status: 'cancelled' });
     expect(stored.sessions[0]?.runOwner).toBeUndefined();
   });
@@ -1495,8 +1512,9 @@ describe('Codex 线程恢复的真实性', () => {
     await adapter.loadSession('codex_ses_killfail');
     await adapter.sendMessage('codex_ses_killfail', '继续');
 
-    // 持锁：cancel 的终态也写不进去（挂起 {cancelled}）。kill 失败的 onError 若不被
-    // 「已取消」守卫挡住，会把挂起的终态覆盖成 failed——用户主动取消被翻成执行失败。
+    // 持锁：close 的终态也写不进去（挂起 {cancelled}）。kill 失败的 onError 若不被
+    // 「已取消」守卫挡住，会把这一轮翻成 failed（写盘 + 发 RUN_FAILED）——
+    // 用户主动取消被伪装成执行失败。
     writeFileSync(
       `${storePath}.lock`,
       JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
@@ -1507,7 +1525,7 @@ describe('Codex 线程恢复的真实性', () => {
     rmSync(`${storePath}.lock`, { force: true });
 
     await adapter.waitForRun('codex_ses_killfail').catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 30)); // 等异步收尾补交挂起终态
+    await new Promise((resolve) => setTimeout(resolve, 30)); // 等收尾补交（如仍有挂起）
 
     expect(
       events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
@@ -1515,8 +1533,178 @@ describe('Codex 线程恢复的真实性', () => {
     const stored = new CodexSessionStore({ filePath: storePath }).load();
     expect(stored.status).toBe('ok');
     if (stored.status !== 'ok') return;
-    // 最终状态必须是 cancelled（挂起的取消终态），绝不能是 onError 写的 failed
+    // 最终状态必须是 cancelled（取消意图胜出），绝不能是 onError 写的 failed
     expect(stored.sessions[0]).toMatchObject({ status: 'cancelled' });
     expect(stored.sessions[0]?.runOwner).toBeUndefined();
+  });
+
+  it('cancel 后 close 前跨实例执行保护不许放：kill ≠ 已退出', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_p21', threadId: 'th_live', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_p21');
+    await adapter.sendMessage('codex_ses_p21', '继续');
+
+    proc.kill = () => {}; // kill 只是信号：进程此刻还没退出
+    await adapter.cancel('codex_ses_p21');
+    expect(peekStatus(adapter, 'codex_ses_p21')).toBe('cancelled'); // UI 立即呈现取消
+
+    // close 之前磁盘终态不许写（runOwner 不许清）：此刻放掉保护，
+    // 另一个 Bridge 会以为这一轮已结束、立刻开出第二轮。
+    const other = new CodexSessionStore({ filePath: storePath });
+    expect(
+      other.confirmThreadPresent('codex_ses_p21', 'th_live', at(other, 'codex_ses_p21')).outcome,
+    ).toBe('in-flight');
+
+    proc.emitExit(130);
+    proc.endStdout(); // close 到此才真正收尾
+    await adapter.waitForRun('codex_ses_p21');
+
+    // close 之后：终态落盘、runOwner 清掉、保护放行
+    expect(
+      other.confirmThreadPresent('codex_ses_p21', 'th_live', at(other, 'codex_ses_p21')).outcome,
+    ).not.toBe('in-flight');
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({ status: 'cancelled', runState: 'started' });
+    expect(stored.sessions[0]?.runOwner).toBeUndefined();
+  });
+
+  it('cancel 后的 onError 不许提前 resolve waitForRun：进程真正收尾才兑现', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_p22', threadId: 'th_live', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_p22');
+    await adapter.sendMessage('codex_ses_p22', '继续');
+
+    proc.kill = () => {}; // 手动控制 close 时机
+    await adapter.cancel('codex_ses_p22');
+    proc.fail(new Error('kill 失败：进程无法终止')); // 取消后 error 只负责被忽略
+
+    // error 之后、close 之前：waitForRun 必须保持 pending——
+    // 进程可能还活着（kill 未必退得掉），error 不是「这一轮已收尾」的凭据。
+    const settled = await Promise.race([
+      adapter.waitForRun('codex_ses_p22').then(() => 'resolved' as const),
+      new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 30)),
+    ]);
+    expect(settled).toBe('pending');
+
+    proc.emitExit(130);
+    proc.endStdout();
+    await adapter.waitForRun('codex_ses_p22'); // close 才兑现
+  });
+
+  it('close 之后迟到的 error 不许把挂起的取消终态翻成失败', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_lateerr', threadId: 'th_live', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_lateerr');
+    await adapter.sendMessage('codex_ses_lateerr', '继续');
+
+    // 持锁到 close 之后：close 的取消终态写不进去 → 挂起 {cancelled}。
+    // 此时 cancelRequested 已在 close 消费、内存终态也没推进——
+    // 迟到的 error 若不被「已收尾」守卫挡住，会把挂起的 cancelled 覆盖成 failed。
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    await adapter.cancel('codex_ses_lateerr');
+    await adapter.waitForRun('codex_ses_lateerr'); // close（130）在锁被占下完成
+    proc.fail(new Error('迟到的 stdio 错误')); // close 之后才到的 error
+
+    rmSync(`${storePath}.lock`, { force: true });
+    await new Promise((resolve) => setTimeout(resolve, 120)); // 定时补交
+
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
+    ).toHaveLength(0);
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({ status: 'cancelled' });
+    expect(stored.sessions[0]?.runOwner).toBeUndefined();
+  });
+
+  it('记录被别的实例删掉：终态不许谎称已落盘，本地照常收尾并留诊断', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_gone' }, // 全新会话：还没有 threadId
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_gone');
+    await adapter.sendMessage('codex_ses_gone', '继续'); // beginRun → attempt 在飞
+
+    // 另一个实例把这条记录从索引里删掉
+    const loaded = new CodexSessionStore({ filePath: storePath }).load();
+    if (loaded.status !== 'ok') throw new Error('store unreadable');
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        version: 1,
+        sessions: loaded.sessions.filter((session) => session.id !== 'codex_ses_gone'),
+      }),
+      'utf8',
+    );
+
+    proc.finish(0); // 正常退出 → 终态写入发现记录已不在索引里
+    await adapter.waitForRun('codex_ses_gone');
+
+    // 本地照常收尾：展示不许卡在「运行中」
+    expect(peekStatus(adapter, 'codex_ses_gone')).toBe('idle');
+    // 如实暴露：诊断里明确说「没写进索引」，不许谎称 applied
+    expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toContain(
+      'run outcome not persisted (record missing from index)',
+    );
+    // 不留挂起（重试也不可能找回）：不许误报「终态未持久化」
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(0);
   });
 });

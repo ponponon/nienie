@@ -1091,3 +1091,15 @@
 - **P2 `finishRun` 不是一次性终结**：清了 `runOwner` 却保留 `runAttempt`，同一个 attempt 可以重复结束——cancel 之后 kill 失败触发的 onError 会把 `cancelled` 覆盖成 `failed`（用户主动取消被翻成执行失败）。修法：fencing 加 `|| !record.runOwner`（第一次终结后同一 attempt 的后续终态一律 `stale-attempt`；`runAttempt` 故意保留，迟到的 `thread.started` 仍能交身份——身份提交与执行终结是两件事）；`onError` 对已取消轮次（`cancelRequested` / status cancelled）直接了结，不发 `RUN_FAILED`、不写 failed。
 - **测试**：codex 包 102 → 108（`session-store.test.ts` 53、`thread-health.test.ts` 31 + 数字以 vitest 为准）。新增：exit 先于 stdout 数据的竞态（线程 ID 不丢）、cancel/dispose/运行期 error 三个出口的终态落盘失败重试链（断言磁盘 runOwner 清除 + 终态 + 别的 Bridge 不显示 running + 不挡身份操作）、`finishRun` 一次性终结（cancelled 不被 failed 覆盖、迟到 thread.started 仍可交身份）、cancel 后 kill 失败不翻案。4 处变异全部打红对应测试（收尾退回 exit 语义、persistRunOutcome 失败仍报 applied、finishRun 去掉 owner 栅栏、onError 去掉已取消守卫）。
 - **仍未做（review 列为路线图/建议，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护（`runOwner` 的 pid 存活不等于原 Bridge 实例活着，owner 判定只是租约缺席时的过渡判据）。
+
+### 2026-11-24 第三方 review 第十四轮：取消语义对齐「kill ≠ 已退出」，落盘失败靠定时补交闭环
+
+第十三轮 review 判「两个核心修复方向正确 仍不建议封板」：1 个 P1 在 dispose 的退出收尾，3 个 P2 在 cancel 的提前放保护、waitForRun 语义与 not-found 谎报。
+
+- **P1 dispose 后退出把取消翻成失败**：dispose 的 fence-close 落盘失败只挂起 `{cancelled}` 却没记取消意图，退出码 130 随后被当成执行失败，把挂起的 cancelled 覆盖成 failed（用户停止伪装成执行失败）。修法：dispose 对在跑会话记入 `cancelRequested`（退出收尾按取消终结）；挂起终态补交改为**定时重试**（50ms × 5，unref'd）——锁通常是短占，收尾点没赶上就不该放弃，dispose 也不再清补交定时器（Adapter 重建后磁盘收尾必须跑完）。
+- **P2-1 cancel 提前放掉跨实例执行保护**：cancel 立即写磁盘终态 = 立刻清 `runOwner`，kill/close 窗口里另一个 Bridge 会开出第二轮。修法：有 attempt 的一轮**磁盘终态推迟到 close**（`kill ≠ 已退出`），UI 的「已取消」由内存状态 + `cancelRequested` 表达、不靠磁盘终态冒充；spawn 确认后发现取消意图的分支同样只 kill 不写终态，统一由 onExit（close）落盘。
+- **P2-2 onError 提前 resolve 破坏 waitForRun 语义**：error ≠ 收尾（kill 未必退得掉）。修法：取消后的 onError 只忽略、不 resolve，`waitForRun` 由 onExit（close）统一兑现；新增 `runClosed` 守卫——close 之后迟到的 error 不许再改这一轮的终态（挂起的取消终态不被覆盖、已收尾轮次不被改判）。
+- **P2-3 `not-found` 冒充 applied / 挂起残留**：记录被别的实例删除后 `finishRun` 返回 `not-found`，调用方当成功。修法：`persistRunOutcome` 四态返回 `'applied' | 'stale' | 'persist-failed' | 'not-found'`——本地照常收尾但发诊断（`run outcome not persisted (record missing from index)`）并清掉同 attempt 挂起（重试不可能找回）；applied 路径同样清同 attempt 挂起，收尾告警不误报。
+- **测试**：codex 包 108（`session-store.test.ts` 53、`thread-health.test.ts` 35）。按 review 4 条验收逐条落地：P1 dispose 链条（锁占到 close 之后 → 退出不得翻案、锁释放后补交干净）、P2-1（close 前 `confirmThreadPresent` 仍 `in-flight`、close 后放行）、P2-2（error 后 close 前 `waitForRun` 保持 pending）、close 后迟到 error 不翻案、not-found 不谎报（诊断 + 本地收尾 + 不误报 PERSIST_FAILED）。6 处变异全部打红对应测试（dispose 去掉 cancelRequested、onError 提前 resolve、cancel 撤销推迟、去掉 runClosed、去掉取消守卫、去掉定时补交）。
+- **变异验证暴露的冗余守卫已删**：挂起终态的「cancelled 优先级」排名、onError 守卫里的 `record.status === 'cancelled'` 条件——在其余守卫（dispose 的 cancelRequested / runClosed / close 前的 cancelRequested）面前均不可达，变异打不红任何测试，按「测不到的守卫是死代码」删掉，不做安慰剂。
+- **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
