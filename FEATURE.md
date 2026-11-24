@@ -1170,3 +1170,13 @@
 - **P2-3 崩溃双副本按 noticeId 幂等**：dispose 的 append→rm 不是原子操作，崩溃在中间会让同一条记录同时躺在共享 sidecar 与 claim 副本里，两份都被摄取就发两次；且旧代码重新解析时用 `Date.now()` 造 eventId，客户端没法去重。修法：sidecar 记录写入时生成**稳定 `noticeId`**，claim/归还/收编全程保留；事件 `eventId` 从 noticeId 派生（`notice:<session>:PERSIST_FAILED:<noticeId>`，崩溃后重新摄取还是同一个 eventId）；实例摄取按 noticeId 去重（双副本只入队一次，纯重复副本直接删）。投递语义如实定为 **at-least-once + 稳定 ID 幂等**（文件系统 outbox 与内存事件历史之间没有原子事务，不宣称跨崩溃 exactly-once）。测试：共享路径 + 死进程 claim 副本同一条记录，同一次 flush 两份都摄取，PERSIST_FAILED 恰一条、eventId 等于 noticeId 派生值。
 - **测试**：TS 全仓 406（codex 132：thread-health 58 + session-store 53、bridge-core 86、desktop 8）、Flutter 121。变异验证 5 处全红：M1 append 失败丢意图、M2 收编退回只认 pid、M3 摄取不去重、M4 eventId 回 Date.now()、M5 dispose 不落 claim 兜底。原有双实例原子领取、Bridge 集成、监听器隔离与 fencing 测试全部继续通过。
 - **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
+
+### 2026-11-24 第三方 review 第二十一轮：晚到通知的独立 finalizer、claim 原子落盘与损坏保护、旧格式确定性 ID
+
+第二十轮 review 判「2b1e4af 3/3 原处方落实、0 P1」，沿 dispose 与进程退出时序追出 2 个 P2 + 1 个 P3，明确「第 21 轮只处理这两项 + 顺手迁移」「希望第 21 轮就是最后一轮」「保持 at-least-once + 稳定 ID 幂等就很好，不要为 exactly-once 把系统搞复杂」。
+
+- **P2-A dispose 之后晚到的通知必须有收尾者**：`proc.kill()` ≠ 已 close——onExit 收尾、补交链的 give-up 可能在 dispose 返回**之后**才产生新待写通知（T1-T5 竞态），此时 dispose 的兜底循环早已跑完、实例标识已注销，通知再没有人管。修法：**重试链自己是独立 finalizer**——到限不再只留诊断，先落 claim 兜底（写成即持久化，实例注销/进程退出后孤儿收编送达），兜底成功停链，此后 append 只在 flush/dispose 的机会里做（成功删兜底副本保持单副本）；dispose 的收尾循环同样走「append → ensure-fallback → LOST 诊断」。不变量：任何待写通知最终必落共享池或 claim 文件，不存在「dispose 已结束、无人负责」的窗口。
+- **P2-B claim 原子落盘与损坏文件保护**：兜底 claim 直接写最终路径，写入中被 SIGKILL 会留下半截文件；而摄取端把「全部是重复记录」和「全部是损坏记录」合并处理——半截 claim 被 `JSON.parse` 失败后**直接删掉，唯一一份通知就这样没了**。修法：兜底改临时文件写完 `rename` 原子出现（不露半截可消费记录）；摄取分开计数——只有「全部为已摄取重复记录」才允许删副本，含损坏行的**保留 + 诊断**，送达后隔离改名 `.corrupt` 保留证据（`*.corrupt` 不被孤儿扫描理会）。
+- **P3 旧格式 noticeId 确定性迁移**：旧记录没有 noticeId，随机 UUID 会让崩溃双副本各得一个 ID 照样发两次。改为对原始 JSON 行取 **SHA-256** 作确定性 ID——同内容两份自然去重。按 review 定调：at-least-once + 稳定 ID 幂等，不引入跨崩溃 exactly-once 的复杂事务。
+- **测试**：TS 全仓 409（codex 135：thread-health 61 + session-store 53、bridge-core 86、desktop 8）、Flutter 121。变异验证 5 处全红：M1 到限不落兜底、M2 parse 时损坏副本照删、M2b 送达后不隔离直接删、M3 旧格式回随机 UUID、M4 兜底写临时文件不做 rename。变异过程再获一条教训（记 FailureExperience.md）：M2 第一版没打红是被 flush 隔离逻辑掩盖——删除规则的观测面必须落在「全损坏副本」上（好记录 + 损坏行的混合副本走的是隔离路径）。
+- **冻结确认**（review 要求）：本轮未动 Registry、Flutter、执行状态机、session-store CAS、Bridge 事件协议；跨进程租约与 fsync 仍留路线图。

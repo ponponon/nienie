@@ -2649,6 +2649,141 @@ describe('Codex 线程恢复的真实性', () => {
     expect(delivered[0]?.eventId).toBe('notice:codex_ses_dup:PERSIST_FAILED:n_dup');
   });
 
+  it('dispose 之后晚到的通知仍有收尾者：重试链到限自落 claim 兜底，新实例收编送达', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([{ ...STORE_BASE, id: 'codex_ses_late' }]);
+    const sidecar = `${storePath}.stale-outcomes`;
+    const dir = dirname(storePath);
+    const first = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    await first.dispose(); // 实例已注销——此后产生的通知没有第二次 dispose 可指望
+
+    // 晚到的 give-up（onExit 收尾 / 补交链）：锁被占，append 失败
+    writeFileSync(
+      `${sidecar}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    (first as unknown as { persistStaleOutcomeNotice(sessionId: string): void })
+      .persistStaleOutcomeNotice('codex_ses_late');
+    // 重试链到限自落 claim 兜底（独立 finalizer，不依赖 dispose）
+    expect(
+      await waitForCondition(
+        () => readdirSync(dir).filter((name) => name.endsWith('.claim')).length === 1,
+        5000,
+      ),
+    ).toBe(true);
+    // 原子落盘（临时文件 + rename）：不残留半截可消费记录
+    expect(readdirSync(dir).filter((name) => name.includes('.new'))).toHaveLength(0);
+
+    // 释锁 → 新实例收编送达一次
+    rmSync(`${sidecar}.lock`, { force: true });
+    const second = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const events: CanonicalAgentEvent[] = [];
+    second.onEvent((event) => events.push(event));
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1);
+  });
+
+  it('损坏的 claim 副本不静默删：好记录照常送达，损坏行保留并隔离 .corrupt', () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_cm', threadId: 'th_live', runState: 'started' },
+    ]);
+    const sidecar = `${storePath}.stale-outcomes`;
+    const dir = dirname(storePath);
+    // 一行好记录 + 半截损坏行（模拟写入中被 SIGKILL 的旧格式 claim）
+    writeFileSync(
+      sidecar,
+      `${JSON.stringify({
+        noticeId: 'n_ok',
+        sessionId: 'codex_ses_cm',
+        at: '2026-11-24T10:00:00.000Z',
+        message: 'codex session codex_ses_cm: 终态最终未能写入本地索引',
+      })}\n{"sessionId": "codex_ses_cm", "mess\n`,
+      'utf8',
+    );
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    // 好记录照常送达
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1);
+    // 副本不许当「重复记录」删掉：送达后隔离改名 .corrupt（损坏行可能是唯一副本）
+    expect(readdirSync(dir).filter((name) => name.endsWith('.claim.corrupt'))).toHaveLength(1);
+    expect(readdirSync(dir).filter((name) => name.endsWith('.claim'))).toHaveLength(0);
+
+    // 全损坏的副本（一条都解析不出来）同样不许静默删——它可能是唯一副本
+    writeFileSync(sidecar, '{"sessionId": "codex_ses_cm", "mess\n', 'utf8');
+    const second = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    second.onEvent(() => true);
+    expect(readdirSync(dir).filter((name) => name.endsWith('.claim'))).toHaveLength(1);
+    expect(
+      second.getDiagnostics().historyRecoveryErrors.join('\n'),
+    ).toContain('kept for quarantine');
+  });
+
+  it('旧格式记录（无 noticeId）的双副本按内容哈希确定性去重：只送达一次', () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_old', threadId: 'th_live', runState: 'started' },
+    ]);
+    const sidecar = `${storePath}.stale-outcomes`;
+    // 升级前留下的旧格式记录（没有 noticeId），崩溃双副本
+    const legacy = `${JSON.stringify({
+      sessionId: 'codex_ses_old',
+      at: '2026-11-24T10:30:00.000Z',
+      message: 'codex session codex_ses_old: 终态最终未能写入本地索引',
+    })}\n`;
+    writeFileSync(sidecar, legacy, 'utf8');
+    const deadPid = spawnSync(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' }).pid;
+    expect(deadPid).toBeGreaterThan(0);
+    writeFileSync(
+      `${sidecar}.${deadPid}.deadbeef-0000-0000-0000-000000000000.1.claim`,
+      legacy,
+      'utf8',
+    );
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1);
+  });
+
   it('RUN_FAILED 的核对与发送在写锁临界区内：事件发出的瞬间写锁还占着，beginRun 插不进', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');

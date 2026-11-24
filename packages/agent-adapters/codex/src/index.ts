@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   readdirSync,
@@ -288,13 +288,24 @@ export class CodexAdapter implements AgentAdapter {
    */
   private readonly seenNoticeIds = new Set<string>();
   /**
+   * 含损坏行的 claim 副本：不静默删唯一副本，送达后隔离改名 `.corrupt` 保留证据。
+   * 「全部是已摄取重复记录」才允许直接删——两种情况不能混为一谈。
+   */
+  private readonly corruptClaims = new Set<string>();
+  /**
    * 通知意图的待写队列：give-up 的 sidecar append 失败时不许把意图丢掉——
    * 定时补写（锁释放后自动恢复），dispose 做最后一次补写，仍写不进则落成本
    * 实例名下的 claim 文件（dispose 注销实例后可被孤儿机制收编，不丢）。
    */
   private readonly pendingNoticeWrites = new Map<
     string,
-    { entry: StaleOutcomeEntry; attempts: number; timer?: ReturnType<typeof setTimeout> }
+    {
+      entry: StaleOutcomeEntry;
+      attempts: number;
+      timer?: ReturnType<typeof setTimeout>;
+      /** 已落盘的兜底 claim 路径（存在 = 通知已持久化，append 只是更优的送达路径）。 */
+      fallbackPath?: string;
+    }
   >();
   /** 本实例已领取（rename 到手）的 sidecar 副本；全部送达后才删除。 */
   private readonly claimedStaleFiles: string[] = [];
@@ -815,10 +826,10 @@ export class CodexAdapter implements AgentAdapter {
    * append 与 claim 的 rename 共用 sidecar 锁：打开的 fd 一旦被 rename 带走，
    * 这条字节就写进别人的 claim 副本、随副本一起删掉——记到最后的提示不能这样消失。
    *
-   * **append 失败不丢通知意图**：进待写队列定时补写（锁释放后自动恢复），
-   * 到重试上限仍写不进则留队列 + 明确诊断（不假装完成），dispose 做最后一次
-   * 补写，仍失败就把记录落成本实例名下的 claim 文件（dispose 注销实例后可被
-   * 孤儿机制收编）——「最终通知」的意图不允许随进程一起消失。
+   * **append 失败不丢通知意图**：进待写队列定时补写（锁释放后自动恢复）；
+   * 到限由**独立 finalizer**（重试链自己）落成 claim 兜底——dispose 之后才产生的
+   * 晚到通知（onExit 收尾、补交链的 give-up）没有第二次 dispose 可指望，兜底
+   * 必须在通知自己的收尾链里完成。共享池与 claim 文件都写不动才如实报 LOST。
    */
   private persistStaleOutcomeNotice(sessionId: string): void {
     if (!this.sessionStorePath) return;
@@ -857,7 +868,14 @@ export class CodexAdapter implements AgentAdapter {
     }
   }
 
-  /** 待写通知的定时补写：锁释放后自动恢复；到上限停表但留队列，等 dispose/flush 的机会。 */
+  /**
+   * 待写通知的定时补写。
+   *
+   * 到限**不再只留诊断**：落 claim 兜底（独立 finalizer）——写成即持久化
+   *（实例注销/进程退出后由孤儿收编送达），兜底成功就停链；此后 append 只在
+   * flush/dispose 的机会里做（成功则删兜底副本保持单副本）。兜底也写不进才
+   * 留队列 + 明确诊断（不假装完成）。
+   */
   private scheduleNoticeWriteRetry(sessionId: string): void {
     const pending = this.pendingNoticeWrites.get(sessionId);
     if (!pending || pending.timer) return;
@@ -866,15 +884,18 @@ export class CodexAdapter implements AgentAdapter {
       if (!current) return;
       delete current.timer;
       if (this.writeStaleOutcomeEntry(current.entry)) {
+        this.clearNoticeFallback(current);
         this.pendingNoticeWrites.delete(sessionId);
         return;
       }
       current.attempts += 1;
       if (current.attempts >= 5) {
-        // 到限停表：意图仍留在队列里（dispose/flush 还会补写），但必须明确暴露——
-        // 「最终通知可能丢」不许被一次 give-up 的顺手诊断假装完成
+        if (this.ensureNoticeFallback(current)) {
+          // 兜底已落盘：通知不会再丢。停链，等 flush/dispose 的机会性补写
+          return;
+        }
         this.emitDiagnosticWarning(
-          `codex session ${sessionId}: stale outcome notice still unwritten after ${current.attempts} attempts; kept for dispose/flush retry`,
+          `codex session ${sessionId}: stale outcome notice still unwritten after ${current.attempts} attempts; kept for retry (claim fallback also failed)`,
         );
         return;
       }
@@ -885,28 +906,62 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
-   * 把没写进共享 sidecar 的通知落成本实例名下的 claim 文件（唯一文件名，不需要锁）。
-   * dispose 会注销本实例标识，之后任何实例的孤儿收编都能把它带走——不丢。
+   * 兜底 claim：临时文件写完再 rename 到正式路径（原子出现，不留半截可消费记录）。
+   * 唯一文件名不需要锁；实例标识注销（或进程退出）后孤儿收编能带走。
    */
-  private fallbackNoticeToClaim(entry: StaleOutcomeEntry): boolean {
-    if (!this.sessionStorePath) return false;
+  private fallbackNoticeToClaim(entry: StaleOutcomeEntry): string | undefined {
+    if (!this.sessionStorePath) return undefined;
     const claim = `${this.sessionStorePath}.stale-outcomes.${process.pid}.${this.claimOwnerId}.${++this.staleClaimSeq}.claim`;
+    const tmp = `${claim}.new`;
     try {
-      writeFileSync(claim, `${JSON.stringify(entry)}\n`, 'utf8');
-      return true;
+      writeFileSync(tmp, `${JSON.stringify(entry)}\n`, 'utf8');
+      renameSync(tmp, claim);
+      return claim;
     } catch {
-      return false;
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        // ignore
+      }
+      return undefined;
     }
   }
 
-  /** 待写队列的补写机会（loadSession / listSessions / onEvent 都会走到）：每个机会同步试一次。 */
+  /** 确保待写通知已有兜底 claim；没有就写一个。 */
+  private ensureNoticeFallback(pending: {
+    entry: StaleOutcomeEntry;
+    fallbackPath?: string | undefined;
+  }): boolean {
+    if (pending.fallbackPath) return true;
+    const claim = this.fallbackNoticeToClaim(pending.entry);
+    if (!claim) return false;
+    pending.fallbackPath = claim;
+    return true;
+  }
+
+  /** append 成功后删掉兜底副本（保持单副本；删不掉也只是多一份 noticeId 幂等的重复）。 */
+  private clearNoticeFallback(pending: { fallbackPath?: string | undefined }): void {
+    if (!pending.fallbackPath) return;
+    try {
+      rmSync(pending.fallbackPath, { force: true });
+    } catch {
+      // ignore：noticeId 幂等兜底
+    }
+    pending.fallbackPath = undefined;
+  }
+
+  /**
+   * 待写队列的补写机会（loadSession / listSessions / onEvent 都会走到）。
+   * 没有定时链在跑的（含已落兜底等机会的）每个机会同步试一次 append。
+   */
   private drainPendingNoticeWrites(): void {
     for (const [sessionId, pending] of [...this.pendingNoticeWrites]) {
       if (pending.timer) continue; // 定时补写链在跑的不抢（等它的回合）
       if (this.writeStaleOutcomeEntry(pending.entry)) {
+        this.clearNoticeFallback(pending);
         this.pendingNoticeWrites.delete(sessionId);
       }
-      // 仍写不进就留队列（不重启定时链）：dispose 是最后的补写机会
+      // 仍写不进就留队列（兜底 claim 在就不算丢）：dispose 是最后的收尾机会
     }
   }
 
@@ -1001,16 +1056,21 @@ export class CodexAdapter implements AgentAdapter {
         continue;
       }
       let anyQueued = false;
+      let anyDuplicate = false;
+      let anyMalformed = false;
       for (const line of raw.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
           const parsed = JSON.parse(trimmed) as Partial<StaleOutcomeEntry>;
-          // 稳定标识：写入时生成、全程保留。旧记录没有 noticeId 的现造一个
-          // （只保证本实例内去重）；崩溃双副本（共享路径 + 未删的 claim）都会
-          // 被摄取，按 noticeId 只入队一次
-          const noticeId = parsed.noticeId ?? randomUUID();
-          if (this.seenNoticeIds.has(noticeId)) continue;
+          // 稳定标识：写入时生成、全程保留。旧格式没有 noticeId 的取**确定性** ID
+          //（原始行的 SHA-256）——崩溃双副本里两份旧记录内容相同，哈希相同就能
+          // 去重；随机 UUID 会让两份各得一个 ID、照样发两次
+          const noticeId = parsed.noticeId ?? createHash('sha256').update(trimmed).digest('hex');
+          if (this.seenNoticeIds.has(noticeId)) {
+            anyDuplicate = true;
+            continue;
+          }
           this.seenNoticeIds.add(noticeId);
           const message = parsed.message ?? `终态最终未能写入本地索引（上一个实例重试已放弃）`;
           const sessionId = parsed.sessionId ?? '';
@@ -1033,12 +1093,19 @@ export class CodexAdapter implements AgentAdapter {
           anyQueued = true;
           this.emitDiagnosticWarning(message);
         } catch {
-          // 半行损坏不影响其他行
+          // 半行损坏：保留副本（唯一副本不许静默删），与「重复记录」分开处理
+          anyMalformed = true;
         }
       }
-      if (!anyQueued) {
-        // 整份副本都是已摄取过的重复记录（或全损坏）：副本没有存在的理由，直接删
-        //——否则队列为空时 flush 的「送达后删副本」永远不会走到它
+      if (anyMalformed) {
+        this.corruptClaims.add(claim);
+        this.emitDiagnosticWarning(
+          `stale-outcomes claim kept for quarantine (malformed records): ${claim}`,
+        );
+      }
+      if (!anyQueued && anyDuplicate && !anyMalformed) {
+        // 只有「整份副本都是已摄取过的重复记录」才允许直接删；含损坏行的保留到
+        // 送达后隔离——损坏的可能是唯一副本，删了就再也找不回来
         const index = this.claimedStaleFiles.indexOf(claim);
         if (index >= 0) this.claimedStaleFiles.splice(index, 1);
         try {
@@ -1081,6 +1148,15 @@ export class CodexAdapter implements AgentAdapter {
       return;
     }
     for (const claim of this.claimedStaleFiles.splice(0)) {
+      if (this.corruptClaims.delete(claim)) {
+        // 含损坏行的副本不静默删：隔离改名保留证据（唯一副本可能就是它）
+        try {
+          renameSync(claim, `${claim}.corrupt`);
+        } catch {
+          // ignore
+        }
+        continue;
+      }
       try {
         rmSync(claim, { force: true });
       } catch {
@@ -2289,10 +2365,17 @@ export class CodexAdapter implements AgentAdapter {
       }
     }
     // 通知意图的收尾：最后补写一次；仍写不进共享池就落成本实例名下的 claim 文件
-    //（实例标识随即注销，孤儿收编能带走）——不许随 dispose 丢掉最终通知
+    //（实例标识随即注销，孤儿收编能带走）——不许随 dispose 丢掉最终通知。
+    // dispose 之后才产生的晚到通知不靠这里兜底：它们的重试链自己是 finalizer
+    //（到限落 claim），不存在「dispose 已结束、无人负责」的窗口
     for (const [sessionId, pending] of [...this.pendingNoticeWrites]) {
       if (pending.timer) clearTimeout(pending.timer);
-      if (this.writeStaleOutcomeEntry(pending.entry) || this.fallbackNoticeToClaim(pending.entry)) {
+      if (this.writeStaleOutcomeEntry(pending.entry)) {
+        this.clearNoticeFallback(pending);
+        this.pendingNoticeWrites.delete(sessionId);
+        continue;
+      }
+      if (this.ensureNoticeFallback(pending)) {
         this.pendingNoticeWrites.delete(sessionId);
         continue;
       }
