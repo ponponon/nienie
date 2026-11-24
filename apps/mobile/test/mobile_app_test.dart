@@ -4388,6 +4388,75 @@ void main() {
     client.dispose();
   });
 
+  testWidgets('BIND_LOST / PERSIST_FAILED 同为会话级提示：不得把会话状态打成 failed', (WidgetTester tester) async {
+    final transport = FakeBridgeTransport();
+    final client = MobileBridgeClient(
+      transport: transport,
+      credentialStore: InMemoryCredentialStore(),
+    );
+    await tester.pumpWidget(NienieMobileApp(client: client));
+
+    await tester.tap(find.byKey(const Key('btn-toggle-advanced')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('input-ws-url')), 'ws://127.0.0.1:4100');
+    await tester.enterText(find.byKey(const Key('input-pairing-code')), '123456');
+    await tester.tap(find.byKey(const Key('btn-connect-pair')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Implement OpenCode adapter'));
+    await tester.pumpAndSettle();
+
+    // 发一条 → running + 等待占位
+    await tester.enterText(find.byKey(const Key('input-session-prompt')), '继续');
+    await tester.tap(find.byKey(const Key('btn-send-prompt')));
+    await tester.pumpAndSettle();
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'nl_run', 'sessionId': 'ses_alpha',
+      'sequence': 1, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'status', 'payload': {'status': 'running'},
+    });
+    await tester.pumpAndSettle();
+
+    var seq = 1;
+    for (final code in ['BIND_LOST', 'PERSIST_FAILED']) {
+      transport.emitServerEvent({
+        'version': 1, 'eventId': 'nl_$code', 'sessionId': 'ses_alpha',
+        'sequence': ++seq, 'timestamp': DateTime.now().toIso8601String(),
+        'type': 'error',
+        'payload': {
+          'code': code,
+          'message': '$code 提示',
+          'retryable': false,
+        },
+      });
+      await tester.pumpAndSettle();
+
+      // 卡片要出现
+      expect(
+        client.timelineFor('ses_alpha').whereType<ErrorCardItem>().where((e) => e.code == code).length,
+        1,
+        reason: '$code 应渲染成提示卡片',
+      );
+      // 但会话状态不能被打成 failed（提示 ≠ 执行失败）
+      expect(client.statusFor('ses_alpha'), isNot('failed'),
+          reason: '$code 不得改写会话状态');
+      // 等待占位也不能被清掉
+      expect(client.timelineFor('ses_alpha').whereType<PendingResponseItem>(), isNotEmpty,
+          reason: '$code 不得清掉等待占位');
+    }
+
+    // 对照：真正的执行失败仍然按失败处理
+    transport.emitServerEvent({
+      'version': 1, 'eventId': 'nl_real_err', 'sessionId': 'ses_alpha',
+      'sequence': ++seq, 'timestamp': DateTime.now().toIso8601String(),
+      'type': 'error',
+      'payload': {'code': 'RUN_FAILED', 'message': '炸了', 'retryable': true},
+    });
+    await tester.pumpAndSettle();
+    expect(client.statusFor('ses_alpha'), 'failed');
+
+    client.dispose();
+  });
+
 }
 
 /// 测试辅助：可控延迟的 CredentialStore（竞态测试用）

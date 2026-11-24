@@ -12,8 +12,22 @@ import type {
 
 export class AgentRegistry {
   private readonly adapters = new Map<AgentId, AgentAdapter>();
-  private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
+  private readonly listeners = new Set<(event: CanonicalAgentEvent) => unknown>();
   private readonly unsubscribers = new Map<AgentId, () => void>();
+  /**
+   * 下游监听器不在时的待发事件缓冲。
+   *
+   * 真实启动顺序里 Adapter 可能在 BridgeServer 订阅之前就产生事件（注册即订阅的
+   * 转发层不能把这些事件发进空监听器集合静默丢掉）。缓冲在第一个下游监听器
+   * 注册时补发；容量上限防无限增长，溢出走诊断计数。
+   *
+   * **PERSIST_FAILED 不进缓冲**：它的可靠送达由 Adapter 侧的 sidecar 磁盘队列
+   * 负责（下游接上后 `flushPendingNotices` 重发）——同一条提示不允许既走缓存
+   * 又走磁盘队列被送达两次。
+   */
+  private pendingEvents: CanonicalAgentEvent[] = [];
+  private pendingEventsDropped = 0;
+  private static readonly MAX_PENDING_EVENTS = 500;
 
   register(adapter: AgentAdapter): void {
     if (this.adapters.has(adapter.id)) {
@@ -21,11 +35,32 @@ export class AgentRegistry {
     }
     this.adapters.set(adapter.id, adapter);
     const unsubscribe = adapter.onEvent((event) => {
-      for (const listener of this.listeners) {
-        listener(event);
+      // 没有真正下游监听器时：PERSIST_FAILED 返回 false（Adapter 保留磁盘副本
+      // 等重试，不许确认消费 sidecar）；其余事件进缓冲，下游接上后补发。
+      if (this.listeners.size === 0) {
+        if (isSidecarNoticeEvent(event)) {
+          return false;
+        }
+        this.bufferEvent(event);
+        return false;
       }
+      let delivered = false;
+      for (const listener of this.listeners) {
+        if (listener(event) !== false) {
+          delivered = true;
+        }
+      }
+      return delivered;
     });
     this.unsubscribers.set(adapter.id, unsubscribe);
+  }
+
+  private bufferEvent(event: CanonicalAgentEvent): void {
+    this.pendingEvents.push(event);
+    if (this.pendingEvents.length > AgentRegistry.MAX_PENDING_EVENTS) {
+      this.pendingEvents.shift();
+      this.pendingEventsDropped += 1;
+    }
   }
 
   get(agentId: AgentId): AgentAdapter | undefined {
@@ -56,8 +91,20 @@ export class AgentRegistry {
     return adapter.listModels();
   }
 
-  onEvent(listener: (event: CanonicalAgentEvent) => void): () => void {
+  onEvent(listener: (event: CanonicalAgentEvent) => unknown): () => void {
     this.listeners.add(listener);
+    // 补发下游缺席期间缓冲的事件（只补给刚注册的这个监听器，不重复打扰老监听器）
+    if (this.pendingEvents.length > 0) {
+      const pending = this.pendingEvents;
+      this.pendingEvents = [];
+      for (const event of pending) {
+        listener(event);
+      }
+    }
+    // PERSIST_FAILED 等持久化提示此前被退回 Adapter 等重试：下游到了，重发
+    for (const adapter of this.adapters.values()) {
+      adapter.flushPendingNotices?.();
+    }
     return () => this.listeners.delete(listener);
   }
 
@@ -73,6 +120,9 @@ export class AgentRegistry {
         }
       }
     }
+    if (this.pendingEventsDropped > 0) {
+      out['registryBuffer'] = { droppedEvents: this.pendingEventsDropped };
+    }
     return out;
   }
 
@@ -82,8 +132,14 @@ export class AgentRegistry {
     }
     this.unsubscribers.clear();
     this.listeners.clear();
+    this.pendingEvents = [];
     await Promise.all([...this.adapters.values()].map((adapter) => adapter.dispose()));
   }
+}
+
+/** sidecar 持久化提示（PERSIST_FAILED）：由 Adapter 磁盘队列负责重试，不进 Registry 缓冲。 */
+function isSidecarNoticeEvent(event: CanonicalAgentEvent): boolean {
+  return event.type === 'error' && (event.payload as { code?: unknown } | undefined)?.code === 'PERSIST_FAILED';
 }
 
 export class SessionRouter {

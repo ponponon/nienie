@@ -50,9 +50,19 @@ export type AgentAdapter = {
   ): Promise<void>;
   cancel(sessionId: string): Promise<void>;
   dispose(): Promise<void>;
-  onEvent(listener: (event: CanonicalAgentEvent) => void): () => void;
+  /**
+   * 事件监听器。显式返回 `false` 表示「这条事件没有真正送达下游」（例如注册方只是
+   * 中间层、自己也还没有下游监听器），适配器应保留自己的持久副本等重试；
+   * 其余任何返回值（含 `void`）都按「已送达」处理。
+   */
+  onEvent(listener: (event: CanonicalAgentEvent) => unknown): () => void;
   /** 可选：暴露事件流连接诊断（供 Bridge /diagnostics 聚合）。 */
   getDiagnostics?(): unknown;
+  /**
+   * 可选：下游监听器接上后，重试投递尚未确认送达的持久化提示
+   * （如 sidecar 里的 PERSIST_FAILED）。由注册方（AgentRegistry）调用。
+   */
+  flushPendingNotices?(): void;
 };
 
 export function createAgentInfo(

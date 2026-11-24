@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CanonicalAgentEvent } from '@nienie/protocol';
@@ -1565,21 +1565,30 @@ describe('Codex 线程恢复的真实性', () => {
       JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
       'utf8',
     );
-    // onError：RUN_FAILED 即时反馈 + 内存失败意图；磁盘终态不动（error ≠ 已退出）
+    // onError 撞上写锁被占：无法确认归属 → 失败意图挂起（fail-closed），
+    // 不许 fail-open 放行——最需要 fencing 的时候恰恰是锁被别人占着的时候
     proc.fail(new Error('stdio 崩了'));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(peekStatus(adapter, 'codex_ses_errfail')).toBe('failed'); // 内存失败意图
+    expect(peekStatus(adapter, 'codex_ses_errfail')).toBe('running'); // 意图挂起，状态不动
     expect(
       events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
-    ).toHaveLength(1);
+    ).toHaveLength(0); // 确认前不发
     const held = new CodexSessionStore({ filePath: storePath }).load();
     expect(held.status).toBe('ok');
     if (held.status !== 'ok') return;
     expect(held.sessions[0]?.runOwner).toBeDefined(); // 保护留到 close
 
-    // 进程退出 → close：终态写入被锁挡 → 挂起待补交
+    // 进程退出 → close：失败意图的最后一次确认仍无法确认归属 → 按失败收尾 + 诊断
+    // （磁盘由 finishRun fencing 保护，这里锁还占着，终态写入被挡 → 挂起待补交）
     proc.finish(1);
     await adapter.waitForRun('codex_ses_errfail').catch(() => undefined);
+    expect(peekStatus(adapter, 'codex_ses_errfail')).toBe('failed'); // close 收尾按失败落
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
+    ).toHaveLength(1); // 收尾时补发，且只发这一次
+    expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toContain(
+      'unconfirmed at close',
+    );
 
     rmSync(`${storePath}.lock`, { force: true });
     await new Promise((resolve) => setTimeout(resolve, 120)); // 定时补交
@@ -1589,7 +1598,7 @@ describe('Codex 线程恢复的真实性', () => {
     if (stored.status !== 'ok') return;
     expect(stored.sessions[0]).toMatchObject({ status: 'failed', runState: 'never_started' });
     expect(stored.sessions[0]?.runOwner).toBeUndefined();
-    // RUN_FAILED 只在 onError 反馈一次，close 落盘不重发
+    // RUN_FAILED 只反馈一次，close 落盘不重发
     expect(
       events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
     ).toHaveLength(1);
@@ -2155,5 +2164,296 @@ describe('Codex 线程恢复的真实性', () => {
     expect(
       events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
     ).toHaveLength(1);
+  });
+
+  it('sidecar 原子领取：两个 Adapter 同时消费同一份 sidecar 只送达一次', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_race', threadId: 'th_live', runState: 'started' },
+    ]);
+    const sidecar = `${storePath}.stale-outcomes`;
+    writeFileSync(
+      sidecar,
+      `${JSON.stringify({
+        sessionId: 'codex_ses_race',
+        at: '2026-11-24T06:00:00.000Z',
+        message: 'codex session codex_ses_race: 终态最终未能写入本地索引（重试已放弃），其他窗口可能仍把它显示成运行中',
+      })}\n`,
+      'utf8',
+    );
+
+    const makeAdapter = () =>
+      new CodexAdapter({
+        codexHome,
+        defaultProjectPath: PROJECT,
+        sessionStorePath: storePath,
+        spawnProcess: (args) => createFakeProcess('th_live'),
+      });
+    const a = makeAdapter();
+    const b = makeAdapter();
+    const eventsA: CanonicalAgentEvent[] = [];
+    const eventsB: CanonicalAgentEvent[] = [];
+    a.onEvent((event) => eventsA.push(event));
+    b.onEvent((event) => eventsB.push(event));
+    // 两个进程/实例同时进入消费入口：rename 领取是原子的，只有一个能拿到记录
+    await a.loadSession('codex_ses_race');
+    await b.loadSession('codex_ses_race');
+    const countA = eventsA.filter(
+      (event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED',
+    ).length;
+    const countB = eventsB.filter(
+      (event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED',
+    ).length;
+    expect(countA + countB).toBe(1); // 同一条提示不许被发两次
+    expect(existsSync(sidecar)).toBe(false); // 主文件已被领取
+    expect(
+      readdirSync(dirname(storePath)).filter((name) => name.includes('.claim')),
+    ).toEqual([]); // 送达后领取副本也删干净
+  });
+
+  it('旧实例晚到的 sidecar 写入仍能被活着的 Adapter 读到（不存在即锁死加载）', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_late', threadId: 'th_live', runState: 'started' },
+    ]);
+    const sidecar = `${storePath}.stale-outcomes`;
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    // 第一次进入：还没有 sidecar（旧实例的放弃定时器还没到点）
+    await adapter.loadSession('codex_ses_late');
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(0);
+
+    // 旧实例的定时器此刻才把最终失败写出来（新 Adapter 已经启动）
+    writeFileSync(
+      sidecar,
+      `${JSON.stringify({
+        sessionId: 'codex_ses_late',
+        at: '2026-11-24T06:10:00.000Z',
+        message: 'codex session codex_ses_late: 终态最终未能写入本地索引（重试已放弃），其他窗口可能仍把它显示成运行中',
+      })}\n`,
+      'utf8',
+    );
+
+    // 晚到的记录不许因为「第一次没见到文件」就被永久拒收
+    await adapter.loadSession('codex_ses_late');
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1);
+  });
+
+  it('dispose 把没送达的领取副本放回共享池：提示不随 Adapter 生命周期消失', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_relay', threadId: 'th_live', runState: 'started' },
+    ]);
+    const sidecar = `${storePath}.stale-outcomes`;
+    writeFileSync(
+      sidecar,
+      `${JSON.stringify({
+        sessionId: 'codex_ses_relay',
+        at: '2026-11-24T06:20:00.000Z',
+        message: 'codex session codex_ses_relay: 终态最终未能写入本地索引（重试已放弃），其他窗口可能仍把它显示成运行中',
+      })}\n`,
+      'utf8',
+    );
+
+    // 一个「中间层注册方」：自己没有下游，收到一律明确未送达（return false）
+    const first = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const proxyEvents: CanonicalAgentEvent[] = [];
+    first.onEvent((event) => {
+      proxyEvents.push(event);
+      return false;
+    });
+    // onEvent 的 flush 已经把提示发给中间层（明确未送达 → 保留副本等重试）
+    expect(
+      proxyEvents.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1); // 发给中间层了，但没确认送达
+
+    await first.dispose(); // 领取副本必须放回共享池，不许被带走
+
+    const second = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const events: CanonicalAgentEvent[] = [];
+    second.onEvent((event) => events.push(event));
+    await second.loadSession('codex_ses_relay');
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1);
+    expect(existsSync(sidecar)).toBe(false);
+  });
+
+  it('RUN_FAILED 的核对与发送在写锁临界区内：事件发出的瞬间写锁还占着，beginRun 插不进', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_atomic' }, // 全新会话
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    let lockHeldDuringRunFailed = false;
+    adapter.onEvent((event) => {
+      if (event.type === 'error' && event.payload.code === 'RUN_FAILED') {
+        // 核对与发送之间没有锁窗口的直接证据：事件到达监听器时写锁还被占着，
+        // 另一个实例的 beginRun 此刻只能撞锁失败，插不进「查完到发事件之间」
+        lockHeldDuringRunFailed = existsSync(`${storePath}.lock`);
+      }
+    });
+    await adapter.loadSession('codex_ses_atomic');
+    await adapter.sendMessage('codex_ses_atomic', '继续');
+
+    proc.fail(new Error('运行炸了'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(lockHeldDuringRunFailed).toBe(true);
+  });
+
+  it('旧 attempt 的补交定时器不得烧掉新 attempt 的重试预算：预算按 attempt 隔离', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_budget' },
+    ]);
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_budget');
+    await adapter.sendMessage('codex_ses_budget', '继续');
+
+    const internal = adapter as unknown as {
+      stashPendingRunOutcome: (
+        sessionId: string,
+        attempt: string | undefined,
+        patch: { status: string },
+      ) => void;
+      schedulePendingRetry: (sessionId: string) => void;
+      pendingRetryCounts: Map<string, { attempt: string | undefined; count: number }>;
+      pendingRetryTimers: Map<string, { attempt: string | undefined; timer: ReturnType<typeof setTimeout> }>;
+      pendingRunOutcomes: Map<string, { attempt: string | undefined; patch: unknown }>;
+    };
+
+    // 锁一直占着 → attempt A 的补交重试持续失败，计数烧到 4
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    internal.stashPendingRunOutcome('codex_ses_budget', 'attempt_A', { status: 'failed' });
+    internal.schedulePendingRetry('codex_ses_budget');
+    expect(
+      await waitForCondition(
+        () => (internal.pendingRetryCounts.get('codex_ses_budget')?.count ?? 0) >= 4,
+      ),
+    ).toBe(true);
+
+    // 新 attempt 接管并挂上自己的落盘失败：旧定时器与旧计数必须整体作废。
+    // attempt_B 用真实的 runAttempt（磁盘 fencing 只认它），attempt_A 是旧轮次
+    const beginState = new CodexSessionStore({ filePath: storePath }).load();
+    expect(beginState.status).toBe('ok');
+    if (beginState.status !== 'ok') return;
+    const realAttempt = beginState.sessions[0]?.runAttempt;
+    expect(realAttempt).toBeTruthy();
+    internal.stashPendingRunOutcome('codex_ses_budget', realAttempt, { status: 'failed' });
+    expect(internal.pendingRetryTimers.has('codex_ses_budget')).toBe(false); // 旧定时器清掉
+    expect(internal.pendingRetryCounts.get('codex_ses_budget')).toBeUndefined(); // 预算归零
+
+    // B 自己排的补交在锁释放后必须走满自己的预算：不许被 A 的遗留计数顶到 give-up
+    internal.schedulePendingRetry('codex_ses_budget');
+    rmSync(`${storePath}.lock`, { force: true });
+    expect(
+      await waitForCondition(() => {
+        const stored = new CodexSessionStore({ filePath: storePath }).load();
+        return (
+          stored.status === 'ok' &&
+          stored.sessions[0]?.status === 'failed' &&
+          stored.sessions[0]?.runOwner === undefined
+        );
+      }),
+    ).toBe(true);
+    // A 的 4 次失败不许记到 B 头上：give-up 一次都不该出现
+    expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).not.toContain('giving up');
+  });
+
+  it('补交定时器的 attempt 核对：旧 attempt 的定时器对上新 pending 必须就地退出', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_timer' },
+    ]);
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_timer');
+    await adapter.sendMessage('codex_ses_timer', '继续');
+
+    const internal = adapter as unknown as {
+      stashPendingRunOutcome: (
+        sessionId: string,
+        attempt: string | undefined,
+        patch: { status: string },
+      ) => void;
+      schedulePendingRetry: (sessionId: string) => void;
+      pendingRetryCounts: Map<string, { attempt: string | undefined; count: number }>;
+      pendingRunOutcomes: Map<string, { attempt: string | undefined; patch: unknown }>;
+    };
+
+    // attempt A 排出补交定时器（锁占着，注定失败重试）
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    internal.stashPendingRunOutcome('codex_ses_timer', 'attempt_A', { status: 'failed' });
+    internal.schedulePendingRetry('codex_ses_timer');
+
+    // pending 换成 attempt B，但**绕过 stash**（直接改单槽）——专打定时器回调里的
+    // attempt 核对守卫：stash 的清定时器守卫在这条路径上不可达，两个守卫各要各的观测面
+    internal.pendingRunOutcomes.set('codex_ses_timer', {
+      attempt: 'attempt_B',
+      patch: { status: 'failed' },
+    });
+
+    // A 的定时器到点后必须发现 pending 已易主、就地退出：B 的预算一点都不能少
+    await new Promise((resolve) => setTimeout(resolve, 250)); // 覆盖 A 的首次回调（50ms + 写锁退避）
+    expect(internal.pendingRetryCounts.get('codex_ses_timer')).toBeUndefined();
+    rmSync(`${storePath}.lock`, { force: true });
   });
 });

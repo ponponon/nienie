@@ -544,31 +544,44 @@ export class CodexSessionStore {
   }
 
   /**
-   * 运行期失败意图的登记栅栏：只有「这轮 attempt 还归我」才允许记失败意图
-   * （内存终态 + RUN_FAILED 事件）。迟到的旧执行（别的 Bridge 已经用 `beginRun`
-   * 接管）返回 `stale-attempt`——否则旧执行的 error 会把新一轮的会话显示成失败、
-   * 还广播出属于过期轮次的 RUN_FAILED。
+   * 运行期失败意图的登记栅栏：在写锁临界区里原子核对「这轮 attempt 还归我」，
+   * 并**在持锁期间**同步执行 `register`（登记失败意图 + 发出 RUN_FAILED）。
+   * 核对与事件发送之间没有锁窗口——`beginRun` 插不进来，不留 TOCTOU。
+   *
+   * 返回：
+   * - `'current'`：归属确认通过，`register` 已在锁内执行；
+   * - `'stale-attempt'` / `'not-found'`：不归我 / 记录没了，`register` 未执行；
+   * - `'unavailable'`：store 损坏或写锁一直被第三方占着，**无法确认归属**——
+   *   调用方必须挂起失败意图等重试确认，不许 fail-open 放行：最需要 fencing
+   *   的时候恰恰是锁被别人占着的时候（比如另一个进程正在 `beginRun` 接管）。
    *
    * **只确认、不写终态**：真正的终态仍由 close 的 `finishRun` 落盘（fencing 不变）。
-   * 确认在写锁临界区里原子完成——「查完到发事件之间被接管」的 TOCTOU 不留窗口。
+   * `register` 必须严格同步，且**不得从事件监听器里重入 Session Store**（此刻
+   * 写锁还开着，重入只会撞上自己）。
    */
-  registerRunFailure(
+  withRunFailureOwnership<T>(
     sessionId: string,
     expected: { attempt: string },
-  ): 'current' | 'stale-attempt' | 'not-found' {
-    return this.withWriteLock(() => {
-      const existing = this.load();
-      if (existing.status === 'corrupt' || existing.status === 'unsupported') {
-        throw new Error(
-          `codex session store is ${existing.status}; refusing to write ${this.filePath}`,
-        );
-      }
-      const sessions = existing.status === 'ok' ? existing.sessions : [];
-      const record = sessions.find((session) => session.id === sessionId);
-      if (!record) return 'not-found';
-      if (record.runAttempt !== expected.attempt || !record.runOwner) return 'stale-attempt';
-      return 'current';
-    });
+    register: () => T,
+  ): 'current' | 'stale-attempt' | 'not-found' | 'unavailable' {
+    try {
+      return this.withWriteLock(() => {
+        const existing = this.load();
+        if (existing.status === 'corrupt' || existing.status === 'unsupported') {
+          throw new Error(
+            `codex session store is ${existing.status}; refusing to write ${this.filePath}`,
+          );
+        }
+        const sessions = existing.status === 'ok' ? existing.sessions : [];
+        const record = sessions.find((session) => session.id === sessionId);
+        if (!record) return 'not-found';
+        if (record.runAttempt !== expected.attempt || !record.runOwner) return 'stale-attempt';
+        register();
+        return 'current';
+      });
+    } catch {
+      return 'unavailable';
+    }
   }
 
   /**

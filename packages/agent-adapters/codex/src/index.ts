@@ -1,8 +1,16 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, hostname } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import {
@@ -194,7 +202,7 @@ export class CodexAdapter implements AgentAdapter {
     options: CodexSpawnOptions,
   ) => CodexProcessHandle;
   private readonly normalizer: CodexEventNormalizer;
-  private readonly listeners = new Set<(event: CanonicalAgentEvent) => void>();
+  private readonly listeners = new Set<(event: CanonicalAgentEvent) => unknown>();
   private readonly sessions = new Map<string, CodexSessionRecord>();
   private readonly activeProcesses = new Map<string, CodexProcessHandle>();
   /**
@@ -215,12 +223,39 @@ export class CodexAdapter implements AgentAdapter {
       };
     }
   >();
-  /** 挂起终态的补交定时器（每会话一个，避免叠跑）。 */
-  private readonly pendingRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly pendingRetryCounts = new Map<string, number>();
-  /** 上一个实例放弃的终态提示（sidecar 载入后的待发队列；送达监听器后才删盘）。 */
-  private pendingStaleNotices: Array<{ sessionId: string | undefined; message: string }> = [];
-  private staleNoticesLoaded = false;
+  /**
+   * 挂起终态的补交定时器与计数（每会话一个，避免叠跑）。
+   *
+   * **重试预算绑定 attempt**：新 attempt 覆盖旧 pending 时旧定时器/计数必须清掉，
+   * 定时器回调也要核对自己捕获的 attempt 还是不是当前 pending 的——否则旧轮次
+   * 遗留的定时器会去点新轮次的重试计数，把新轮次的预算提前烧光直接 give-up。
+   */
+  private readonly pendingRetryTimers = new Map<
+    string,
+    { attempt: string | undefined; timer: ReturnType<typeof setTimeout> }
+  >();
+  private readonly pendingRetryCounts = new Map<string, { attempt: string | undefined; count: number }>();
+  /** 运行期失败意图的挂起队列（store 无法确认归属时先挂着，确认后才登记/发事件）。 */
+  private readonly pendingRunFailures = new Map<
+    string,
+    { attempt: string | undefined; error: unknown; retries: number; apply: () => void }
+  >();
+  private readonly runFailureConfirmTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * 上一个实例放弃的终态提示（sidecar 领取后的待发队列；送达监听器后才删领取副本）。
+   *
+   * `event` 在领取解析时**只构建一次**：重发复用同一个事件（同 eventId / sequence），
+   * 否则每次未送达的重试都烧掉一个新 sequence，客户端 replay 会把假的序号空洞
+   * 当成缓存截断；同 eventId 也让客户端幂等去重有据可依。
+   */
+  private pendingStaleNotices: Array<{
+    sessionId: string | undefined;
+    message: string;
+    event: CanonicalAgentEvent;
+  }> = [];
+  /** 本实例已领取（rename 到手）的 sidecar 副本；全部送达后才删除。 */
+  private readonly claimedStaleFiles: string[] = [];
+  private staleClaimSeq = 0;
   /**
    * F5：Session 串行锁——sendMessage 入口同步加锁，直到**真实进程退出**（onExit）才释放。
    * cancel 不释放锁（kill≠已退出），封死「kill 后 exit 前双进程」窗口。
@@ -663,6 +698,17 @@ export class CodexAdapter implements AgentAdapter {
       runState?: Exclude<CodexSessionRunState, 'starting'> | undefined;
     },
   ): void {
+    const existing = this.pendingRunOutcomes.get(sessionId);
+    if (existing && existing.attempt !== attempt) {
+      // 新 attempt 顶掉旧 pending：旧轮次的定时器与计数一并作废，
+      // 不许旧定时器来点新轮次的重试计数（预算按 attempt 隔离）
+      const timer = this.pendingRetryTimers.get(sessionId);
+      if (timer) {
+        clearTimeout(timer.timer);
+        this.pendingRetryTimers.delete(sessionId);
+      }
+      this.pendingRetryCounts.delete(sessionId);
+    }
     this.pendingRunOutcomes.set(sessionId, { attempt, patch });
   }
 
@@ -674,19 +720,23 @@ export class CodexAdapter implements AgentAdapter {
    * 否则「第 5 次放弃」之后第 6 次照跑、计数还被清零，实际是无限重试。
    */
   private schedulePendingRetry(sessionId: string): void {
+    const pendingAttempt = this.pendingRunOutcomes.get(sessionId)?.attempt;
     if (this.pendingRetryTimers.has(sessionId)) return;
     const timer = setTimeout(() => {
       this.pendingRetryTimers.delete(sessionId);
+      // 定时器是按某一轮 attempt 排的：pending 已经换成别的 attempt 就地退出，
+      // 不给新轮次的预算记账
+      if (this.pendingRunOutcomes.get(sessionId)?.attempt !== pendingAttempt) return;
       const result = this.drainPendingRunOutcome(sessionId);
       if (result === 'persist-failed') {
-        const count = (this.pendingRetryCounts.get(sessionId) ?? 0) + 1;
-        this.pendingRetryCounts.set(sessionId, count);
+        const count = (this.pendingRetryCounts.get(sessionId)?.count ?? 0) + 1;
+        this.pendingRetryCounts.set(sessionId, { attempt: pendingAttempt, count });
         if (count >= 5) {
           this.pendingRetryCounts.delete(sessionId);
           // 放弃就是放弃：清掉 drain 失败路径刚排上的下一次重试，链子到此为止
           const next = this.pendingRetryTimers.get(sessionId);
           if (next) {
-            clearTimeout(next);
+            clearTimeout(next.timer);
             this.pendingRetryTimers.delete(sessionId);
           }
           this.emitDiagnosticWarning(
@@ -703,7 +753,7 @@ export class CodexAdapter implements AgentAdapter {
       this.pendingRetryCounts.delete(sessionId);
     }, 50);
     timer.unref?.();
-    this.pendingRetryTimers.set(sessionId, timer);
+    this.pendingRetryTimers.set(sessionId, { attempt: pendingAttempt, timer });
   }
 
   /** 终态最终写不进磁盘的记录落盘（sidecar），供下一个 Adapter 加载后展示。 */
@@ -729,56 +779,123 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
-   * 把上一个 Adapter 留下的「终态没写进索引」记录载入待发队列。
+   * 领取（claim）sidecar 里的「终态没写进索引」记录。
    *
-   * **不删盘**：真实 Bridge 的启动顺序是先 `listSessions()`、后 `onEvent()`，
-   * 这里若又读又删，事件就会发进空监听器集合、被静默吞掉。记录只在
-   * `flushStaleOutcomeNotices` 送达监听器之后才确认消费（删除）。
+   * **原子 rename 领取**：`<store>.stale-outcomes` 一次性 rename 成本实例的
+   * `<…>.<pid>.<seq>.claim` 副本——两个进程同时抢同一个 sidecar 只有一个成功，
+   * 读-发-删的旧做法会让同一条提示被发两次；而写入方永远 append 到原路径，
+   * 「读取后有人追加、旧读取者把新记录一起删掉」的窗口也随之消失。
+   *
+   * 持有进程已死的孤儿 claim 文件在这里一并收编（崩溃恢复）。
+   * **领取 ≠ 消费**：记录只在 `flushStaleOutcomeNotices` 确认送达之后才删副本。
    */
-  private loadStaleOutcomeNotices(): void {
-    if (this.staleNoticesLoaded || !this.sessionStorePath) return;
-    this.staleNoticesLoaded = true;
+  private claimStaleOutcomeFiles(): void {
+    if (!this.sessionStorePath) return;
     const file = `${this.sessionStorePath}.stale-outcomes`;
-    if (!existsSync(file)) return;
+    const base = basename(file);
+    const dir = dirname(file);
+    /** 本次新领到的副本（只有它们才解析入队，旧副本的提示早已在队列里）。 */
+    const fresh: string[] = [];
+    if (existsSync(file)) {
+      const claim = `${file}.${process.pid}.${++this.staleClaimSeq}.claim`;
+      try {
+        renameSync(file, claim);
+        this.claimedStaleFiles.push(claim);
+        fresh.push(claim);
+      } catch {
+        // 抢输（别的进程刚领走）：不是我们的
+      }
+    }
     try {
-      const raw = readFileSync(file, 'utf8');
+      for (const name of readdirSync(dir)) {
+        if (!name.startsWith(`${base}.`) || !name.endsWith('.claim')) continue;
+        const full = join(dir, name);
+        if (this.claimedStaleFiles.includes(full)) continue;
+        const pid = Number(name.slice(base.length + 1).split('.')[0]);
+        // 只收编持有者已经不在的孤儿；活着的（含本进程其他实例）不抢
+        if (Number.isFinite(pid) && pid > 0 && (pid === process.pid || isPidAlive(pid))) continue;
+        this.claimedStaleFiles.push(full);
+        fresh.push(full);
+      }
+    } catch {
+      // 目录读不了不影响主流程
+    }
+    for (const claim of fresh) {
+      let raw: string;
+      try {
+        raw = readFileSync(claim, 'utf8');
+      } catch {
+        continue;
+      }
       for (const line of raw.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
           const entry = JSON.parse(trimmed) as { sessionId?: string; message?: string };
           const message = entry.message ?? `终态最终未能写入本地索引（上一个实例重试已放弃）`;
-          this.pendingStaleNotices.push({ sessionId: entry.sessionId, message });
+          const sessionId = entry.sessionId ?? '';
+          this.pendingStaleNotices.push({
+            sessionId: entry.sessionId,
+            message,
+            event: createCanonicalEvent({
+              streamEpoch: this.normalizer.streamEpoch,
+              agentId: 'codex',
+              sessionId,
+              timestamp: new Date().toISOString(),
+              eventId: `notice:${sessionId}:PERSIST_FAILED:${Date.now()}`,
+              sequence: this.normalizer.nextSequence(sessionId),
+              type: 'error',
+              payload: { code: 'PERSIST_FAILED', message, retryable: false },
+            }),
+          });
           this.emitDiagnosticWarning(message);
         } catch {
           // 半行损坏不影响其他行
         }
       }
-    } catch {
-      this.staleNoticesLoaded = false; // 读不动就下次再试，绝不假装已经载入
     }
   }
 
   /**
-   * 把待发的最终失败提示送达事件监听器；没人听就原样留着（不消费、不删盘）。
+   * 把待发的最终失败提示送达事件监听器；没人听就原样留着（不领取、不消费）。
    * 在 `onEvent` 注册后与 `loadSession` / `listSessions` 时调用。
+   *
+   * **确认送达才删副本**：监听器返回 `false`（注册方是中间层、还没有真正下游）
+   * 视为未送达，提示留在队列、claim 副本留在盘上，等下游接上后 `flushPendingNotices`
+   * 重发——事件还没送到就不许删记录。
    */
   private flushStaleOutcomeNotices(): void {
-    this.loadStaleOutcomeNotices();
+    if (this.listeners.size > 0 && this.sessionStorePath) {
+      // 有人听才领取（rename 抢占）：没送达不消费——没人听连领都不领
+      this.claimStaleOutcomeFiles();
+    }
     if (this.pendingStaleNotices.length === 0 || this.listeners.size === 0) return;
     const notices = this.pendingStaleNotices;
     this.pendingStaleNotices = [];
+    const undelivered: typeof notices = [];
     for (const notice of notices) {
-      if (notice.sessionId) {
-        this.emitSessionNotice(notice.sessionId, 'PERSIST_FAILED', notice.message);
+      // 重发复用领取时构建的同一事件（同 eventId / sequence）：客户端幂等去重有据可依，
+      // 也不给 replay 制造假的序号空洞
+      const delivered = notice.sessionId ? this.emitEventWithAck(notice.event) : true;
+      if (!delivered) undelivered.push(notice);
+    }
+    if (undelivered.length > 0) {
+      // 没真正送到：退回队列等重试，claim 副本继续留着（不确认消费）
+      this.pendingStaleNotices.push(...undelivered);
+      return;
+    }
+    for (const claim of this.claimedStaleFiles.splice(0)) {
+      try {
+        rmSync(claim, { force: true });
+      } catch {
+        // 删不掉顶多下次再弹一次，比丢掉强
       }
     }
-    // 送达后才确认消费
-    try {
-      rmSync(`${this.sessionStorePath}.stale-outcomes`, { force: true });
-    } catch {
-      // 删不掉顶多下次再弹一次，比丢掉强
-    }
+  }
+
+  /** 下游监听器接上后的重试投递（AgentRegistry 在补发缓存事件后调用）。 */
+  flushPendingNotices(): void {
+    this.flushStaleOutcomeNotices();
   }
 
   /**
@@ -1226,27 +1343,56 @@ export class CodexAdapter implements AgentAdapter {
           return;
         }
         // 过期执行的 error 不许冒充当前轮的失败：另一个 Bridge 可能已经 beginRun 接管。
-        // 先原子确认这轮 attempt 还归我——stale 就地止血：不改内存、不发 RUN_FAILED、
-        // 不登记失败意图（终态由 close 的 fencing 收尾，磁盘本来就改不动）。
-        if (this.confirmRunErrorOwnership(sessionId, runStart?.attempt) !== 'current') {
+        // 失败意图的「核对 + 登记 + 发事件」在写锁临界区里一次完成（不留 TOCTOU，
+        // beginRun 插不进核对与发送之间）；无法确认归属（store 损坏 / 锁被第三方占着）
+        // 时**挂起重试确认，不许 fail-open 放行**——最需要 fencing 的时候恰恰是锁被
+        // 别人占着的时候。stale / not-found 就地止血：不改内存、不发 RUN_FAILED。
+        //
+        // 运行期 error ≠ 已退出：RUN_FAILED 立即反馈给用户，但**磁盘终态到 close 才落**——
+        // error 时就 finishRun 等于提前清 runOwner、放掉跨实例执行保护。失败意图记在
+        // 内存（UI 已经从 RUN_FAILED 知道），close 的收尾据此写 failed 终态（不重发）。
+        const applyFailureIntent = () => {
+          runError = error;
+          record!.status = 'failed';
+          record!.updatedAt = new Date().toISOString();
+          this.emitRunError(
+            sessionId,
+            `Codex 运行失败: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        };
+        const attempt = runStart?.attempt;
+        if (!this.sessionStore || !this.isOwnedSession(sessionId) || !attempt) {
+          // 没有跨实例竞争对象（无 store / 这一轮没开起来）：直接登记
+          applyFailureIntent();
           return;
         }
-        // 运行期 error ≠ 已退出：RUN_FAILED 立即反馈给用户，但**磁盘终态到 close 才落**——
-        // error 时就 finishRun 等于提前清 runOwner、放掉跨实例执行保护，另一个 Bridge
-        // 会趁进程还活着开出第二轮。失败意图记在内存（UI 已经从 RUN_FAILED 知道），
-        // close 的收尾据此写 failed 终态（RUN_FAILED 不重发）。
-        runError = error;
-        record!.status = 'failed';
-        record!.updatedAt = new Date().toISOString();
-        this.emitRunError(
+        const outcome = this.sessionStore.withRunFailureOwnership(
           sessionId,
-          `Codex 运行失败: ${error instanceof Error ? error.message : String(error)}`,
+          { attempt },
+          applyFailureIntent,
         );
+        if (outcome === 'current') {
+          return; // 已在锁内登记并发出
+        }
+        if (outcome !== 'unavailable') {
+          return; // stale-attempt / not-found：就地止血，终态由 close 的 fencing 收尾
+        }
+        // unavailable：失败意图挂起，定时重试确认；确认前不改状态、不发事件
+        this.pendingRunFailures.set(sessionId, {
+          attempt,
+          error,
+          retries: 0,
+          apply: applyFailureIntent,
+        });
+        this.scheduleRunFailureConfirm(sessionId);
         // 不 settle：waitForRun 的语义是「这轮执行真正收尾」，由 onExit（close）统一兑现
       });
 
       proc.onExit((code) => {
         runClosed = true; // 迟到 error 到此为止（见 onError 的 runClosed 守卫）
+        // 挂起的失败意图做最后一次归属确认：确认通过/无法确认都到此收尾
+        // （无法确认也按失败收尾 + 诊断，磁盘由 finishRun fencing 保护），不带进坟墓
+        this.retryPendingRunFailure(sessionId, true);
         if (buffer.trim().length > 0) {
           this.processJsonLine(sessionId, record!, buffer, runStart);
           buffer = '';
@@ -1378,7 +1524,19 @@ export class CodexAdapter implements AgentAdapter {
    * 所以这里复用它，但用独立 code（THREAD_LOST 等）标明它不是执行失败。
    */
   private emitSessionNotice(sessionId: string, code: string, message: string): void {
-    this.emitEvent(
+    this.emitSessionNoticeWithAck(sessionId, code, message);
+  }
+
+  /**
+   * 带送达确认的会话提示：监听器显式返回 `false` 表示「没真正送到下游」
+   * （中间层自己也还没有下游），调用方必须保留持久副本等重试。
+   */
+  private emitSessionNoticeWithAck(
+    sessionId: string,
+    code: string,
+    message: string,
+  ): boolean {
+    return this.emitEventWithAck(
       createCanonicalEvent({
         streamEpoch: this.normalizer.streamEpoch,
         agentId: 'codex',
@@ -1390,6 +1548,16 @@ export class CodexAdapter implements AgentAdapter {
         payload: { code, message, retryable: false },
       }),
     );
+  }
+
+  private emitEventWithAck(event: CanonicalAgentEvent): boolean {
+    let delivered = false;
+    for (const listener of this.listeners) {
+      if (listener(event) !== false) {
+        delivered = true;
+      }
+    }
+    return delivered;
   }
 
   /**
@@ -1740,25 +1908,55 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
-   * 运行期 error 的归属确认：这轮 attempt 是否仍归当前执行所有。
-   *
-   * store 侧在写锁临界区里原子核对（`registerRunFailure`），不留「查完到发事件
-   * 之间被接管」的 TOCTOU 窗口。无 store / 非自建会话（没有跨实例竞争对象）直接放行；
-   * 写锁被第三方占着时无法确认——退回旧行为放行（事件不该因一次锁抖动丢掉），
-   * 磁盘的正确性始终由 close 的 `finishRun` fencing 兜底。
+   * 失败意图的挂起重试：store 无法确认归属时先挂着（fail-closed），定时重新确认。
+   * 确认通过才登记 + 发 RUN_FAILED；确认已过期（stale / not-found）就地作废。
    */
-  private confirmRunErrorOwnership(
-    sessionId: string,
-    attempt: string | undefined,
-  ): 'current' | 'stale' {
-    if (!this.sessionStore || !this.isOwnedSession(sessionId) || !attempt) return 'current';
-    try {
-      return this.sessionStore.registerRunFailure(sessionId, { attempt }) === 'current'
-        ? 'current'
-        : 'stale';
-    } catch {
-      return 'current';
+  private scheduleRunFailureConfirm(sessionId: string): void {
+    if (this.runFailureConfirmTimers.has(sessionId)) return;
+    const timer = setTimeout(() => {
+      this.runFailureConfirmTimers.delete(sessionId);
+      this.retryPendingRunFailure(sessionId);
+    }, 50);
+    timer.unref?.();
+    this.runFailureConfirmTimers.set(sessionId, timer);
+  }
+
+  private retryPendingRunFailure(sessionId: string, finalTry = false): void {
+    const pending = this.pendingRunFailures.get(sessionId);
+    if (!pending) return;
+    const attempt = pending.attempt;
+    if (!this.sessionStore || !this.isOwnedSession(sessionId) || !attempt) {
+      this.pendingRunFailures.delete(sessionId);
+      pending.apply();
+      return;
     }
+    let outcome: 'current' | 'stale-attempt' | 'not-found' | 'unavailable';
+    outcome = this.sessionStore.withRunFailureOwnership(sessionId, { attempt }, pending.apply);
+    if (outcome === 'current') {
+      this.pendingRunFailures.delete(sessionId);
+      return;
+    }
+    if (outcome !== 'unavailable') {
+      // stale-attempt / not-found：失败意图作废（磁盘由 close 的 fencing 收尾）
+      this.pendingRunFailures.delete(sessionId);
+      return;
+    }
+    if (finalTry) {
+      // close 的最后一次确认仍无法确认归属：按失败收尾（磁盘由 finishRun fencing 保护），
+      // 不把失败永远藏在挂起队列里；如实记诊断。
+      this.pendingRunFailures.delete(sessionId);
+      this.emitDiagnosticWarning(
+        `codex session ${sessionId}: run failure ownership unconfirmed at close; applying failure intent (disk terminal still fenced by finishRun)`,
+      );
+      pending.apply();
+      return;
+    }
+    pending.retries += 1;
+    if (pending.retries >= 5) {
+      // 重试到限：留到 close 做最后一次确认（不无限重试，也不 fail-open 放行）
+      return;
+    }
+    this.scheduleRunFailureConfirm(sessionId);
   }
 
   /**
@@ -1804,10 +2002,35 @@ export class CodexAdapter implements AgentAdapter {
       proc.kill();
     }
     this.activeProcesses.clear();
+    // 还没确认送达的 sidecar 领取副本：把内容放回共享池，让下一个 Adapter 能领走
+    // （领取 ≠ 消费，dispose 不许把没送到的提示带走）
+    if (this.sessionStorePath) {
+      for (const claim of this.claimedStaleFiles.splice(0)) {
+        let released = false;
+        try {
+          writeFileSync(
+            `${this.sessionStorePath}.stale-outcomes`,
+            readFileSync(claim, 'utf8'),
+            { flag: 'a' },
+          );
+          released = true;
+        } catch {
+          // 放不回去就留着 claim 文件，持有者 pid 已退出后可被孤儿收编
+        }
+        if (released) {
+          try {
+            rmSync(claim, { force: true });
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+    this.pendingStaleNotices = [];
     this.listeners.clear();
   }
 
-  onEvent(listener: (event: CanonicalAgentEvent) => void): () => void {
+  onEvent(listener: (event: CanonicalAgentEvent) => unknown): () => void {
     this.listeners.add(listener);
     // 真实 Bridge 先 listSessions 后 onEvent：待发的最终失败提示到这才有人听，
     // 送达之后才确认消费（否则会被发进空监听器集合、静默丢掉）。
@@ -1879,6 +2102,16 @@ export class CodexAdapter implements AgentAdapter {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
+  }
+}
+
+/** 进程是否还活着（signal 0 探测，只用于 sidecar 孤儿 claim 的收编判断）。 */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 

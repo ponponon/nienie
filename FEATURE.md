@@ -1134,3 +1134,15 @@
 - **测试**：codex 包 114 → 116（`thread-health.test.ts` 43）。按 review 两条处方落地：旧 attempt 测试的 error 版（`proc.fail` 替换 `proc.finish(1)`：不发 RUN_FAILED、本地状态不动、磁盘 attempt_B 不变，close 后同样不翻案）；Bridge 启动顺序测试（先 `listSessions()` → sidecar 原样在盘上 → `onEvent()` 注册瞬间送达恰好一条 PERSIST_FAILED → 送达后删盘 → 同实例后续进入不重复弹）。
 - **变异验证**：MA（摘掉 confirmRunErrorOwnership 门）、MB（load 时就删盘）、MC（onEvent 不 flush）三处全部打红对应测试。
 - **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
+
+### 2026-11-24 第三方 review 第十八轮：Registry 缓冲接住启动窗口事件，失败意图登记进锁内，sidecar 原子领取，重试预算按 attempt 隔离
+
+第十七轮 review 判「0915341 不封板」：3 个 P1（AgentRegistry 中间层丢事件、fencing 仍有 TOCTOU/fail-open、Flutter 通知分类）+ 2 个 P2（sidecar 多进程消费竞态、重试预算未绑 attempt）。
+
+- **P1-1 AgentRegistry 事件缓冲**：`AgentRegistry.register()` 即向 Adapter 订阅，但 `registry.listeners` 要到 `BridgeServer.start()` 的 `registry.onEvent()` 才有人——此前事件被发进空监听器集合静默丢弃、sidecar 还被顺手确认消费。修法：转发层在无下游时把事件缓冲起来（容量 500、溢出计数进诊断），`onEvent()` 注册时补发给新监听器；`PERSIST_FAILED` 例外——它由 Adapter 的 sidecar 磁盘队列负责重试（`flushPendingNotices` 在下游接上后重投），不进内存缓冲，同一条提示不允许既走缓存又走磁盘队列被送两次。事件监听器签名放宽为「显式返回 `false` = 未真送达」，注册方（中间层）以此把送达确认退回 Adapter，**没真正送达就不确认消费 sidecar**。补真实链路集成测试：CodexAdapter → AgentRegistry → BridgeServer → WebSocket（`events.replay` 可见 PERSIST_FAILED、送达后才删领取副本），不再用直连监听器冒充真实架构。
+- **P1-2 失败意图登记的 TOCTOU 与 fail-open**：`registerRunFailure` 只护住检查不护住发事件——锁释放后 `beginRun` 可插入，旧执行照样把 RUN_FAILED 发进新一轮；写锁被占/存储损坏时还 fail-open 放行（最需要 fencing 的时刻恰恰是锁被别人占着的时刻）。修法：`CodexSessionStore.withRunFailureOwnership(sessionId, attempt, register)`——**在写锁临界区里原子核对 + 同步登记 + 同步发事件**（beginRun 插不进来；回调严格同步、监听器不得重入 Session Store）；无法确认归属返回 `unavailable`，调用方**挂起失败意图定时重试确认（50ms × 5），不许放行**；close 时做最后一次确认，仍无法确认则按失败收尾 + 诊断（磁盘终态仍由 finishRun fencing 保护），不把失败带进坟墓。测试：RUN_FAILED 到达监听器的瞬间写锁文件仍在（锁内原子的直接证据）、锁被占时意图挂起（状态不动/不发事件/保护不放）、close 最后确认后才收尾。
+- **P1-3 Flutter 通知分类**：`kSessionNoticeCodes` 补 `BIND_LOST`、`PERSIST_FAILED`——它们是持久化/身份类提示，把 cancelled/running 打成 failed 是状态机语义错误。补三个 code 的状态保持测试（落卡片、不置 failed、不清等待占位；对照 RUN_FAILED 仍按失败处理）。
+- **P2-1 sidecar 多进程原子领取**：读-发-删无锁，两个 Adapter 会把同一条提示发两次；读取后追加的新记录还会被一起删。修法：**原子 rename 领取**——`<store>.stale-outcomes` 一次性 rename 成 `<…>.<pid>.<seq>.claim` 副本（两个进程同时抢只有一个成功），写入方永远 append 原路径（追加不再有被误删窗口）；持有进程已死的孤儿 claim 副本按 pid 探活收编；**领取 ≠ 消费**：副本在确认送达（监听器未返回 `false`）后才删，dispose 把没送达的副本放回共享池；没有监听器连领都不领。PERSIST_FAILED 事件**只构建一次**（同 eventId/sequence 重发复用）——否则每次未送达的重试烧掉一个新 sequence，客户端 replay 把假空洞当缓存截断。旧「文件不存在也永久锁死加载」的边界一并修掉（旧实例 dispose 定时器晚写出的 sidecar 照样能被读到）。
+- **P2-2 重试预算按 attempt 隔离**：`pendingRetryCounts/Timers` 以 sessionId 为 key，新 attempt 覆盖旧 pending 时旧定时器/计数残留——A 重试 4 次后 B 接管，A 的遗留定时器把 B 的计数顶到 5 直接 give-up。修法：预算状态带 attempt（stash 时新旧 attempt 不同则清定时器 + 计数归零；定时器回调核对捕获的 attempt 与当前 pending 一致，否则就地退出）。两个守卫各有专属观测面（stash 清理看定时器表；attempt 核对用「绕过 stash 直接换 pending」的白盒路径单打）。
+- **测试**：codex 包 116 → 122（thread-health 49）、bridge-core 14 → 17、desktop 新增 sidecar-delivery 集成测试（6 → 8）、Flutter 117 → 118。变异验证 8 处全红：MA 摘 Registry 缓冲、MB 不触发 flushPendingNotices、MC fail-open、MD register 挪出锁外、ME 领取退化成普通读、MF 首次进入锁死加载、MG stash 不重置预算、MH 定时器不核对 attempt。
+- **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。

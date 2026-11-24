@@ -82,7 +82,13 @@ function adapter(id: 'opencode' | 'codex'): AgentAdapter & { emit(event: Canonic
       return () => listeners.delete(listener);
     },
     emit(event) {
-      for (const listener of listeners) listener(event);
+      let delivered = false;
+      for (const listener of listeners) {
+        if ((listener as (e: typeof event) => unknown)(event) !== false) {
+          delivered = true;
+        }
+      }
+      return delivered;
     },
   };
 }
@@ -1062,6 +1068,87 @@ describe('bridge core', () => {
     });
     expect(manager3.verifyToken(confirmed!.deviceToken)).toBeUndefined();
     expect(manager3.listDevices()[0]?.revokedAt).toBeTruthy();
+  });
+
+  it('Registry 无下游监听器时缓冲 Adapter 事件，下游接上后补发（不静默丢弃）', () => {
+    const registry = new AgentRegistry();
+    const opencode = adapter('opencode');
+    registry.register(opencode);
+    // 真实启动顺序里 Adapter 可能在 BridgeServer 订阅之前就产生事件
+    opencode.emit({
+      version: 1,
+      eventId: 'ev_buffered_1',
+      streamEpoch: 'ep1',
+      sequence: 1,
+      agentId: 'opencode',
+      sessionId: 'ses_buf',
+      timestamp: '2026-11-24T05:00:00.000Z',
+      type: 'text_delta',
+      payload: { delta: 'hello', partId: 'p1', partRevision: 0 },
+    });
+    const received: CanonicalAgentEvent[] = [];
+    registry.onEvent((event) => {
+      received.push(event);
+    });
+    expect(received.map((event) => event.eventId)).toEqual(['ev_buffered_1']);
+  });
+
+  it('PERSIST_FAILED 不进 Registry 缓冲：注册方没有真正下游时退回 Adapter 磁盘队列等重试', () => {
+    const registry = new AgentRegistry();
+    const opencode = adapter('opencode');
+    let flushes = 0;
+    opencode.flushPendingNotices = () => {
+      flushes += 1;
+    };
+    registry.register(opencode);
+    const notice: CanonicalAgentEvent = {
+      version: 1,
+      eventId: 'ev_notice_1',
+      streamEpoch: 'ep1',
+      sequence: 1,
+      agentId: 'opencode',
+      sessionId: 'ses_notice',
+      timestamp: '2026-11-24T05:00:00.000Z',
+      type: 'error',
+      payload: { code: 'PERSIST_FAILED', message: '终态最终未能写入本地索引', retryable: false },
+    };
+    // 没有真正下游：转发层必须明确「没送达」（false）——sidecar 的确认消费不许发生，
+    // 提示由 Adapter 的磁盘队列在下游接上后重发，而不是进了内存缓冲被当成交付
+    expect(opencode.emit(notice)).toBe(false);
+    const received: CanonicalAgentEvent[] = [];
+    registry.onEvent((event) => {
+      received.push(event);
+    });
+    // 缓冲里没有它（不重复送达），但下游接上后必须触发 Adapter 的持久化提示重投
+    expect(received.map((event) => event.eventId)).toEqual([]);
+    expect(flushes).toBe(1);
+  });
+
+  it('缓冲有容量上限：溢出只丢最旧的并计数诊断，补发仍是 FIFO', () => {
+    const registry = new AgentRegistry();
+    const opencode = adapter('opencode');
+    registry.register(opencode);
+    for (let i = 1; i <= 501; i += 1) {
+      opencode.emit({
+        version: 1,
+        eventId: `ev_cap_${i}`,
+        streamEpoch: 'ep1',
+        sequence: i,
+        agentId: 'opencode',
+        sessionId: 'ses_cap',
+        timestamp: '2026-11-24T05:00:00.000Z',
+        type: 'text_delta',
+        payload: { delta: 'x', partId: 'p', partRevision: i },
+      });
+    }
+    const received: CanonicalAgentEvent[] = [];
+    registry.onEvent((event) => {
+      received.push(event);
+    });
+    expect(received).toHaveLength(500);
+    expect(received[0]?.eventId).toBe('ev_cap_2'); // 最旧的一条被挤掉
+    expect(received[499]?.eventId).toBe('ev_cap_501');
+    expect(registry.getDiagnostics()['registryBuffer']).toMatchObject({ droppedEvents: 1 });
   });
 });
 

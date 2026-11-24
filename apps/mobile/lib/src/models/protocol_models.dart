@@ -8,7 +8,10 @@ const String DEFAULT_RELAY_URL = 'wss://nienie-replay.quniv.cn';
 /// 协议里能带自由文本的可见事件只有 `error`，但这类提示**不是执行失败**：
 /// 例如 `THREAD_LOST` 表示原 Codex 线程已不存在、Bridge 已改用新线程继续执行。
 /// 手机端只把它渲染成卡片，不改会话状态、不终止 Thinking 计时、不清等待占位。
-const Set<String> kSessionNoticeCodes = {'THREAD_LOST'};
+///
+/// `BIND_LOST`（线程身份落盘失败）、`PERSIST_FAILED`（终态最终未能写入本地索引）
+/// 同理：它们是持久化/身份类提示，把 cancelled/running 打成 failed 就是状态机语义错误。
+const Set<String> kSessionNoticeCodes = {'THREAD_LOST', 'BIND_LOST', 'PERSIST_FAILED'};
 
 class PairingQrPayload {
   final int version;
