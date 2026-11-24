@@ -1124,3 +1124,13 @@
 - **变异验证**：M11/M11b（close 无视失败意图 / 失败降级成 idle）、M12（放弃不清残留定时器）、M13（give-up 不落盘）全部打红对应测试；计时敏感断言改轮询等待，套件连跑两次全绿。
 - **测试**：codex 包 110 → 114（`thread-health.test.ts` 41）。
 - **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
+
+### 2026-11-24 第三方 review 第十七轮：失败意图登记也要 fencing，sidecar 送达后才确认消费
+
+第十六轮 review 判「暂不封板」：2 个 P1——旧 attempt 的 onError 绕过 fencing（新一轮已接管仍泄漏 RUN_FAILED、污染本地状态），以及 sidecar 在 `listSessions()` 就被消费、真实 Bridge 的 `onEvent()` 注册在后导致提示被静默吞掉。
+
+- **P1-1 过期执行的 error 冒充当前轮失败**：onError 记失败意图（内存 failed + RUN_FAILED）前没有 attempt 归属核对——另一个 Bridge 已经 `beginRun` 接管（attempt B）后，旧 attempt A 的 error 照样把本地状态翻成 failed、广播出属于过期轮次的 RUN_FAILED。修法：`CodexSessionStore.registerRunFailure`（写锁临界区里原子核对 `runAttempt` 与 `runOwner`，**只确认、不写终态**——终态仍归 close 的 `finishRun` fencing，不留「查完到发事件之间被接管」的 TOCTOU 窗口）+ adapter 侧 `confirmRunErrorOwnership` 门：`stale-attempt` 就地止血（不改内存、不发事件、不登记意图）；store 不可用或锁被第三方占着无法确认时退回旧行为放行，磁盘由 close fencing 兜底。
+- **P1-2 sidecar 在没人听时被消费**：serve-once 的「读了就删」发生在 `listSessions()`，而真实 `BridgeServer.start()` 先 `listSessions()` 后 `onEvent()`——事件发进空监听器集合被静默吞掉，提示永久丢失。修法：送达改为**队列式**——`loadStaleOutcomeNotices` 只读入 `pendingStaleNotices`（不删盘），`flushStaleOutcomeNotices` 在 `listeners.size === 0` 时原样留着（不消费、不删盘），有人听才逐条发 `PERSIST_FAILED`、**送达之后才删盘确认消费**；`onEvent()` 注册监听器后立即 flush（对齐真实启动顺序）。
+- **测试**：codex 包 114 → 116（`thread-health.test.ts` 43）。按 review 两条处方落地：旧 attempt 测试的 error 版（`proc.fail` 替换 `proc.finish(1)`：不发 RUN_FAILED、本地状态不动、磁盘 attempt_B 不变，close 后同样不翻案）；Bridge 启动顺序测试（先 `listSessions()` → sidecar 原样在盘上 → `onEvent()` 注册瞬间送达恰好一条 PERSIST_FAILED → 送达后删盘 → 同实例后续进入不重复弹）。
+- **变异验证**：MA（摘掉 confirmRunErrorOwnership 门）、MB（load 时就删盘）、MC（onEvent 不 flush）三处全部打红对应测试。
+- **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。

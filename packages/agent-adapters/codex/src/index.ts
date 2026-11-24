@@ -218,6 +218,9 @@ export class CodexAdapter implements AgentAdapter {
   /** 挂起终态的补交定时器（每会话一个，避免叠跑）。 */
   private readonly pendingRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pendingRetryCounts = new Map<string, number>();
+  /** 上一个实例放弃的终态提示（sidecar 载入后的待发队列；送达监听器后才删盘）。 */
+  private pendingStaleNotices: Array<{ sessionId: string | undefined; message: string }> = [];
+  private staleNoticesLoaded = false;
   /**
    * F5：Session 串行锁——sendMessage 入口同步加锁，直到**真实进程退出**（onExit）才释放。
    * cancel 不释放锁（kill≠已退出），封死「kill 后 exit 前双进程」窗口。
@@ -330,7 +333,7 @@ export class CodexAdapter implements AgentAdapter {
 
   async listSessions(): Promise<AgentSession[]> {
     this.ensureStoredSessionsLoaded();
-    this.serveStaleOutcomeNotices();
+    this.flushStaleOutcomeNotices();
     if (this.discoverLocalHistory && !this.historyLoaded && Date.now() >= this.historyRetryAt) {
       this.applyHistoryLoadResult(this.loadLocalCodexHistory());
     }
@@ -726,33 +729,55 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
-   * 把上一个 Adapter 留下的「终态没写进索引」记录转成可见提示（事件 + 诊断）。
-   * serve-once：转出即删，避免每次打开会话都重复弹同一条。
+   * 把上一个 Adapter 留下的「终态没写进索引」记录载入待发队列。
+   *
+   * **不删盘**：真实 Bridge 的启动顺序是先 `listSessions()`、后 `onEvent()`，
+   * 这里若又读又删，事件就会发进空监听器集合、被静默吞掉。记录只在
+   * `flushStaleOutcomeNotices` 送达监听器之后才确认消费（删除）。
    */
-  private serveStaleOutcomeNotices(): void {
-    if (!this.sessionStorePath) return;
+  private loadStaleOutcomeNotices(): void {
+    if (this.staleNoticesLoaded || !this.sessionStorePath) return;
+    this.staleNoticesLoaded = true;
     const file = `${this.sessionStorePath}.stale-outcomes`;
     if (!existsSync(file)) return;
-    let raw: string;
     try {
-      raw = readFileSync(file, 'utf8');
-      rmSync(file, { force: true });
-    } catch {
-      return; // 读不动就下次再试，绝不假装已经展示过
-    }
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const entry = JSON.parse(trimmed) as { sessionId?: string; message?: string };
-        const message = entry.message ?? `终态最终未能写入本地索引（上一个实例重试已放弃）`;
-        this.emitDiagnosticWarning(message);
-        if (entry.sessionId) {
-          this.emitSessionNotice(entry.sessionId, 'PERSIST_FAILED', message);
+      const raw = readFileSync(file, 'utf8');
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const entry = JSON.parse(trimmed) as { sessionId?: string; message?: string };
+          const message = entry.message ?? `终态最终未能写入本地索引（上一个实例重试已放弃）`;
+          this.pendingStaleNotices.push({ sessionId: entry.sessionId, message });
+          this.emitDiagnosticWarning(message);
+        } catch {
+          // 半行损坏不影响其他行
         }
-      } catch {
-        // 半行损坏不影响其他行
       }
+    } catch {
+      this.staleNoticesLoaded = false; // 读不动就下次再试，绝不假装已经载入
+    }
+  }
+
+  /**
+   * 把待发的最终失败提示送达事件监听器；没人听就原样留着（不消费、不删盘）。
+   * 在 `onEvent` 注册后与 `loadSession` / `listSessions` 时调用。
+   */
+  private flushStaleOutcomeNotices(): void {
+    this.loadStaleOutcomeNotices();
+    if (this.pendingStaleNotices.length === 0 || this.listeners.size === 0) return;
+    const notices = this.pendingStaleNotices;
+    this.pendingStaleNotices = [];
+    for (const notice of notices) {
+      if (notice.sessionId) {
+        this.emitSessionNotice(notice.sessionId, 'PERSIST_FAILED', notice.message);
+      }
+    }
+    // 送达后才确认消费
+    try {
+      rmSync(`${this.sessionStorePath}.stale-outcomes`, { force: true });
+    } catch {
+      // 删不掉顶多下次再弹一次，比丢掉强
     }
   }
 
@@ -825,7 +850,7 @@ export class CodexAdapter implements AgentAdapter {
 
   async loadSession(sessionId: string): Promise<AgentSession> {
     this.ensureStoredSessionsLoaded();
-    this.serveStaleOutcomeNotices();
+    this.flushStaleOutcomeNotices();
     if (this.discoverLocalHistory && !this.loadedHistoryThreads.has(sessionId)) {
       // 内存会话的 id 是 Nienie 自己的（codex_ses_*），Codex 历史库按真实的 thread_id 建索引：
       // 查库用 threadId，事件仍归属 sessionId（否则手机端会收到挂错会话的消息）。
@@ -1198,6 +1223,12 @@ export class CodexAdapter implements AgentAdapter {
         //（close 之后的窗口由上面的 runClosed 守卫；不再叠加 record.status 条件——
         // 与这两者互为冗余的条件只会互相掩盖变异，守卫要各自有打得红的观测面。）
         if (this.cancelRequested.has(sessionId)) {
+          return;
+        }
+        // 过期执行的 error 不许冒充当前轮的失败：另一个 Bridge 可能已经 beginRun 接管。
+        // 先原子确认这轮 attempt 还归我——stale 就地止血：不改内存、不发 RUN_FAILED、
+        // 不登记失败意图（终态由 close 的 fencing 收尾，磁盘本来就改不动）。
+        if (this.confirmRunErrorOwnership(sessionId, runStart?.attempt) !== 'current') {
           return;
         }
         // 运行期 error ≠ 已退出：RUN_FAILED 立即反馈给用户，但**磁盘终态到 close 才落**——
@@ -1709,6 +1740,28 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
+   * 运行期 error 的归属确认：这轮 attempt 是否仍归当前执行所有。
+   *
+   * store 侧在写锁临界区里原子核对（`registerRunFailure`），不留「查完到发事件
+   * 之间被接管」的 TOCTOU 窗口。无 store / 非自建会话（没有跨实例竞争对象）直接放行；
+   * 写锁被第三方占着时无法确认——退回旧行为放行（事件不该因一次锁抖动丢掉），
+   * 磁盘的正确性始终由 close 的 `finishRun` fencing 兜底。
+   */
+  private confirmRunErrorOwnership(
+    sessionId: string,
+    attempt: string | undefined,
+  ): 'current' | 'stale' {
+    if (!this.sessionStore || !this.isOwnedSession(sessionId) || !attempt) return 'current';
+    try {
+      return this.sessionStore.registerRunFailure(sessionId, { attempt }) === 'current'
+        ? 'current'
+        : 'stale';
+    } catch {
+      return 'current';
+    }
+  }
+
+  /**
    * 表达「这一轮到此为止」的意图：内存立即呈现「已取消」（UI / cancelRequested），
    * **磁盘终态留给 close 收尾**——kill ≠ 已退出，提前 `finishRun` 会清掉 `runOwner`、
    * 把跨实例执行保护放掉（另一个 Bridge 立刻开出第二轮，两个 Codex 进程抢同一会话）。
@@ -1756,6 +1809,9 @@ export class CodexAdapter implements AgentAdapter {
 
   onEvent(listener: (event: CanonicalAgentEvent) => void): () => void {
     this.listeners.add(listener);
+    // 真实 Bridge 先 listSessions 后 onEvent：待发的最终失败提示到这才有人听，
+    // 送达之后才确认消费（否则会被发进空监听器集合、静默丢掉）。
+    this.flushStaleOutcomeNotices();
     return () => this.listeners.delete(listener);
   }
 

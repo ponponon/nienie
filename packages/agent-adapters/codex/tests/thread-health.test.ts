@@ -1323,6 +1323,71 @@ describe('Codex 线程恢复的真实性', () => {
     });
   });
 
+  it('旧 attempt 迟到的运行期 error：不发 RUN_FAILED、不动本地/磁盘状态（意图登记也有 fencing）', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']); // th_gone 不在库里
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_staleerr', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_staleerr');
+    await adapter.sendMessage('codex_ses_staleerr', '继续'); // 本轮 attempt A
+
+    // 新一轮接管：attempt B 顶掉 A（没有执行租约时，新的一轮总是接管旧的 attempt）
+    const other = new CodexSessionStore({ filePath: storePath });
+    const takeover = other.beginRun(
+      'codex_ses_staleerr',
+      at(other, 'codex_ses_staleerr'),
+      '2026-11-23T02:00:00.000Z',
+      OWNER,
+    );
+    expect(takeover.outcome).toBe('started');
+    if (takeover.outcome !== 'started') return;
+
+    // 旧 attempt A 运行期 error（进程还活着，没到 close）——失败意图的登记也必须过 fencing
+    proc.fail(new Error('旧 attempt 运行失败'));
+
+    // 不冒充当前轮的失败：不发 RUN_FAILED、本地状态不变（onError 同步跑完，无需等待）
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
+    ).toHaveLength(0);
+    expect(peekStatus(adapter, 'codex_ses_staleerr')).toBe('running');
+    // 磁盘 attempt_B 不变：连「失败意图」的确认都只读不写，收尾更不许碰
+    let stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({
+      runAttempt: takeover.attempt,
+      status: 'idle',
+      runState: 'starting',
+    });
+
+    // close 也只是把这轮进程收掉：旧 attempt 的失败退出同样动不了磁盘
+    proc.finish(1);
+    await adapter.waitForRun('codex_ses_staleerr');
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
+    ).toHaveLength(0);
+    stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({
+      runAttempt: takeover.attempt,
+      status: 'idle',
+      runState: 'starting',
+    });
+  });
+
   it('exit 先于最后一条 stdout 数据：收尾必须等 stdout 关完，线程 ID 不丢', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
@@ -2043,5 +2108,52 @@ describe('Codex 线程恢复的真实性', () => {
     expect(
       again.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
     ).toHaveLength(0);
+  });
+
+  it('真实 Bridge 启动顺序（先 listSessions 后 onEvent）：sidecar 送达前不许消费、送达后才删盘', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_order', threadId: 'th_live', runState: 'started' },
+    ]);
+    // 上一个实例重试到放弃留下的最终失败提示（它是怎么产生的已有专门测试覆盖）
+    const sidecar = `${storePath}.stale-outcomes`;
+    writeFileSync(
+      sidecar,
+      `${JSON.stringify({
+        sessionId: 'codex_ses_order',
+        at: '2026-11-24T03:00:00.000Z',
+        message: `codex session codex_ses_order: 终态最终未能写入本地索引（重试已放弃），其他窗口可能仍把它显示成运行中`,
+      })}\n`,
+      'utf8',
+    );
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+
+    // 真实 BridgeServer.start() 的顺序：先 listSessions()，此时还没有任何事件监听器
+    await adapter.listSessions();
+    // 没人听就不许消费、不许删盘：事件尚未送达，记录必须原样留在盘上
+    expect(existsSync(sidecar)).toBe(true);
+
+    // onEvent 注册的瞬间才有人听：待发的最终失败提示在此送达
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1);
+    // 送达成功后才确认消费（删盘）；送达前删盘 = 提示被静默吞掉
+    expect(existsSync(sidecar)).toBe(false);
+
+    // 已确认消费：同一实例后续进入不重复弹
+    await adapter.loadSession('codex_ses_order');
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1);
   });
 });

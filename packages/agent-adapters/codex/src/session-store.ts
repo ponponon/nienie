@@ -544,6 +544,34 @@ export class CodexSessionStore {
   }
 
   /**
+   * 运行期失败意图的登记栅栏：只有「这轮 attempt 还归我」才允许记失败意图
+   * （内存终态 + RUN_FAILED 事件）。迟到的旧执行（别的 Bridge 已经用 `beginRun`
+   * 接管）返回 `stale-attempt`——否则旧执行的 error 会把新一轮的会话显示成失败、
+   * 还广播出属于过期轮次的 RUN_FAILED。
+   *
+   * **只确认、不写终态**：真正的终态仍由 close 的 `finishRun` 落盘（fencing 不变）。
+   * 确认在写锁临界区里原子完成——「查完到发事件之间被接管」的 TOCTOU 不留窗口。
+   */
+  registerRunFailure(
+    sessionId: string,
+    expected: { attempt: string },
+  ): 'current' | 'stale-attempt' | 'not-found' {
+    return this.withWriteLock(() => {
+      const existing = this.load();
+      if (existing.status === 'corrupt' || existing.status === 'unsupported') {
+        throw new Error(
+          `codex session store is ${existing.status}; refusing to write ${this.filePath}`,
+        );
+      }
+      const sessions = existing.status === 'ok' ? existing.sessions : [];
+      const record = sessions.find((session) => session.id === sessionId);
+      if (!record) return 'not-found';
+      if (record.runAttempt !== expected.attempt || !record.runOwner) return 'stale-attempt';
+      return 'current';
+    });
+  }
+
+  /**
    * 不带执行身份的状态写入——**只给「这一轮根本没开始」的场景**用（例如启动前就被取消）。
    *
    * 一轮执行在飞时拒绝：那一轮的状态由它自己的 attempt 决定，不许被旁路改写。
