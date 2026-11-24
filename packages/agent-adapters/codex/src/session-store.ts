@@ -42,6 +42,14 @@ export type CodexStoredSession = {
    */
   bindingRevision?: number | undefined;
   /**
+   * 记录的生成代（generation）：新建记录时随机生成，永不改变、不从旧快照导入。
+   *
+   * 为什么修订号不够：记录被删掉（整份重写/截断）又重建时，修订号会从 0 重新开始，
+   * 一份拿着「旧纪元 revision 0」的过期认识会再次通过 CAS，接管不属于它的新记录。
+   * 生成代与记录同生共死：重建 = 新代，过期期望值必然对不上。
+   */
+  epoch?: string | undefined;
+  /**
    * 已确认这个 `threadId` 在 Codex 侧不存在（线程被删 / 换机器 / 库被重置）。
    *
    * 与 `threadId` 并存而不是删掉 `threadId`：后者是「最后已知身份」，仍要留给诊断与去重；
@@ -95,7 +103,12 @@ export type CodexStoredBinding = {
   threadMissing?: boolean | undefined;
   /** 身份修订号（缺失按 0 处理），CAS 用它比较。 */
   revision: number;
+  /** 记录生成代（老记录缺失）。CAS 同时比较它，防 absent→重建 的 ABA。 */
+  epoch?: string | undefined;
 };
+
+/** 身份/开跑操作的 CAS 期望值：修订号必填，生成代由调用方从权威绑定里带下来。 */
+export type CodexExpectedBinding = { revision: number; epoch?: string | undefined };
 
 /**
  * `readBinding()` 的三态结果。
@@ -274,6 +287,8 @@ export class CodexSessionStore {
             // 旧快照携带的修订号属于另一个文件纪元，导入它会让 CAS 的基准失去意义。
             ...(session.threadId ? { threadId: session.threadId } : {}),
             ...(session.threadMissing ? { threadMissing: true } : {}),
+            // 新记录 = 新的生成代：识别「记录被删后重建」，挡掉旧纪元的过期期望值
+            epoch: randomUUID(),
           });
           continue;
         }
@@ -303,7 +318,7 @@ export class CodexSessionStore {
   bindThreadId(
     sessionId: string,
     threadId: string,
-    expected: { revision: number },
+    expected: CodexExpectedBinding,
   ): CodexBindingResult {
     return this.mutateBinding(sessionId, expected, (record) => {
       if (record.threadId === threadId && record.threadMissing !== true) return 'unchanged';
@@ -323,7 +338,7 @@ export class CodexSessionStore {
   markThreadMissing(
     sessionId: string,
     threadId: string,
-    expected: { revision: number },
+    expected: CodexExpectedBinding,
   ): CodexBindingResult {
     return this.mutateBinding(sessionId, expected, (record) => {
       if (record.threadId !== threadId) return 'mismatch';
@@ -343,7 +358,7 @@ export class CodexSessionStore {
   confirmThreadPresent(
     sessionId: string,
     threadId: string,
-    expected: { revision: number },
+    expected: CodexExpectedBinding,
   ): CodexBindingResult {
     return this.mutateBinding(sessionId, expected, (record) => {
       if (record.threadId !== threadId) return 'mismatch';
@@ -367,7 +382,7 @@ export class CodexSessionStore {
    */
   beginRun(
     sessionId: string,
-    expected: { revision: number },
+    expected: CodexExpectedBinding,
     updatedAt: string,
     owner: string,
   ): CodexBeginRunResult {
@@ -383,6 +398,10 @@ export class CodexSessionStore {
       if (!record) return { outcome: 'not-found' };
       if (revisionOf(record) !== expected.revision) {
         return { outcome: 'stale-revision', revision: revisionOf(record) };
+      }
+      if (!epochMatches(record, expected)) {
+        // 记录被删后重建（新生成代）：修订号会回到 0，只有生成代认得出这不是原来那条
+        return { outcome: 'identity-mismatch', revision: revisionOf(record) };
       }
       record.runState = 'starting';
       record.runAttempt = randomUUID();
@@ -407,7 +426,7 @@ export class CodexSessionStore {
   beginNewThreadFromMissing(
     sessionId: string,
     expectedThreadId: string,
-    expected: { revision: number },
+    expected: CodexExpectedBinding,
     updatedAt: string,
     owner: string,
   ): CodexBeginRunResult {
@@ -426,6 +445,9 @@ export class CodexSessionStore {
       }
       if (revisionOf(record) !== expected.revision) {
         return { outcome: 'stale-revision', revision: revisionOf(record) };
+      }
+      if (!epochMatches(record, expected)) {
+        return { outcome: 'identity-mismatch', revision: revisionOf(record) };
       }
       if (record.threadMissing !== true) {
         record.threadMissing = true;
@@ -506,6 +528,9 @@ export class CodexSessionStore {
       if (record.runAttempt !== expected.attempt) return 'stale-attempt';
       record.status = patch.status;
       record.runState = patch.runState ?? 'started';
+      // 终态 = 这一轮执行结束：清掉归属标记，「执行是否还活着」从此由 runOwner 表达，
+      // 而 runState 只表达「这轮走到过哪」。不清的话重启会把已结束的轮次当成还在跑。
+      delete record.runOwner;
       record.updatedAt = patch.updatedAt;
       this.writeSessions(sessions);
       return 'finished';
@@ -564,6 +589,7 @@ export class CodexSessionStore {
         ...(record.threadId ? { threadId: record.threadId } : {}),
         ...(record.threadMissing ? { threadMissing: true } : {}),
         revision: revisionOf(record),
+        ...(record.epoch ? { epoch: record.epoch } : {}),
       },
     };
   }
@@ -577,7 +603,7 @@ export class CodexSessionStore {
    */
   private mutateBinding(
     sessionId: string,
-    expected: { revision: number },
+    expected: CodexExpectedBinding,
     mutate: (record: CodexStoredSession) => 'updated' | 'unchanged' | 'mismatch',
   ): CodexBindingResult {
     return this.withWriteLock(() => {
@@ -595,6 +621,9 @@ export class CodexSessionStore {
         return { outcome: 'in-flight', revision: revisionOf(record) };
       }
       if (revisionOf(record) !== expected.revision) {
+        return { outcome: 'mismatch', revision: revisionOf(record) };
+      }
+      if (!epochMatches(record, expected)) {
         return { outcome: 'mismatch', revision: revisionOf(record) };
       }
       const outcome = mutate(record);
@@ -753,14 +782,32 @@ function revisionOf(record: CodexStoredSession): number {
 }
 
 /**
- * 「这一轮执行是不是还在飞」= 停在 `starting` 且归属进程还活着。
+ * 生成代校验：期望值与记录必须同代。
+ *
+ * 严格相等（含「都没有」）：调用方拿着旧纪元（或「当时记录不在」）的期望值，
+ * 对上一条被删后重建的新记录（新生成代）必须拒绝——重建后修订号从 0 重新开始，
+ * 只比修订号会把过期认识放行。
+ */
+function epochMatches(record: CodexStoredSession, expected: CodexExpectedBinding): boolean {
+  return (record.epoch ?? undefined) === (expected.epoch ?? undefined);
+}
+
+/**
+ * 「这一轮执行是不是还在飞」= 有 attempt 有归属、归属进程还活着，且还没写过终态。
+ *
+ * `runState` 表达「这轮走到过哪」（starting = 已提交启动还没 thread.started；
+ * started = 身份已确认），`runOwner` 表达「执行是否还活着」——`finishRun` 终态写入
+ * 会清掉它。所以判活看 owner，不看 runState 走到了哪一步：`thread.started` 到达
+ * 不等于执行结束，把「还在跑」的轮次当成 idle 会诱导用户再发一次、两条线程分叉。
  *
  * 归属进程已死（或归属信息不可验证）就不算在飞：那时旧执行的 attempt 是死的，
  * 身份操作必须放行，否则线程回来后连 `confirmThreadPresent` 都做不了。
- * 这是租约缺席时的替代判据——真正的互斥留给路线图上的执行租约。
+ * 终态（failed / cancelled）同样不算在飞：已经了结的轮次不许永久挡住身份操作。
  */
 function attemptInFlight(record: CodexStoredSession): boolean {
-  return record.runState === 'starting' && !!record.runAttempt && isRunOwnerAlive(record.runOwner);
+  if (record.status === 'failed' || record.status === 'cancelled') return false;
+  if (record.runState !== 'starting' && record.runState !== 'started') return false;
+  return !!record.runAttempt && !!record.runOwner && isRunOwnerAlive(record.runOwner);
 }
 
 /**
@@ -801,6 +848,8 @@ function isStoredSession(value: unknown): value is CodexStoredSession {
       RUN_STATES.includes(candidate.runState as CodexSessionRunState)) &&
     (candidate.runAttempt === undefined || typeof candidate.runAttempt === 'string') &&
     (candidate.runOwner === undefined || typeof candidate.runOwner === 'string') &&
+    (candidate.epoch === undefined ||
+      (typeof candidate.epoch === 'string' && candidate.epoch.length > 0)) &&
     KNOWN_STATUSES.includes(candidate.status as AgentStatus)
   );
 }

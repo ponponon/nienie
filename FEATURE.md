@@ -1069,3 +1069,15 @@
 - **崩溃判定加归属进程存活**（租约缺席时的替代判据）：`runState='starting'` 时用 `runOwner` 的存活区分——活着显示 `running`（**不许断言失败**，那会诱导用户再发一次、两条线程分叉），死了/无法验证才 `failed`。`isRunOwnerAlive()` 跨主机视为不可验证（按死处理）。
 - 测试：codex 包 84 → 96（`session-store.test.ts` 53、`thread-health.test.ts` 24 + 验收清单落地）。按 review 的 8 条验收清单逐条落测试：resume 同 id 收尾（断言赶在退出兜底之前）、A begin/B confirm 的修订号隔离、失效标记全量同步 + `probe=unknown` 不误开新线程、`save` 不补空不导入、其他 Bridge 活跃时重启判 `running` + 重试接管 + dispose 后磁盘干净、`readBinding` 失败中止且恢复后可跑、首版记录迁移按 0、旧 attempt 不能覆盖新一轮。8 个新守卫逐一变异验证（改坏即变红），其中「resume 同 id」的变异第一版被退出兜底掩盖，把断言挪到 `thread.started` 之后、进程退出之前才真正抓住。
 - **仍未做（review 也明确列为路线图，不在本轮）**：跨进程执行租约（心跳/租约过期）——目前「新的一轮总是接管旧的 attempt」，两个 Bridge 同时跑同一会话的互斥不在 store 层解决，只保证旧执行改不了新执行的状态；`writeSessions()` 的 `fsync`（P2）。
+
+### 2026-11-24 第三方 review 第十二轮：闭合执行状态机的三个出口，生成代堵住「删掉重建」的 ABA
+
+第十一轮的状态机分家被 review 认可为正确方向，但仍判「暂不通过」：3 个 P1 都在**执行状态机的出口没闭合**，2 个 P2 在过期收尾和记录重生。
+
+- **P1-1 `thread.started` 落盘失败后线程 ID 丢失**：换绑写盘失败（锁被占）时 `threadId` 只活在内存里，进程随后直接退出，再没有下一条 JSON 事件给逐行逻辑重试 → 重启后新建线程、丢上下文。修法：`CodexRunContext.pendingThreadId` 暂存未落盘的 id，`onExit` 收尾前做**最后一次** `commitThreadStarted` 重试；重试仍失败则发 `BIND_LOST` 会话提示 + 诊断（把线程 id 明说出去，用户可在 Codex 侧找回），不许伪装成「身份已保存」。
+- **P1-2 `thread.started` 之后执行被显示成 idle**：`restoreStatus` 只把 `starting` 当「执行可能还活着」，`started`（身份已确认、执行仍在进行）落进降级分支 → 另一个 Bridge 重启显示 `idle`，用户重发、复制出双进程执行。修法：`runOwner` 在场且 `runState ∈ {starting, started}` 都算执行活跃——归属进程活着显示 `running`，终态（`failed`/`cancelled`）优先不被翻案。
+- **P1-3 failed / cancelled / dispose 不关闭 attempt**：三个出口都只改状态不收执行身份，`runOwner` 残留 → 重启把已结束的轮次当成还在跑，且身份操作被在飞保护永久挡死。修法：统一走 `persistRunOutcome`（带 attempt 的 `finishRun` 终态写入）：终态 `runState`（`threadId` 在 → `started`，否则 `never_started`，`starting` 不许带进终态）+ **清 `runOwner`**。`dispose()` 先收掉在跑的 attempt 再 kill（Adapter 重建不清 owner 的话新实例会误判 running）。
+- **P2-1 过期收尾改本地状态**：`finishRun` 返回 `stale-attempt` 后本地记录仍被推进成 failed——`toAgentSession` 对 failed 优先，会把旧 attempt 的失败冒充当前轮的失败。修法：`persistRunOutcome` 返回 `'applied' | 'stale'`，`stale` 不改本地状态、不发 `RUN_FAILED`。
+- **P2-2 absent→重建 的 ABA**：记录被删（整份重写/截断）又重建后 `bindingRevision` 回到 0，一份拿着「旧纪元 revision 0」的过期认识再次通过 CAS，接管不属于它的新记录。修法：记录**生成代 `epoch`**（新建时 `randomUUID()`，永不改变、不从快照导入、与记录同生共死）；`CodexExpectedBinding = {revision, epoch}`，`mutateBinding` / `beginRun` / `beginNewThreadFromMissing` 先比修订号再比生成代（`epochMatches` 严格：双 `undefined` 只为 legacy 兼容）。
+- **测试**：codex 包 96 → 102（`session-store.test.ts` 54、`thread-health.test.ts` 29），按 review 的 6 条验收清单逐条落地：T1 落盘失败后直接退出线程 ID 不丢、T2 `thread.started` 后另一 Bridge 重启仍 running、T3 运行期 error（`thread.started` 前）重启不得 running、T4 starting 阶段 cancel 后恢复确认不被在飞挡、T5 删后重建旧 revision/epoch 不通过（store 级）、T6 旧 attempt 失败退出不得覆盖本地/磁盘状态。7 处变异全部打红对应测试（退出重试移除、restoreStatus 的 started 回退、onError 不落盘终态、onError runState 回退、attemptInFlight 只看 runState、epochMatches 失效、stale 不拦截本地状态）。
+- **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约（心跳/租约过期）；`writeSessions()` 的 `fsync`（P2）。

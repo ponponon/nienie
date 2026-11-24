@@ -78,8 +78,8 @@ function createSilentProcess(): CodexProcessHandle {
   };
 }
 
-/** 假 Codex 进程：输出行和退出时机都由测试手动控制。 */
-function createManualProcess(): CodexProcessHandle & { finish(code?: number): void } {
+/** 假 Codex 进程：输出行、运行期报错和退出时机都由测试手动控制。 */
+function createManualProcess(): CodexProcessHandle & { finish(code?: number): void; fail(error?: Error): void } {
   const emitter = new EventEmitter();
   const stdout = new PassThrough();
   return {
@@ -101,6 +101,9 @@ function createManualProcess(): CodexProcessHandle & { finish(code?: number): vo
     finish(code = 0) {
       stdout.end();
       emitter.emit('exit', code);
+    },
+    fail(error = new Error('stdio crashed')) {
+      emitter.emit('error', error);
     },
   };
 }
@@ -136,11 +139,14 @@ const STORE_BASE = {
   updatedAt: '2026-11-23T00:10:00.000Z',
 };
 
-/** 当前磁盘修订号（身份操作的 CAS 基准）。 */
-function at(store: CodexSessionStore, id: string): { revision: number } {
+/** 当前磁盘修订号 + 生成代（身份操作的 CAS 基准）。 */
+function at(
+  store: CodexSessionStore,
+  id: string,
+): { revision: number; epoch?: string | undefined } {
   const read = store.readBinding(id);
   if (read.status !== 'ok') throw new Error(`readBinding(${id}) -> ${read.status}`);
-  return { revision: read.binding.revision };
+  return { revision: read.binding.revision, epoch: read.binding.epoch };
 }
 
 /** 「一个还活着的 Bridge」在跑：归属进程就是本进程。 */
@@ -167,6 +173,12 @@ function peekThreadMissing(adapter: CodexAdapter, sessionId: string): boolean | 
     adapter as unknown as { sessions: Map<string, { threadMissing?: boolean }> }
   ).sessions;
   return sessions.get(sessionId)?.threadMissing;
+}
+
+/** 白盒读内存里的展示状态（「过期执行的失败不冒充当前 attempt 的失败」的落点）。 */
+function peekStatus(adapter: CodexAdapter, sessionId: string): string | undefined {
+  const sessions = (adapter as unknown as { sessions: Map<string, { status?: string }> }).sessions;
+  return sessions.get(sessionId)?.status;
 }
 
 describe('Codex 线程恢复的真实性', () => {
@@ -1055,5 +1067,223 @@ describe('Codex 线程恢复的真实性', () => {
     await adapter.sendMessage('codex_ses_unread', '继续');
     await adapter.waitForRun('codex_ses_unread');
     expect(spawnCount).toBe(1);
+  });
+
+  it('thread.started 落盘失败后进程直接退出：退出收尾必须重试落盘，线程 ID 不能丢', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']); // th_gone 不在库里 → 开新线程
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_retry', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_retry');
+    await adapter.sendMessage('codex_ses_retry', '继续');
+
+    // 另一个 Bridge 正在写索引（持锁）→ thread.started 的换绑必然写失败
+    writeFileSync(
+      `${storePath}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    (proc.stdout as PassThrough).write(
+      `${JSON.stringify({ type: 'thread.started', thread_id: 'th_fresh' })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    // 落盘失败时不许提前推进内存身份
+    expect(peekThreadId(adapter, 'codex_ses_retry')).toBe('th_gone');
+    expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toContain('bind failed');
+
+    // 锁释放后进程立刻退出——没有下一条 JSON 事件给逐行逻辑重试，全靠退出收尾的最终重试
+    rmSync(`${storePath}.lock`, { force: true });
+    proc.finish(0);
+    await adapter.waitForRun('codex_ses_retry');
+
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    // 线程 ID 不丢：th_fresh 必须落进索引（重启后 resume 它），而不是永远留在 Codex 侧无人认领
+    expect(stored.sessions[0]?.threadId).toBe('th_fresh');
+    expect(stored.sessions[0]?.threadMissing).toBeUndefined();
+    expect(peekThreadId(adapter, 'codex_ses_retry')).toBe('th_fresh');
+  });
+
+  it('thread.started 之后、执行还在跑：另一个 Bridge 重启必须显示 running，不能退回 idle', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_started', threadId: 'th_live', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const first = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await first.loadSession('codex_ses_started');
+    await first.sendMessage('codex_ses_started', '继续');
+    // thread.started 到达 = 身份确认，但执行还在进行（进程没退出）
+    (proc.stdout as PassThrough).write(
+      `${JSON.stringify({ type: 'thread.started', thread_id: 'th_live' })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 另一个 Bridge 重启看同一条记录：runState=started 不等于执行结束，
+    // 归属进程还活着就必须显示 running——退回 idle 会让用户重发、复制出双进程执行
+    const restarted = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const statuses = new Map(
+      (await restarted.listSessions()).map((session) => [session.id, session.status]),
+    );
+    expect(statuses.get('codex_ses_started')).toBe('running');
+
+    proc.finish(0);
+    await first.waitForRun('codex_ses_started');
+  });
+
+  it('运行期 error 在 thread.started 之前：终态必须落盘，重启不得显示 running', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_runerr' }, // 全新会话：还没有 threadId
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_runerr');
+    await adapter.sendMessage('codex_ses_runerr', '继续');
+
+    // 运行期进程报错，thread.started 从未到达：这一轮必须写失败终态（starting 不许带进终态）
+    proc.fail(new Error('stdio 崩了'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({ status: 'failed', runState: 'never_started' });
+
+    // 重启：显示 failed。若终态没落盘（状态/执行都停在 starting、归属进程还活着），
+    // 恢复判定会把这一轮当成「还在跑」显示成 running——用户以为消息还在路上
+    const restarted = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_never'),
+    });
+    const statuses = new Map(
+      (await restarted.listSessions()).map((session) => [session.id, session.status]),
+    );
+    expect(statuses.get('codex_ses_runerr')).toBe('failed');
+  });
+
+  it('starting 阶段取消后，「线程回来了」的确认不得被在飞保护挡住', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']); // th_x 不在库里 → 开新线程（threadMissing + starting）
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_cancel', threadId: 'th_x', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    await adapter.loadSession('codex_ses_cancel');
+    await adapter.sendMessage('codex_ses_cancel', '继续');
+
+    // 对照：一轮真在飞时，身份操作确实被在飞保护挡着
+    const other = new CodexSessionStore({ filePath: storePath });
+    expect(
+      other.confirmThreadPresent('codex_ses_cancel', 'th_x', at(other, 'codex_ses_cancel'))
+        .outcome,
+    ).toBe('in-flight');
+
+    // starting 阶段（thread.started 未到）用户点了停止：取消必须终结这一轮的 attempt
+    await adapter.cancel('codex_ses_cancel');
+    await adapter.waitForRun('codex_ses_cancel');
+
+    // 已终结的 attempt 不算在飞：此刻「th_x 又回来了」的确认必须能写下去，
+    // 否则取消后的恢复确认会被永久挡死，失效标记一直清不掉
+    expect(
+      other.confirmThreadPresent('codex_ses_cancel', 'th_x', at(other, 'codex_ses_cancel'))
+        .outcome,
+    ).toBe('updated');
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]?.threadMissing).toBeUndefined();
+  });
+
+  it('旧 attempt 迟到的失败退出：不得覆盖本地/磁盘状态，也不冒充当前轮的失败', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']); // th_gone 不在库里
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_stalefail', threadId: 'th_gone', runState: 'started' },
+    ]);
+
+    const proc = createManualProcess();
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => proc,
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.loadSession('codex_ses_stalefail');
+    await adapter.sendMessage('codex_ses_stalefail', '继续'); // 本轮 attempt A
+
+    // 新一轮接管：attempt B 顶掉 A（没有执行租约时，新的一轮总是接管旧的 attempt）
+    const other = new CodexSessionStore({ filePath: storePath });
+    const takeover = other.beginRun(
+      'codex_ses_stalefail',
+      at(other, 'codex_ses_stalefail'),
+      '2026-11-23T02:00:00.000Z',
+      OWNER,
+    );
+    expect(takeover.outcome).toBe('started');
+    if (takeover.outcome !== 'started') return;
+
+    // 旧 attempt A 迟到的失败退出（退出码非零）
+    proc.finish(1);
+    await adapter.waitForRun('codex_ses_stalefail');
+
+    // 过期执行的失败不冒充当前 attempt 的失败：不发 RUN_FAILED，本地状态不动
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
+    ).toHaveLength(0);
+    expect(peekStatus(adapter, 'codex_ses_stalefail')).toBe('running');
+    // 磁盘上新一轮的状态完好：旧 attempt 的收尾一个字段都改不动
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({
+      runAttempt: takeover.attempt,
+      status: 'idle',
+      runState: 'starting',
+    });
   });
 });

@@ -46,11 +46,14 @@ function loadOk(store: CodexSessionStore): CodexStoredSession[] {
   return result.sessions;
 }
 
-/** 当前磁盘修订号（身份操作的 CAS 基准；`readBinding` 三态里只有 ok 才有）。 */
-function at(store: CodexSessionStore, id: string): { revision: number } {
+/** 当前磁盘修订号 + 生成代（身份操作的 CAS 基准；`readBinding` 三态里只有 ok 才有）。 */
+function at(
+  store: CodexSessionStore,
+  id: string,
+): { revision: number; epoch?: string | undefined } {
   const read = store.readBinding(id);
   if (read.status !== 'ok') throw new Error(`readBinding(${id}) -> ${read.status}`);
-  return { revision: read.binding.revision };
+  return { revision: read.binding.revision, epoch: read.binding.epoch };
 }
 
 /** `readBinding` 三态里取出 ok 的权威绑定。 */
@@ -618,15 +621,18 @@ describe('CodexSessionStore', () => {
     const store = new CodexSessionStore({ filePath });
 
     store.save([{ ...STORE_BASE, id: 'codex_ses_read', threadId: 'th_read', status: 'idle' }]);
-    expect(store.readBinding('codex_ses_read')).toEqual({
+    const first = store.readBinding('codex_ses_read');
+    expect(first).toEqual({
       status: 'ok',
-      binding: { threadId: 'th_read', revision: 0 },
+      binding: { threadId: 'th_read', revision: 0, epoch: expect.any(String) },
     });
+    // 生成代与记录同生共死：显式操作推进修订号也不会换代
+    const epoch = first.status === 'ok' ? first.binding.epoch : undefined;
 
     store.markThreadMissing('codex_ses_read', 'th_read', at(store, 'codex_ses_read'));
     expect(store.readBinding('codex_ses_read')).toEqual({
       status: 'ok',
-      binding: { threadId: 'th_read', threadMissing: true, revision: 1 },
+      binding: { threadId: 'th_read', threadMissing: true, revision: 1, epoch },
     });
 
     // 记录不在盘上 → absent（可以从零开始）
@@ -861,13 +867,18 @@ describe('CodexSessionStore', () => {
     const store = new CodexSessionStore({ filePath });
     store.save([{ ...STORE_BASE, id: 'codex_ses_fence', status: 'idle' }]);
 
-    const first = store.beginRun('codex_ses_fence', { revision: 0 }, '2026-11-23T01:00:00.000Z', OWNER);
+    const first = store.beginRun(
+      'codex_ses_fence',
+      at(store, 'codex_ses_fence'),
+      '2026-11-23T01:00:00.000Z',
+      OWNER,
+    );
     expect(first.outcome).toBe('started');
     if (first.outcome !== 'started') return;
     // 新一轮接管（没有执行租约时，新的一轮总是接管旧的 attempt）
     const second = store.beginRun(
       'codex_ses_fence',
-      { revision: 0 },
+      at(store, 'codex_ses_fence'),
       '2026-11-23T02:00:00.000Z',
       OWNER,
     );
@@ -903,6 +914,52 @@ describe('CodexSessionStore', () => {
       ),
     ).toBe('finished');
     expect(loadOk(store)[0]).toMatchObject({ runState: 'started', status: 'idle' });
+  });
+
+  it('记录被删后重建：旧的修订号 + 生成代都对不上，过期期望值不得接管新记录', () => {
+    const filePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath });
+    store.save([{ ...STORE_BASE, id: 'codex_ses_reborn', threadId: 'th_old', status: 'idle' }]);
+    // A 这一轮开始时认识的绑定：th_old @ revision 0（含生成代）
+    const observed = readOk(store, 'codex_ses_reborn');
+    expect(observed.epoch).toEqual(expect.any(String));
+
+    // 记录被删（整份重写/截断）后又重建：修订号回到 0，生成代是新的
+    writeFileSync(filePath, JSON.stringify({ version: 1, sessions: [] }), 'utf8');
+    store.save([{ ...STORE_BASE, id: 'codex_ses_reborn', threadId: 'th_new', status: 'idle' }]);
+    const reborn = readOk(store, 'codex_ses_reborn');
+    expect(reborn.revision).toBe(0); // 修订号回到了旧值——纯修订号 CAS 会在这里被骗过
+    expect(reborn.epoch).not.toBe(observed.epoch); // 但生成代换了：这才是识别新旧记录的依据
+
+    // 旧纪元的期望值（对得上修订号、对不上生成代）一律拒绝
+    expect(
+      store.beginRun(
+        'codex_ses_reborn',
+        { revision: observed.revision, epoch: observed.epoch },
+        '2026-11-23T01:00:00.000Z',
+        OWNER,
+      ).outcome,
+    ).toBe('identity-mismatch');
+    expect(
+      store.bindThreadId('codex_ses_reborn', 'th_hijack', {
+        revision: observed.revision,
+        epoch: observed.epoch,
+      }).outcome,
+    ).toBe('mismatch');
+    // 只带修订号的旧式期望值同样不通过：不给「无生成代」留后门
+    expect(
+      store.beginRun('codex_ses_reborn', { revision: 0 }, '2026-11-23T01:00:00.000Z', OWNER)
+        .outcome,
+    ).toBe('identity-mismatch');
+    // 新纪元的期望值才被接受
+    expect(
+      store.beginRun(
+        'codex_ses_reborn',
+        at(store, 'codex_ses_reborn'),
+        '2026-11-23T01:00:00.000Z',
+        OWNER,
+      ).outcome,
+    ).toBe('started');
   });
 
   it('写锁被活进程持有时拒绝写盘（不无锁覆盖），成功写完不留锁文件', () => {
