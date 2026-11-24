@@ -1103,3 +1103,13 @@
 - **测试**：codex 包 108（`session-store.test.ts` 53、`thread-health.test.ts` 35）。按 review 4 条验收逐条落地：P1 dispose 链条（锁占到 close 之后 → 退出不得翻案、锁释放后补交干净）、P2-1（close 前 `confirmThreadPresent` 仍 `in-flight`、close 后放行）、P2-2（error 后 close 前 `waitForRun` 保持 pending）、close 后迟到 error 不翻案、not-found 不谎报（诊断 + 本地收尾 + 不误报 PERSIST_FAILED）。6 处变异全部打红对应测试（dispose 去掉 cancelRequested、onError 提前 resolve、cancel 撤销推迟、去掉 runClosed、去掉取消守卫、去掉定时补交）。
 - **变异验证暴露的冗余守卫已删**：挂起终态的「cancelled 优先级」排名、onError 守卫里的 `record.status === 'cancelled'` 条件——在其余守卫（dispose 的 cancelRequested / runClosed / close 前的 cancelRequested）面前均不可达，变异打不红任何测试，按「测不到的守卫是死代码」删掉，不做安慰剂。
 - **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
+
+### 2026-11-24 第三方 review 第十五轮：终态落盘一律等 close——dispose 与 onError 不许提前放掉执行保护
+
+第十四轮 review 判「主要修复基本成立 暂不封板」：2 个 P1 同属一类——**终态写盘早于进程 close，提前清 `runOwner` 放掉跨实例执行保护**，cancel 路径已修、dispose 与 onError 两条路径漏了。
+
+- **P1-1 dispose 提前 finishRun**：dispose 在 kill 之前就写终态，写盘成功时 `runOwner` 立刻被清，kill/close 窗口里另一个 Bridge 的 `beginRun` 会开出第二轮（两个 Codex 进程抢同一会话）。现有测试只测了「写盘失败」路径，测不到「写盘成功时提前放保护」。修法：dispose 与 cancel 收敛到同一语义（`markCancelIntent`）——只记取消意图（`cancelRequested` + 内存 cancelled），**不提前 finishRun**，磁盘终态由 close 的收尾统一落盘。
+- **P1-2 onError 提前 finishRun**：error 事件 ≠ 进程已退出，失败终态在 error 时落盘同样提前清 `runOwner`。修法：两阶段——onError 立即发 `RUN_FAILED`（用户即时反馈）+ 内存记失败意图（`runError` + status failed），**磁盘不动**；close 收尾据此落 `failed` 终态（RUN_FAILED 不重发，exit-code 失败仍照旧在 close 反馈）。`waitForRun` 一律由 close 兑现（error 路径以 reject 表达，同样不提前 settle）。
+- **测试**：codex 包 108 → 110（`thread-health.test.ts` 37）。按 review 两条「无锁竞争」验收逐条落地：dispose → 提前 finishRun 不得发生 → `confirmThreadPresent` 仍 `in-flight` → close → cancelled 落盘、runOwner 清除；proc.fail → onError → 未 close → `in-flight` + `waitForRun` 保持 pending → close → failed 落盘、runOwner 清除、RUN_FAILED 恰好一条。改写 3 条旧测试对齐「终态一律等 close」语义（error 后重启判 failed 的链条加 close 步骤、dispose/运行期 error 的落盘失败补交两条换到 close 写入）。
+- **变异验证**：M7 dispose 恢复提前 finishRun、M8 onError 恢复提前 finishRun、M9 close 重发 RUN_FAILED、M10 onError 提前 settle、M4 runClosed 移除（新语义下复验）——5 处全部打红对应测试；第十四轮的 6 处变异面未受本轮改动影响。
+- **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
