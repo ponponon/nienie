@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -330,6 +330,7 @@ export class CodexAdapter implements AgentAdapter {
 
   async listSessions(): Promise<AgentSession[]> {
     this.ensureStoredSessionsLoaded();
+    this.serveStaleOutcomeNotices();
     if (this.discoverLocalHistory && !this.historyLoaded && Date.now() >= this.historyRetryAt) {
       this.applyHistoryLoadResult(this.loadLocalCodexHistory());
     }
@@ -662,7 +663,13 @@ export class CodexAdapter implements AgentAdapter {
     this.pendingRunOutcomes.set(sessionId, { attempt, patch });
   }
 
-  /** 挂起终态的补交重试：写锁通常只被占很短，收尾点没赶上就定时再试几次。 */
+  /**
+   * 挂起终态的补交重试：写锁通常只被占很短，收尾点没赶上就定时再试几次（50ms × 5）。
+   *
+   * **重试次数只由这里的回调裁决**：`drainPendingRunOutcome` 内部的失败路径会顺手
+   * 再排一次重试（谁失败谁重试），所以放弃时必须把那条刚排上的定时器一并清掉——
+   * 否则「第 5 次放弃」之后第 6 次照跑、计数还被清零，实际是无限重试。
+   */
   private schedulePendingRetry(sessionId: string): void {
     if (this.pendingRetryTimers.has(sessionId)) return;
     const timer = setTimeout(() => {
@@ -673,9 +680,18 @@ export class CodexAdapter implements AgentAdapter {
         this.pendingRetryCounts.set(sessionId, count);
         if (count >= 5) {
           this.pendingRetryCounts.delete(sessionId);
+          // 放弃就是放弃：清掉 drain 失败路径刚排上的下一次重试，链子到此为止
+          const next = this.pendingRetryTimers.get(sessionId);
+          if (next) {
+            clearTimeout(next);
+            this.pendingRetryTimers.delete(sessionId);
+          }
           this.emitDiagnosticWarning(
             `codex session ${sessionId}: pending run outcome still unpersisted after retries; giving up`,
           );
+          // 最终失败必须跨 Adapter 生命周期可见：dispose/换新实例后旧监听器已没了，
+          // 只活在内存里的诊断没人看得见。
+          this.persistStaleOutcomeNotice(sessionId);
           return;
         }
         this.schedulePendingRetry(sessionId);
@@ -685,6 +701,59 @@ export class CodexAdapter implements AgentAdapter {
     }, 50);
     timer.unref?.();
     this.pendingRetryTimers.set(sessionId, timer);
+  }
+
+  /** 终态最终写不进磁盘的记录落盘（sidecar），供下一个 Adapter 加载后展示。 */
+  private persistStaleOutcomeNotice(sessionId: string): void {
+    if (!this.sessionStorePath) return;
+    try {
+      writeFileSync(
+        `${this.sessionStorePath}.stale-outcomes`,
+        `${JSON.stringify({
+          sessionId,
+          at: new Date().toISOString(),
+          message: `codex session ${sessionId}: 终态最终未能写入本地索引（重试已放弃），其他窗口可能仍把它显示成运行中`,
+        })}\n`,
+        { flag: 'a' },
+      );
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `codex session ${sessionId}: stale outcome notice persist failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * 把上一个 Adapter 留下的「终态没写进索引」记录转成可见提示（事件 + 诊断）。
+   * serve-once：转出即删，避免每次打开会话都重复弹同一条。
+   */
+  private serveStaleOutcomeNotices(): void {
+    if (!this.sessionStorePath) return;
+    const file = `${this.sessionStorePath}.stale-outcomes`;
+    if (!existsSync(file)) return;
+    let raw: string;
+    try {
+      raw = readFileSync(file, 'utf8');
+      rmSync(file, { force: true });
+    } catch {
+      return; // 读不动就下次再试，绝不假装已经展示过
+    }
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const entry = JSON.parse(trimmed) as { sessionId?: string; message?: string };
+        const message = entry.message ?? `终态最终未能写入本地索引（上一个实例重试已放弃）`;
+        this.emitDiagnosticWarning(message);
+        if (entry.sessionId) {
+          this.emitSessionNotice(entry.sessionId, 'PERSIST_FAILED', message);
+        }
+      } catch {
+        // 半行损坏不影响其他行
+      }
+    }
   }
 
   /**
@@ -756,6 +825,7 @@ export class CodexAdapter implements AgentAdapter {
 
   async loadSession(sessionId: string): Promise<AgentSession> {
     this.ensureStoredSessionsLoaded();
+    this.serveStaleOutcomeNotices();
     if (this.discoverLocalHistory && !this.loadedHistoryThreads.has(sessionId)) {
       // 内存会话的 id 是 Nienie 自己的（codex_ses_*），Codex 历史库按真实的 thread_id 建索引：
       // 查库用 threadId，事件仍归属 sessionId（否则手机端会收到挂错会话的消息）。

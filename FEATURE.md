@@ -1113,3 +1113,14 @@
 - **测试**：codex 包 108 → 110（`thread-health.test.ts` 37）。按 review 两条「无锁竞争」验收逐条落地：dispose → 提前 finishRun 不得发生 → `confirmThreadPresent` 仍 `in-flight` → close → cancelled 落盘、runOwner 清除；proc.fail → onError → 未 close → `in-flight` + `waitForRun` 保持 pending → close → failed 落盘、runOwner 清除、RUN_FAILED 恰好一条。改写 3 条旧测试对齐「终态一律等 close」语义（error 后重启判 failed 的链条加 close 步骤、dispose/运行期 error 的落盘失败补交两条换到 close 写入）。
 - **变异验证**：M7 dispose 恢复提前 finishRun、M8 onError 恢复提前 finishRun、M9 close 重发 RUN_FAILED、M10 onError 提前 settle、M4 runClosed 移除（新语义下复验）——5 处全部打红对应测试；第十四轮的 6 处变异面未受本轮改动影响。
 - **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
+
+### 2026-11-24 第三方 review 第十六轮：重试到限必须停，最终失败跨实例可见，exit(0) 不降级失败意图
+
+第十五轮 review 判「两个 P1 核心修复通过 仍有遗留问题」：15.3（error + exit(0) 的失败意图不得被降级，代码已对但缺测试）、15.4（定时补交到上限实际停不下来）、15.5（dispose 换新实例后最终 PERSIST_FAILED 无处送达）。
+
+- **15.3 测试补位**：`onError → close(0) → failed`（无锁直落）与「持锁 → error → pending → close(0) → 释放锁 → 补交」两条，锁死 close 的分支优先级（runError > 取消 > 退出码 > 正常收尾），正常收尾不得把失败意图降级成 idle。
+- **15.4 定时补交严格到限**：`schedulePendingRetry` 的计时器回调里 `drainPendingRunOutcome` 失败时会顺手再排一次重试（谁失败谁重试），而外层「放弃」分支没清掉那条刚排上的定时器——第 5 次放弃后第 6 次照跑、计数清零，实际无限重试。修法：重试次数只由回调裁决，放弃时把 drain 刚排上的定时器一并清掉（链子到此为止）。测试：持锁耗尽重试 → 「giving up」只报一次、无残留定时器、锁释放后不许有隐性复活写盘。
+- **15.5 最终失败跨 Adapter 生命周期可见**：give-up 时把「终态最终未能写入本地索引」写进 sidecar（`<store>.stale-outcomes`）；新 Adapter 在 `loadSession` / `listSessions` 时 serve-once（转成 PERSIST_FAILED 会话提示 + 诊断后删除），不再只活在旧实例的内存里。测试：dispose 换新实例后事件与诊断都能看到，第二个新实例不再重复弹。
+- **变异验证**：M11/M11b（close 无视失败意图 / 失败降级成 idle）、M12（放弃不清残留定时器）、M13（give-up 不落盘）全部打红对应测试；计时敏感断言改轮询等待，套件连跑两次全绿。
+- **测试**：codex 包 110 → 114（`thread-health.test.ts` 41）。
+- **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
