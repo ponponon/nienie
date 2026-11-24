@@ -1054,3 +1054,18 @@
 - **换绑落盘失败时不再推进内存身份**：之前 `catch` 里 `return true`，内存会记下 `th_mine` 而磁盘还是 `th_persisted`，下一轮又以磁盘为准，两个身份来回抖动。现在 `return false`，事件照常上报（用户不该因为身份记不下来就看不到回答）。
 - 测试：codex 包 78 → 84（`session-store.test.ts` 48、`thread-health.test.ts` 15）。新增 review 点名的四条：`begin 成功后别人确认「线程回来了」再崩溃仍必须 failed`、`id 回到旧样子时只有修订号能识别`、`两次决策都对不上磁盘身份时不得 spawn`、`换绑落盘失败不推进内存但事件仍上报`；另加 `begin 也认修订号`、`save 不写内存修订号`。四处守卫（旧崩溃判定、双 mismatch 开新线程、bind 异常返回 true、CAS 忽略修订号）各自做过变异验证，改坏即变红。
 - **仍未做**：`writeSessions()` 的 `fsync`（崩溃可见性够、突然断电不够，review 标 P2）；跨进程执行租约（`already-marked` 允许继续，意味着两个 Bridge 仍可能同时起两个新线程，CAS 只保证最终不会有两个 id 都成功写盘，不保证任务只执行一次）——继续留在路线图。
+
+### 2026-11-24 第三方 review 第十一轮：身份与执行拆成两条状态机，执行带 fencing token
+
+第十轮的修订号 CAS 被 review 认可为正确方向，但判定「暂不通过」：问题不在 CAS 本身，而在**一份修订号被两个职责共用**——身份变更（换绑）和执行阶段（starting → started → 收尾）都拿它当基准。两条状态机的写者、生命周期、并发语义都不同，混在一起必然互相踩。
+
+- **两个状态机分家**（`session-store.ts`）：
+  - **身份（Binding）**：`threadId` / `threadMissing` / `bindingRevision`，只由显式身份操作（`bindThreadId` / `markThreadMissing` / `confirmThreadPresent`）改写，CAS 比 `bindingRevision`，执行在飞（`runState='starting'` 且归属进程活着）时拒绝——那一轮正准备用它的修订号交 `thread.started`。
+  - **执行（Execution）**：`status` / `runState` / `runAttempt` / `runOwner`，只由执行操作改写。`beginRun` / `beginNewThreadFromMissing` 原子写 `runState='starting'` + **`runAttempt`（fencing token，`randomUUID()`）** + `runOwner`（`${pid}@${hostname}`），并返回**本次写入产生的** `attempt` 与 `revision`；收尾写入（`commitThreadStarted` / `finishRun`）必须出示同一个 `attempt` 才能改状态——迟到的旧执行（`stale-attempt`）改不了新一轮的执行阶段。
+- **CAS 基准绝不事后重读**：第十轮的 `refreshRevision()`（显式操作后重读磁盘修订号对齐回内存）被 review 判为**fencing token 盗用**——那可能是别的实例刚推进的修订号，认领它就等于借了别人的令牌，过期执行反过来覆盖了别人的新状态。现在决策与开跑在同一个函数（`resolveThreadBinding`）里完成：决策给出期望修订号 → `beginRun` 用它 CAS → 返回**自己那次写入**的 `attempt`/`revision`，之后所有收尾只用这两个值。`refreshRevision` 与 `syncBindingFromDisk` 删除。
+- **resume 同一个 `threadId` 也必须收尾**：`commitThreadStarted` 把「换绑 + `runState='started'`」合成一次带 fencing 的写入，且**两条路径都走它**——id 变了（换绑）和 id 没变（resume 确认）。第十轮只在 `record.threadId !== threadId` 时更新，resume 同 id 的 `runState` 永远停在 `starting`，重启后被崩溃判定判成 failed：一次正常完成的 resume 就这么变成「失败」。
+- **`save()` 收权成纯展示写**（review 缺陷「恢复时认为失败 → 事实上的失败」）：既有记录只写 `title` / `projectPath` / `updatedAt`；`status` / `runState` / `runAttempt` / `runOwner` 一律不写（执行状态走 fencing 写入），`threadId` / `threadMissing` / `bindingRevision` 一律不写（**连「补空」也不许**——补空等于换了身份却没推进修订号，绕过 CAS），也不导入修订号与执行标识。新建记录导入标题/状态/身份，但 `bindingRevision` 恒为 0、不带 `runAttempt`/`runOwner`（那是新索引条目，不是任何一轮执行的延续）。
+- **绑定全量同步**：`readBinding()` 三态化（`ok` / `absent` / `unreadable`）。`ok` → `threadId` / `threadMissing` / `bindingRevision` **全部**以磁盘为准（包括「磁盘上已经清掉」）——只许 false→true 的单向同步会让本实例拿着别人最新的修订号、却用自己旧的失效事实决策：`probe=unknown` 时会把已确认回来的活线程误判成死 id 去开新线程。`unreadable` → **中止这一轮**（拿猜出来的身份去换绑就是绕过 CAS，读取失败不得降级成无 CAS）。
+- **崩溃判定加归属进程存活**（租约缺席时的替代判据）：`runState='starting'` 时用 `runOwner` 的存活区分——活着显示 `running`（**不许断言失败**，那会诱导用户再发一次、两条线程分叉），死了/无法验证才 `failed`。`isRunOwnerAlive()` 跨主机视为不可验证（按死处理）。
+- 测试：codex 包 84 → 96（`session-store.test.ts` 53、`thread-health.test.ts` 24 + 验收清单落地）。按 review 的 8 条验收清单逐条落测试：resume 同 id 收尾（断言赶在退出兜底之前）、A begin/B confirm 的修订号隔离、失效标记全量同步 + `probe=unknown` 不误开新线程、`save` 不补空不导入、其他 Bridge 活跃时重启判 `running` + 重试接管 + dispose 后磁盘干净、`readBinding` 失败中止且恢复后可跑、首版记录迁移按 0、旧 attempt 不能覆盖新一轮。8 个新守卫逐一变异验证（改坏即变红），其中「resume 同 id」的变异第一版被退出兜底掩盖，把断言挪到 `thread.started` 之后、进程退出之前才真正抓住。
+- **仍未做（review 也明确列为路线图，不在本轮）**：跨进程执行租约（心跳/租约过期）——目前「新的一轮总是接管旧的 attempt」，两个 Bridge 同时跑同一会话的互斥不在 store 层解决，只保证旧执行改不了新执行的状态；`writeSessions()` 的 `fsync`（P2）。

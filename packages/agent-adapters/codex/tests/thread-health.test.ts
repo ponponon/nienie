@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -78,6 +78,33 @@ function createSilentProcess(): CodexProcessHandle {
   };
 }
 
+/** 假 Codex 进程：输出行和退出时机都由测试手动控制。 */
+function createManualProcess(): CodexProcessHandle & { finish(code?: number): void } {
+  const emitter = new EventEmitter();
+  const stdout = new PassThrough();
+  return {
+    stdout,
+    stderr: new PassThrough(),
+    kill() {
+      emitter.emit('exit', 130);
+    },
+    onExit(listener) {
+      emitter.once('exit', listener);
+    },
+    onError(listener) {
+      emitter.once('error', listener);
+    },
+    onSpawn(listener) {
+      emitter.once('spawn', listener);
+      emitter.emit('spawn');
+    },
+    finish(code = 0) {
+      stdout.end();
+      emitter.emit('exit', code);
+    },
+  };
+}
+
 /** 建一个只有 threads 表的 state 库，用来验证「线程是否还存在」。 */
 function seedThreads(codexHome: string, ids: string[]): void {
   const dbPath = join(codexHome, 'state_5.sqlite');
@@ -109,6 +136,18 @@ const STORE_BASE = {
   updatedAt: '2026-11-23T00:10:00.000Z',
 };
 
+/** 当前磁盘修订号（身份操作的 CAS 基准）。 */
+function at(store: CodexSessionStore, id: string): { revision: number } {
+  const read = store.readBinding(id);
+  if (read.status !== 'ok') throw new Error(`readBinding(${id}) -> ${read.status}`);
+  return { revision: read.binding.revision };
+}
+
+/** 「一个还活着的 Bridge」在跑：归属进程就是本进程。 */
+const OWNER = `${process.pid}@${hostname()}`;
+/** 「上一个实例已经不在了」：跨主机无法验证存活，按没人跑处理（模拟崩溃现场）。 */
+const DEAD_OWNER = '1@other-host.example';
+
 /**
  * 白盒读内存里的身份。
  *
@@ -120,6 +159,14 @@ function peekThreadId(adapter: CodexAdapter, sessionId: string): string | undefi
     adapter as unknown as { sessions: Map<string, { threadId?: string }> }
   ).sessions;
   return sessions.get(sessionId)?.threadId;
+}
+
+/** 白盒读内存里的失效标记（「决策必须全量同步磁盘事实」的落点）。 */
+function peekThreadMissing(adapter: CodexAdapter, sessionId: string): boolean | undefined {
+  const sessions = (
+    adapter as unknown as { sessions: Map<string, { threadMissing?: boolean }> }
+  ).sessions;
+  return sessions.get(sessionId)?.threadMissing;
 }
 
 describe('Codex 线程恢复的真实性', () => {
@@ -291,11 +338,13 @@ describe('Codex 线程恢复的真实性', () => {
       { ...STORE_BASE, id: 'codex_ses_crash', threadId: 'th_gone', runState: 'started' },
     ]);
 
-    // 第一次运行：检测到旧线程不存在 → 开新线程 → 进程起来了但不吐 thread.started（崩溃）
+    // 第一次运行：检测到旧线程不存在 → 开新线程 → 进程起来了但不吐 thread.started（崩溃）。
+    // ownerId 用异主机标识 = 这一轮的进程「已经不在了」，重启判定才有崩溃现场可依
     const first = new CodexAdapter({
       codexHome,
       defaultProjectPath: PROJECT,
       sessionStorePath: storePath,
+      ownerId: DEAD_OWNER,
       spawnProcess: () => createSilentProcess(),
     });
     await first.loadSession('codex_ses_crash');
@@ -349,7 +398,7 @@ describe('Codex 线程恢复的真实性', () => {
     seeded.save([
       { ...STORE_BASE, id: 'codex_ses_resync', threadId: 'th_sync', runState: 'started' },
     ]);
-    seeded.markThreadMissing('codex_ses_resync', 'th_sync');
+    seeded.markThreadMissing('codex_ses_resync', 'th_sync', at(seeded, 'codex_ses_resync'));
 
     const calls: string[][] = [];
     const adapter = new CodexAdapter({
@@ -388,7 +437,7 @@ describe('Codex 线程恢复的真实性', () => {
     seeded.save([
       { ...STORE_BASE, id: 'codex_ses_degraded', threadId: 'th_dead', runState: 'started' },
     ]);
-    seeded.markThreadMissing('codex_ses_degraded', 'th_dead');
+    seeded.markThreadMissing('codex_ses_degraded', 'th_dead', at(seeded, 'codex_ses_degraded'));
 
     const calls: string[][] = [];
     const adapter = new CodexAdapter({
@@ -435,8 +484,9 @@ describe('Codex 线程恢复的真实性', () => {
     // 本实例加载时磁盘上还没有失效标记
     await adapter.loadSession('codex_ses_stale');
 
-    // 另一个 Bridge 确认了线程失效并落盘
-    new CodexSessionStore({ filePath: storePath }).markThreadMissing('codex_ses_stale', 'th_dead');
+    // 另一个 Bridge 确认了线程失效并落盘（CAS 带当前修订号）
+    const other = new CodexSessionStore({ filePath: storePath });
+    other.markThreadMissing('codex_ses_stale', 'th_dead', at(other, 'codex_ses_stale'));
 
     await adapter.sendMessage('codex_ses_stale', '继续');
     await adapter.waitForRun('codex_ses_stale');
@@ -453,19 +503,22 @@ describe('Codex 线程恢复的真实性', () => {
       { ...STORE_BASE, id: 'codex_ses_late', threadId: 'th_gone', runState: 'started' },
     ]);
 
-    // 手动控制 stdout：spawn 之后才决定什么时候吐 thread.started
+    // 手动控制 stdout：spawn 之后才决定什么时候吐 thread.started。
+    // ownerId 用异主机标识：这一轮的进程「已经不在了」，别的实例换绑不再被「在飞」保护挡住
     const proc = createSilentProcess();
     const adapter = new CodexAdapter({
       codexHome,
       defaultProjectPath: PROJECT,
       sessionStorePath: storePath,
+      ownerId: DEAD_OWNER,
       spawnProcess: () => proc,
     });
     await adapter.loadSession('codex_ses_late');
     await adapter.sendMessage('codex_ses_late', '继续');
 
     // spawn 之后、thread.started 之前，另一个实例把身份换掉了
-    new CodexSessionStore({ filePath: storePath }).bindThreadId('codex_ses_late', 'th_other');
+    const other = new CodexSessionStore({ filePath: storePath });
+    other.bindThreadId('codex_ses_late', 'th_other', at(other, 'codex_ses_late'));
 
     (proc.stdout as PassThrough).write(
       `${JSON.stringify({ type: 'thread.started', thread_id: 'th_mine' })}\n`,
@@ -573,15 +626,19 @@ describe('Codex 线程恢复的真实性', () => {
   it('begin 成功后别人确认「线程回来了」，再崩溃，重启仍必须是 failed 而不是 idle', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    const store = new CodexSessionStore({ filePath: storePath });
     seedThreads(codexHome, ['th_other']); // th_gone 不在库里
-    new CodexSessionStore({ filePath: storePath }).save([
+    store.save([
       { ...STORE_BASE, id: 'codex_ses_confirm_race', threadId: 'th_gone', runState: 'started' },
     ]);
 
+    // ownerId 用异主机标识 = 这一轮的进程「已经不在了」（崩溃现场）：
+    // 于是别的实例的身份操作不再被「一轮执行在飞」挡着，confirm 真的会写下去
     const adapter = new CodexAdapter({
       codexHome,
       defaultProjectPath: PROJECT,
       sessionStorePath: storePath,
+      ownerId: DEAD_OWNER,
       spawnProcess: () => createSilentProcess(),
     });
     await adapter.loadSession('codex_ses_confirm_race');
@@ -590,10 +647,11 @@ describe('Codex 线程恢复的真实性', () => {
 
     // spawn 之后、thread.started 之前，另一个 Bridge 认为线程又回来了，把失效标记清掉
     expect(
-      new CodexSessionStore({ filePath: storePath }).confirmThreadPresent(
+      store.confirmThreadPresent(
         'codex_ses_confirm_race',
         'th_gone',
-      ),
+        at(store, 'codex_ses_confirm_race'),
+      ).outcome,
     ).toBe('updated');
     // 紧接着这一轮崩溃：进程一句话都没吐，thread.started 也从未落盘
 
@@ -613,27 +671,28 @@ describe('Codex 线程恢复的真实性', () => {
   it('两次决策都对不上磁盘身份时，宁可这一轮不发，也不开新线程', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
-    seedThreads(codexHome, ['th_other']);
+    seedThreads(codexHome, ['th_other']); // th_x 不在库里 → probe 是 missing
     new CodexSessionStore({ filePath: storePath }).save([
-      { ...STORE_BASE, id: 'codex_ses_churn', threadId: 'th_gone', runState: 'started' },
+      { ...STORE_BASE, id: 'codex_ses_churn', runState: 'started' },
     ]);
 
     let spawnCount = 0;
+    const proc = createManualProcess();
     const adapter = new CodexAdapter({
       codexHome,
       defaultProjectPath: PROJECT,
       sessionStorePath: storePath,
       spawnProcess: () => {
         spawnCount += 1;
-        return createFakeProcess('th_never');
+        return proc;
       },
     });
     const events: CanonicalAgentEvent[] = [];
     adapter.onEvent((event) => events.push(event));
-    await adapter.loadSession('codex_ses_churn'); // 内存里拿着 th_gone
 
-    // 别的实例把这条记录的身份改没了（内存不知道），于是每次决策都以 th_gone 作期望值、
-    // 又每次都被磁盘拒绝——决策连错两次
+    // 第一轮正常开跑：thread.started 让内存从此记着 th_x
+    await adapter.sendMessage('codex_ses_churn', '继续');
+    // 别的实例接管并重写了这条记录：threadId 没了，这一轮的 attempt 也易主
     writeFileSync(
       storePath,
       JSON.stringify({
@@ -642,13 +701,20 @@ describe('Codex 线程恢复的真实性', () => {
       }),
       'utf8',
     );
+    (proc.stdout as PassThrough).write(
+      `${JSON.stringify({ type: 'thread.started', thread_id: 'th_x' })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    proc.finish(0); // 这一轮的收尾换不回任何东西：attempt 已经不属于它
+    await adapter.waitForRun('codex_ses_churn');
 
+    // 决策想开新线程（th_x 确实没了，期望值取自内存里的 th_x），但磁盘上的 threadId
+    // 已经不是 th_x → identity-mismatch，两轮都没抢到 → 这一轮不发
     await expect(adapter.sendMessage('codex_ses_churn', '继续')).rejects.toThrow(
       /另一个 Nienie 实例/,
     );
-    // 开新线程只会得到一条「Codex 里有、手机端没有」的幽灵线程：thread.started 的 CAS
-    // 必然再次被拒，没人认领这个新线程
-    expect(spawnCount).toBe(0);
+    // 第二轮没有 spawn：绝不产生没人认领的新线程（幽灵线程）
+    expect(spawnCount).toBe(1);
     expect(
       events.filter((event) => event.type === 'error' && event.payload.code === 'RUN_FAILED'),
     ).toHaveLength(1);
@@ -690,13 +756,304 @@ describe('Codex 线程恢复的真实性', () => {
     // 写不进去就一点都不许改：内存若先变成 th_mine，磁盘还是 th_persisted，
     // 下一轮的决策又会以磁盘为准，两个身份来回抖动
     expect(peekThreadId(adapter, 'codex_ses_bindfail')).toBe('th_persisted');
-    expect(
-      new CodexSessionStore({ filePath: storePath }).readBinding('codex_ses_bindfail')?.threadId,
-    ).toBe('th_persisted');
+    const read = new CodexSessionStore({ filePath: storePath }).readBinding('codex_ses_bindfail');
+    expect(read.status).toBe('ok');
+    if (read.status === 'ok') expect(read.binding.threadId).toBe('th_persisted');
     // 但事件必须照常上报：用户不该因为「身份没记下来」就看不到这一轮的回答
     expect(
       events.some((event) => event.type === 'status' && event.payload.status === 'running'),
     ).toBe(true);
     rmSync(`${storePath}.lock`, { force: true });
+  });
+
+  it('resume 同一个 threadId：thread.started 后 runState 必须转成 started，重启不得恢复成 failed', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_same']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_same_id', threadId: 'th_same', runState: 'started' },
+    ]);
+
+    const calls: string[][] = [];
+    const proc = createManualProcess();
+    // ownerId 用异主机标识：若 runState 卡在 starting，重启会被判 failed——这正是要防的回归
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      ownerId: DEAD_OWNER,
+      spawnProcess: (args) => {
+        calls.push(args);
+        return proc;
+      },
+    });
+    await adapter.loadSession('codex_ses_same_id');
+    await adapter.sendMessage('codex_ses_same_id', '继续');
+
+    // thread.started 带的是同一个 id：没有换绑，但收尾写入必须把 runState 从 starting 转成 started。
+    // 断言必须赶在进程退出之前——退出收尾会兜底改写 runState，会把「没转成 started」的缺陷盖掉。
+    (proc.stdout as PassThrough).write(
+      `${JSON.stringify({ type: 'thread.started', thread_id: 'th_same' })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls[0]?.slice(0, 2)).toEqual(['exec', 'resume']);
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({ threadId: 'th_same', runState: 'started' });
+
+    // 正常完成的一轮：重启后是 idle，绝不是 failed（否则用户会以为消息没发出去再发一次）
+    proc.finish(0);
+    await adapter.waitForRun('codex_ses_same_id');
+    const restarted = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+    });
+    const statuses = new Map(
+      (await restarted.listSessions()).map((session) => [session.id, session.status]),
+    );
+    expect(statuses.get('codex_ses_same_id')).toBe('idle');
+  });
+
+  it('A begin 成功后 B confirm：A 迟到的 thread.started 不得借用 B 的修订号，也不能覆盖 B 的新状态', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_other']); // th_gone 不在库里
+    const store = new CodexSessionStore({ filePath: storePath });
+    store.save([
+      { ...STORE_BASE, id: 'codex_ses_steal', threadId: 'th_gone', runState: 'started' },
+    ]);
+    store.markThreadMissing('codex_ses_steal', 'th_gone', at(store, 'codex_ses_steal'));
+
+    let spawnCount = 0;
+    const proc = createManualProcess();
+    // ownerId 用异主机标识 = 这一轮「已经崩溃」，B 的身份操作不再被「在飞」保护挡住
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      ownerId: DEAD_OWNER,
+      spawnProcess: () => {
+        spawnCount += 1;
+        return proc;
+      },
+    });
+    await adapter.loadSession('codex_ses_steal');
+    // A begin 成功：attempt 与 revision 都是「开跑那一次」的
+    await adapter.sendMessage('codex_ses_steal', '继续');
+
+    // A 崩溃前，另一个 Bridge 确认 th_gone 又回来了：失效标记清除、修订号推进
+    const other = new CodexSessionStore({ filePath: storePath });
+    expect(
+      other.confirmThreadPresent('codex_ses_steal', 'th_gone', at(other, 'codex_ses_steal'))
+        .outcome,
+    ).toBe('updated');
+
+    // A 迟到的 thread.started：只能拿自己的 attempt+revision 交——修订号已过期，必须被拒
+    (proc.stdout as PassThrough).write(
+      `${JSON.stringify({ type: 'thread.started', thread_id: 'th_new' })}\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toContain('stale run');
+    // B 的新状态完好（不得被 A 覆盖），th_new 不被任何记录认领
+    const read = other.readBinding('codex_ses_steal');
+    expect(read.status).toBe('ok');
+    if (read.status === 'ok') {
+      expect(read.binding.threadId).toBe('th_gone');
+      expect(read.binding.threadMissing).toBeUndefined();
+      expect(read.binding.revision).toBe(2);
+    }
+    expect(peekThreadId(adapter, 'codex_ses_steal')).toBe('th_gone');
+    // A 也不许再开一个线程去「补」——那只会多出一条没人认领的幽灵线程
+    expect(spawnCount).toBe(1);
+    proc.finish(0);
+    await adapter.waitForRun('codex_ses_steal');
+  });
+
+  it('B confirm 清掉失效标记后，A 必须全量同步并 resume 原线程（不是开新线程）', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_back']);
+    const store = new CodexSessionStore({ filePath: storePath });
+    store.save([
+      { ...STORE_BASE, id: 'codex_ses_sync3', threadId: 'th_back', runState: 'started' },
+    ]);
+    store.markThreadMissing('codex_ses_sync3', 'th_back', at(store, 'codex_ses_sync3'));
+
+    const calls: string[][] = [];
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => {
+        calls.push(args);
+        return createFakeProcess('th_back');
+      },
+    });
+    await adapter.loadSession('codex_ses_sync3'); // 内存里带着 threadMissing=true
+
+    // 另一个 Bridge 确认线程回来了（磁盘清除标记）——A 还不知道
+    const other = new CodexSessionStore({ filePath: storePath });
+    expect(
+      other.confirmThreadPresent('codex_ses_sync3', 'th_back', at(other, 'codex_ses_sync3'))
+        .outcome,
+    ).toBe('updated');
+
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+    await adapter.sendMessage('codex_ses_sync3', '继续');
+    await adapter.waitForRun('codex_ses_sync3');
+
+    // 全量同步：磁盘上标记没了，内存必须跟着清（只增不减的单向同步会拿旧事实决策）
+    expect(peekThreadMissing(adapter, 'codex_ses_sync3')).toBe(false);
+    expect(calls[0]?.slice(0, 5)).toEqual([
+      'exec',
+      'resume',
+      '--json',
+      '--skip-git-repo-check',
+      'th_back',
+    ]);
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'THREAD_LOST'),
+    ).toHaveLength(0);
+  });
+
+  it('probe=unknown 时不得错误新建线程：磁盘已确认线程回来了就照旧 resume', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    // 压根没有 state 库 → probe 只能得出 unknown
+    const store = new CodexSessionStore({ filePath: storePath });
+    store.save([
+      { ...STORE_BASE, id: 'codex_ses_unk', threadId: 'th_back', runState: 'started' },
+    ]);
+    store.markThreadMissing('codex_ses_unk', 'th_back', at(store, 'codex_ses_unk'));
+
+    const calls: string[][] = [];
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => {
+        calls.push(args);
+        return createFakeProcess('th_back');
+      },
+    });
+    await adapter.loadSession('codex_ses_unk'); // 内存里带着 threadMissing=true
+
+    // 另一个 Bridge 确认线程回来了：磁盘事实优先于内存旧标记
+    const other = new CodexSessionStore({ filePath: storePath });
+    expect(
+      other.confirmThreadPresent('codex_ses_unk', 'th_back', at(other, 'codex_ses_unk')).outcome,
+    ).toBe('updated');
+
+    await adapter.sendMessage('codex_ses_unk', '继续');
+    await adapter.waitForRun('codex_ses_unk');
+
+    // unknown 不是 missing：不许拿旧标记把活线程判死、换新线程（那会丢掉用户的上下文）
+    expect(calls[0]?.slice(0, 5)).toEqual([
+      'exec',
+      'resume',
+      '--json',
+      '--skip-git-repo-check',
+      'th_back',
+    ]);
+  });
+
+  it('其他 Bridge 还活着时，重启不得判 failed；重试由新一轮接管；dispose 后磁盘内容干净', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_alive', threadId: 'th_live', runState: 'started' },
+    ]);
+
+    // 第一个 Bridge：begin 成功（runState=starting + 归属本进程），进程还挂着不退出
+    const first = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: () => createSilentProcess(),
+    });
+    await first.loadSession('codex_ses_alive');
+    await first.sendMessage('codex_ses_alive', '继续');
+
+    // 重启的 Bridge 看同一条记录：归属进程还活着 → 显示 running，绝不是 failed
+    const calls: string[][] = [];
+    const restarted = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => {
+        calls.push(args);
+        return createFakeProcess('th_live');
+      },
+    });
+    const statuses = new Map(
+      (await restarted.listSessions()).map((session) => [session.id, session.status]),
+    );
+    expect(statuses.get('codex_ses_alive')).toBe('running');
+
+    // 重试：新一轮接管（没有执行租约，旧 attempt 让位），跑完收尾正常落盘
+    await restarted.sendMessage('codex_ses_alive', '重试');
+    await restarted.waitForRun('codex_ses_alive');
+    expect(calls[0]?.slice(0, 2)).toEqual(['exec', 'resume']);
+
+    // dispose 后磁盘必须是干净、可读的终态（不是半截 starting、不留锁文件）
+    await restarted.dispose();
+    expect(existsSync(`${storePath}.lock`)).toBe(false);
+    const stored = new CodexSessionStore({ filePath: storePath }).load();
+    expect(stored.status).toBe('ok');
+    if (stored.status !== 'ok') return;
+    expect(stored.sessions[0]).toMatchObject({
+      threadId: 'th_live',
+      runState: 'started',
+      status: 'idle',
+    });
+  });
+
+  it('readBinding 读取失败不得降级成无 CAS：中止这一轮，恢复后照常能跑', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        version: 1,
+        sessions: [{ ...STORE_BASE, id: 'codex_ses_unread', threadId: 'th_live', runState: 'started' }],
+      }),
+      'utf8',
+    );
+
+    let spawnCount = 0;
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => {
+        spawnCount += 1;
+        return createFakeProcess('th_live');
+      },
+    });
+    await adapter.loadSession('codex_ses_unread');
+
+    // 索引临时读不动（磁盘故障 / 被人截断写了一半）——绝不能当「没有 CAS」裸跑
+    writeFileSync(storePath, '{ half-written', 'utf8');
+    await expect(adapter.sendMessage('codex_ses_unread', '继续')).rejects.toThrow(/身份读取失败/);
+    expect(spawnCount).toBe(0);
+
+    // 恢复后照常能写能跑（后续 Store 写入成功）
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        version: 1,
+        sessions: [{ ...STORE_BASE, id: 'codex_ses_unread', threadId: 'th_live', runState: 'started' }],
+      }),
+      'utf8',
+    );
+    await adapter.sendMessage('codex_ses_unread', '继续');
+    await adapter.waitForRun('codex_ses_unread');
+    expect(spawnCount).toBe(1);
   });
 });

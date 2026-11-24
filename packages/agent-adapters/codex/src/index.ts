@@ -1,7 +1,7 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
@@ -21,13 +21,30 @@ import type {
 import { CodexEventNormalizer, type CodexNormalizerOptions } from './normalizer.js';
 import {
   CodexSessionStore,
+  isRunOwnerAlive,
+  type CodexBeginRunResult,
+  type CodexBindingRead,
   type CodexSessionRunState,
-  type CodexStoredBinding,
   type CodexStoredSession,
 } from './session-store.js';
 
 export { CodexEventNormalizer, type CodexNormalizerOptions } from './normalizer.js';
-export { CodexSessionStore, type CodexStoredSession, type CodexSessionStoreOptions } from './session-store.js';
+export {
+  CodexSessionStore,
+  isRunOwnerAlive,
+  type CodexBeginRunResult,
+  type CodexBindingRead,
+  type CodexBindingResult,
+  type CodexCommitRunResult,
+  type CodexFinishRunResult,
+  type CodexSessionRunState,
+  type CodexSessionStoreLoad,
+  type CodexSessionStoreOptions,
+  type CodexSessionStoreQuarantine,
+  type CodexSetStatusResult,
+  type CodexStoredBinding,
+  type CodexStoredSession,
+} from './session-store.js';
 
 /** Nienie 自己创建的会话 id 前缀——只有这类会话需要 Bridge 自己持久化。 */
 const NIENIE_SESSION_ID_PREFIX = 'codex_ses_';
@@ -76,6 +93,14 @@ export type CodexAdapterOptions = CodexNormalizerOptions & {
    * 路径应由 Bridge / Electron 注入，适配器不依赖任何 UI 层。
    */
   sessionStorePath?: string | undefined;
+  /**
+   * 本实例的执行归属标识（写进 `runOwner`），默认 `${pid}@${hostname}`。
+   *
+   * 重启后的崩溃判定靠它区分「这一轮真的没人跑了」和「另一个 Bridge 还在跑」：
+   * 归属进程活着就不许把状态断言成 failed。测试注入一个异主机标识即可模拟
+   * 「上一个实例已经不在了」（跨主机无法验证存活，按没跑处理）。
+   */
+  ownerId?: string | undefined;
 };
 
 /**
@@ -116,6 +141,24 @@ type CodexSessionRecord = AgentSession & {
   bindingRevision?: number | undefined;
   /** 执行阶段：用于识别「spawn 后、threadId 落盘前」的崩溃窗口。 */
   runState?: CodexSessionRunState | undefined;
+  /** 本轮执行的 fencing token（`beginRun` 发的）：收尾写入靠它证明「就是那一轮」。 */
+  runAttempt?: string | undefined;
+  /** 本轮执行归属（`${pid}@${host}`），重启后据此判断「是不是真的没人跑了」。 */
+  runOwner?: string | undefined;
+};
+
+/**
+ * 一轮执行的上下文：`beginRun` 那次成功写入产生的标识，贯穿 spawn → thread.started → 退出。
+ *
+ * `attempt` 是 fencing token（收尾写入靠它证明「就是那一轮」）；
+ * `revision` 是**那次写入校验过**的身份修订号（换绑 CAS 用它）——两者都不能事后重新读盘取
+ * 「最新值」，那可能是别的实例刚推进的，认领它就等于借用了别人的 fencing token。
+ */
+type CodexRunContext = {
+  attempt: string;
+  revision: number;
+  /** thread.started 是否已经处理过：失败过一次就不再逐行重试写盘。 */
+  threadStartedHandled: boolean;
 };
 
 export class CodexAdapter implements AgentAdapter {
@@ -147,6 +190,8 @@ export class CodexAdapter implements AgentAdapter {
   private readonly sessionStore: CodexSessionStore | undefined;
   /** 落盘索引路径（只用于诊断信息，不参与读写）。 */
   private readonly sessionStorePath: string | undefined;
+  /** 本实例的执行归属标识，写进 `runOwner`（见 `CodexAdapterOptions.ownerId`）。 */
+  private readonly ownerId: string;
   private storedSessionsLoaded = false;
   /** 加载失败后的重试时间点（成功即清空），避免每次 listSessions 都打一次磁盘。 */
   private storedSessionsRetryAt = 0;
@@ -184,6 +229,7 @@ export class CodexAdapter implements AgentAdapter {
     this.discoverLocalHistory =
       options.discoverLocalHistory ?? (!options.spawnProcess && !options.detectVersion);
     this.sessionStorePath = options.sessionStorePath;
+    this.ownerId = options.ownerId ?? `${process.pid}@${hostname()}`;
     this.sessionStore = options.sessionStorePath
       ? new CodexSessionStore({ filePath: options.sessionStorePath })
       : undefined;
@@ -422,12 +468,14 @@ export class CodexAdapter implements AgentAdapter {
         agentId: 'codex',
         title: session.title,
         projectPath: session.projectPath,
-        status: restoreStatus(session.status, runState),
+        status: restoreStatus(session.status, runState, session.runOwner),
         runState,
         ...(session.threadMissing ? { threadMissing: true } : {}),
         ...(typeof session.bindingRevision === 'number'
           ? { bindingRevision: session.bindingRevision }
           : {}),
+        ...(session.runAttempt ? { runAttempt: session.runAttempt } : {}),
+        ...(session.runOwner ? { runOwner: session.runOwner } : {}),
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
       });
@@ -469,6 +517,71 @@ export class CodexAdapter implements AgentAdapter {
         `codex session store save failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       return false;
+    }
+  }
+
+  /**
+   * 一轮执行的收尾状态写回磁盘：**带 attempt 的 fencing 写入**（`finishRun`）。
+   *
+   * 迟到的旧执行会被 `stale-attempt` 挡住，改不了新一轮的执行阶段；而 `save()` 根本不写
+   * 执行状态，所以「恢复时在内存里判成 failed」绝不会污染共享索引。
+   * 不归本索引管的会话退回普通保存（纯内存逻辑）。
+   */
+  private persistRunOutcome(
+    sessionId: string,
+    record: CodexSessionRecord,
+    attempt: string | undefined,
+    patch: { status: AgentStatus; runState?: CodexSessionRunState | undefined },
+  ): void {
+    record.status = patch.status;
+    if (patch.runState) record.runState = patch.runState;
+    record.updatedAt = new Date().toISOString();
+    if (!this.sessionStore || !this.isOwnedSession(sessionId) || !attempt) {
+      this.persistOwnedSessions();
+      return;
+    }
+    try {
+      this.sessionStore.finishRun(
+        sessionId,
+        { attempt },
+        {
+          status: patch.status,
+          runState: patch.runState ?? record.runState,
+          updatedAt: record.updatedAt,
+        },
+      );
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `codex session run outcome persist failed for ${sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * 「这一轮根本没开始」的状态写入（例如启动前就被取消）。
+   *
+   * 走 `setStatus`：不带执行身份，但一轮执行在飞时会被拒绝——那一轮的状态由它自己的
+   * attempt 决定，不许被旁路改写。
+   */
+  private persistStatus(sessionId: string, record: CodexSessionRecord): void {
+    record.updatedAt = new Date().toISOString();
+    if (!this.sessionStore || !this.isOwnedSession(sessionId)) {
+      this.persistOwnedSessions();
+      return;
+    }
+    try {
+      this.sessionStore.setStatus(sessionId, {
+        status: record.status,
+        updatedAt: record.updatedAt,
+      });
+    } catch (error) {
+      this.emitDiagnosticWarning(
+        `codex session status persist failed for ${sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 
@@ -721,10 +834,13 @@ export class CodexAdapter implements AgentAdapter {
       throw new Error('会话已有运行中的任务，请等待完成或取消后再发送');
     }
     this.sessionLocks.add(sessionId);
-    let record: CodexSessionRecord;
+    let record!: CodexSessionRecord; // 确定赋值：try 首行即赋值；catch 里另有运行时守卫
     let proc: CodexProcessHandle;
-    /** 这一轮 spawn 之前磁盘上的身份修订号：后到的 `thread.started` 换绑时作为 CAS 的期望值。 */
-    let runStartRevision: number | undefined;
+    /**
+     * 这一轮的执行标识与身份修订号——都来自 `resolveThreadBinding` 里那次**成功的开跑写入**。
+     * 后续换绑 / 收尾以它们为期望值；绝不能事后重新读盘取「最新值」（那可能是别人的）。
+     */
+    let runStart: CodexRunContext | undefined;
     try {
       record = this.sessions.get(sessionId)!;
       if (!record) {
@@ -736,32 +852,20 @@ export class CodexAdapter implements AgentAdapter {
       if (this.cancelRequested.delete(sessionId)) {
         record.status = 'cancelled'; // F3-2：启动中取消也持久化 cancelled
         record.updatedAt = new Date().toISOString();
+        this.persistStatus(sessionId, record);
         this.sessionLocks.delete(sessionId);
         throw new Error('会话任务已取消');
       }
 
-      // 这一轮到底 resume 旧线程还是开新线程，全部由 resolveThreadBinding 决定。
-      // 它每次都以**磁盘上的权威绑定**为准，不用加载时那份可能已经过期的内存快照。
-      const { boundThreadId, lostThreadId } = this.resolveThreadBinding(sessionId, record);
+      // 这一轮到底 resume 旧线程还是开新线程，连同「这一轮已经开始」的落盘
+      //（runState=starting + attempt），全部由 resolveThreadBinding 一次完成：
+      // 那次原子写就是 spawn 的闸门，写不进去就不 spawn。
+      const { boundThreadId, lostThreadId, run } = this.resolveThreadBinding(sessionId, record);
       const args: string[] = boundThreadId
         ? ['exec', 'resume', '--json', '--skip-git-repo-check', boundThreadId, message]
         : ['exec', '--json', '--skip-git-repo-check', '-C', record.projectPath, message];
-
-      // P1-2 崩溃窗口：spawn 之前就先落盘 starting。否则进程起来、Codex 还没吐出
-      // thread.started 时电脑断电/崩溃，重启后这条记录仍是 never_started + 无 threadId，
-      // 会被当成「没跑过」的空会话——用户以为消息没发出去，其实 Codex 侧可能已经在跑。
-      // 先写 starting，重启时才能识别为「被中断」（见 restoreStatus）。
-      // 这一笔是安全边界本身：没落盘成功就不许 spawn，否则整个保证失效。
-      const previousRunState = record.runState;
-      record.runState = 'starting';
+      runStart = run;
       record.updatedAt = new Date().toISOString();
-      if (!this.persistOwnedSessions()) {
-        record.runState = previousRunState;
-        record.status = 'failed';
-        record.updatedAt = new Date().toISOString();
-        this.emitRunError(sessionId, '会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
-        throw new Error('会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
-      }
 
       // 提示必须发在持久化**成功之后**：落盘失败时根本没 spawn，却先告诉用户「将新建线程」
       // 就是在讲未经证实的事。文案也只承诺「尝试」——新线程能不能起来要等 spawn 结果。
@@ -773,14 +877,26 @@ export class CodexAdapter implements AgentAdapter {
         );
       }
 
-      // resolveThreadBinding 内部可能刚改过磁盘身份（判失效 / 解除失效），修订号要重读一次，
-      // 否则这一轮的 CAS 基准是过期的，正常的 thread.started 会被错误拒绝。
-      this.refreshRevision(sessionId, record);
-      runStartRevision = record.bindingRevision;
       proc = this.spawnProcessImpl(args, { cwd: record.projectPath });
       this.activeProcesses.set(sessionId, proc);
     } catch (error) {
       this.sessionLocks.delete(sessionId); // spawn 前失败释放锁（无进程存活）
+      // 这一轮没开起来：内存终态必须落成 failed，不能停在「发送中」——用户会以为消息还在路上。
+      // 取消路径已经写好 cancelled，这里不覆盖。落盘尽力而为（锁被占时写不进去就只改内存）。
+      if (record && record.status !== 'cancelled') {
+        record.status = 'failed';
+        if (runStart) {
+          // beginRun 已落盘（有 attempt）：带 fencing 收掉 starting，别留给崩溃判定
+          if (!record.threadId) record.runState = 'never_started';
+          this.persistRunOutcome(sessionId, record, runStart.attempt, {
+            status: 'failed',
+            runState: record.runState,
+          });
+        } else {
+          // beginRun 都没成功：这一轮没有执行身份，走无 fencing 的状态写入
+          this.persistStatus(sessionId, record);
+        }
+      }
       throw error;
     }
 
@@ -807,13 +923,14 @@ export class CodexAdapter implements AgentAdapter {
       this.sessionLocks.delete(sessionId);
       // F3-2：spawn 确认前被取消 → cancelled；否则 failed
       const wasCancelled = this.cancelRequested.delete(sessionId);
-      record.status = wasCancelled ? 'cancelled' : 'failed';
       // spawn 都没成功 = Codex 那一侧没起过进程，runState 要退回去；
       // 停在 'starting' 会让下次启动把它当成「跑一半被打断」，语义不对。
       if (!record.threadId) record.runState = 'never_started';
-      record.updatedAt = new Date().toISOString();
       // 内存里改了终态就必须落盘，否则重启后磁盘上还是 starting/running
-      this.persistOwnedSessions();
+      this.persistRunOutcome(sessionId, record, runStart?.attempt, {
+        status: wasCancelled ? 'cancelled' : 'failed',
+        runState: record.runState,
+      });
       if (!wasCancelled) {
         this.emitRunError(
           sessionId,
@@ -825,8 +942,10 @@ export class CodexAdapter implements AgentAdapter {
 
     if (this.cancelRequested.has(sessionId)) {
       // F3-2：spawn 确认前已被取消——立即终止刚确认的进程，终态 cancelled，锁等真实退出释放
-      record.status = 'cancelled';
-      record.updatedAt = new Date().toISOString();
+      this.persistRunOutcome(sessionId, record, runStart?.attempt, {
+        status: 'cancelled',
+        runState: record.runState,
+      });
       proc.kill();
     } else {
       record.status = 'running';
@@ -844,15 +963,17 @@ export class CodexAdapter implements AgentAdapter {
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
-          this.processJsonLine(sessionId, record!, line, runStartRevision);
+          this.processJsonLine(sessionId, record!, line, runStart);
         }
       });
 
       proc.onError((error) => {
         // F3-1：运行期失败必须持久化 failed（不能只改本地状态/发事件），
         // 且不能把 activeProcesses 删除伪装成取消路径——真正释放等 onExit
-        record!.status = 'failed';
-        record!.updatedAt = new Date().toISOString();
+        this.persistRunOutcome(sessionId, record!, runStart?.attempt, {
+          status: 'failed',
+          runState: record!.runState,
+        });
         this.emitRunError(
           sessionId,
           `Codex 运行失败: ${error instanceof Error ? error.message : String(error)}`,
@@ -862,7 +983,7 @@ export class CodexAdapter implements AgentAdapter {
 
       proc.onExit((code) => {
         if (buffer.trim().length > 0) {
-          this.processJsonLine(sessionId, record!, buffer, runStartRevision);
+          this.processJsonLine(sessionId, record!, buffer, runStart);
           buffer = '';
         }
         this.activeProcesses.delete(sessionId);
@@ -870,11 +991,15 @@ export class CodexAdapter implements AgentAdapter {
         this.sessionLocks.delete(sessionId);
         const wasCancelled =
           this.cancelRequested.delete(sessionId) || record!.status === 'cancelled';
+        // 一轮跑完，`runState` 不能停在 `starting`——那是「spawn 了、thread.started 没落盘」的
+        // 崩溃窗口标记，进程都退出了还留着它，重启后会把正常结束的一轮判成 failed。
+        const endedRunState: CodexSessionRunState = record!.threadId ? 'started' : 'never_started';
         // R3-3/F3：非零退出码或信号终止（code=null，非主动取消）按失败处理并上报
         if (!wasCancelled && record!.status !== 'failed' && (code === null || code !== 0)) {
-          record!.status = 'failed';
-          record!.updatedAt = new Date().toISOString();
-          this.persistOwnedSessions();
+          this.persistRunOutcome(sessionId, record!, runStart?.attempt, {
+            status: 'failed',
+            runState: endedRunState,
+          });
           this.emitRunError(
             sessionId,
             code === null ? 'Codex 进程被信号终止' : `Codex 异常退出（退出码 ${code}）`,
@@ -884,13 +1009,10 @@ export class CodexAdapter implements AgentAdapter {
         }
         if (!wasCancelled && record!.status !== 'failed') {
           const normStatus = this.normalizer.getSessionStatus(sessionId);
-          if (normStatus) {
-            record!.status = normStatus;
-          } else if (record!.status === 'running') {
-            record!.status = 'idle';
-          }
-          record!.updatedAt = new Date().toISOString();
-          this.persistOwnedSessions();
+          this.persistRunOutcome(sessionId, record!, runStart?.attempt, {
+            status: normStatus ?? (record!.status === 'running' ? 'idle' : record!.status),
+            runState: endedRunState,
+          });
         }
         resolve();
       });
@@ -987,87 +1109,127 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
-   * 决定这一轮到底 resume 旧线程还是开新线程。
+   * 决定这一轮 resume 旧线程还是开新线程，并把「这一轮已经开始」原子写下去。
    *
-   * 每次都以**磁盘上的权威绑定**为准（另一个 Bridge 可能刚把它改过），并且对 store 显式操作的
-   * 三态结果分别处理：
-   * - `updated` / `unchanged` → 继续；
-   * - `mismatch` → 别人已经换绑，本实例的决策过时：重读磁盘、重新判断（最多两轮）；
-   * - `not-found` / 抛错 → 这一轮中止（写不进身份，就别 spawn：崩溃窗口的重启判定会失去依据）。
+   * 两件事必须在同一个函数里完成，因为它们的 CAS 基准要来自**同一次成功的决策**：
+   * 身份决策（probe + 显式身份操作）给出期望修订号，`beginRun` / `beginNewThreadFromMissing`
+   * 用它做 CAS 并返回**本次写入产生的** `attempt` 与 `revision`。之后的换绑就以它们为期望值。
    *
-   * @returns 要 resume 的 threadId（没有就开新线程）+ 需要提示用户的失效线程 id
+   * 绝不能事后重新读盘拿「最新 revision」当基准：那可能是别的实例刚推进的，
+   * 认领它就等于借用了别人的 fencing token——过期执行反过来覆盖了别人的新状态。
+   *
+   * 决策依据一律是磁盘上的权威绑定（`readBinding` 三态）：
+   * - `ok` → **全量**同步进内存（`threadId` / `threadMissing` / `bindingRevision`，包括「磁盘上已经没有」）。
+   *   只许 false→true 的单向同步会让本实例拿着别人最新的修订号、却用自己旧的失效事实去决策；
+   * - `absent` → 记录还没落盘（全新会话）：以内存为准，修订号按 0；
+   * - `unreadable` → **中止这一轮**：拿一份猜出来的身份去换绑就是绕过 CAS，读取失败不得降级成无 CAS。
+   *
+   * 决策与开跑之间被别人抢先改身份（`mismatch` / `stale-revision` / `in-flight`）→ 重读重判，
+   * 最多两轮；两轮都没抢到就**不发这一轮**。新线程就算起来了，它的 `thread.started` 也一定会被
+   * CAS 拒绝，结果是 Codex 侧多出一条没有任何记录指向它的线程——正是最初那类幽灵会话。
    */
-  private resolveThreadBinding(
-    sessionId: string,
-    record: CodexSessionRecord,
-  ): { boundThreadId: string | undefined; lostThreadId: string | undefined } {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      this.syncBindingFromDisk(sessionId, record);
+  private resolveThreadBinding(sessionId: string, record: CodexSessionRecord): {
+    boundThreadId: string | undefined;
+    lostThreadId: string | undefined;
+    run: CodexRunContext;
+  } {
+    for (let round = 0; round < 2; round += 1) {
+      const disk = this.readDiskBinding(sessionId);
+      if (disk.status === 'unreadable') {
+        this.emitRunError(sessionId, '会话身份读取失败，未启动 Codex 任务，请检查本地存储');
+        throw new Error('会话身份读取失败，未启动 Codex 任务，请检查本地存储');
+      }
+      if (disk.status === 'ok') {
+        record.threadId = disk.binding.threadId;
+        record.threadMissing = disk.binding.threadMissing === true;
+        record.bindingRevision = disk.binding.revision;
+      } else {
+        record.bindingRevision = 0;
+      }
+
       const knownMissing = record.threadMissing === true;
       const bound = record.threadId ?? this.normalizer.getThreadId(sessionId);
+      const revision = record.bindingRevision ?? 0;
+
+      /** 这一轮的决策：要不要 resume 哪个线程 + 哪个 id 已确认失效（要连同 starting 一起落盘）。 */
+      let decision: {
+        boundThreadId: string | undefined;
+        lostThreadId: string | undefined;
+        markMissingOf: string | undefined;
+      };
+
       if (!bound) {
-        record.runState = knownMissing ? 'never_started' : record.runState;
-        return { boundThreadId: undefined, lostThreadId: undefined };
+        decision = { boundThreadId: undefined, lostThreadId: undefined, markMissingOf: undefined };
+      } else {
+        const probe = this.probeThread(bound);
+        if (probe === 'exists') {
+          if (knownMissing) {
+            // 反向：线程又回来了（用户在 Codex 侧重新同步 / 换回了原来的库）。
+            // 之前的设计「不缓存『不存在』」就是为了这一天，所以这里必须真的恢复绑定，
+            // 否则标记会一直是 true、每次发消息都重复「换新线程」。
+            const restored = this.clearThreadMissing(sessionId, bound, revision);
+            if (restored.kind === 'stale') continue; // 别人先改了身份 / 另一轮正在飞：重读磁盘再来
+            if (restored.kind === 'ok') {
+              record.threadMissing = false;
+              record.bindingRevision = restored.revision;
+              this.emitDiagnosticWarning(
+                `codex thread ${bound} is back; resuming it for ${sessionId}`,
+              );
+            }
+          }
+          decision = { boundThreadId: bound, lostThreadId: undefined, markMissingOf: undefined };
+        } else if (probe === 'missing') {
+          // 一次原子转换：失效标记 + starting + attempt 在同一个临界区里写下去。
+          // 分两次写会在中间释放锁：另一个实例可以插进来清掉标记，磁盘就只剩下
+          // {threadId: 旧id, runState: starting, 无标记} —— 那正是「恢复成 idle」的配方。
+          decision = { boundThreadId: undefined, lostThreadId: bound, markMissingOf: bound };
+        } else {
+          // unknown：查询失败。已确认失效过 → 持久事实优先，别再拿死 id 去试（但不重复发提示）；
+          // 没失效过 → fail-open 照旧 resume，交给 Codex 自己判断。
+          if (knownMissing) {
+            this.emitDiagnosticWarning(
+              `codex thread ${bound} is known-missing but re-check failed; keeping degraded binding for ${sessionId}`,
+            );
+          }
+          decision = {
+            boundThreadId: knownMissing ? undefined : bound,
+            lostThreadId: undefined,
+            markMissingOf: undefined,
+          };
+        }
       }
 
-      const probe = this.probeThread(bound);
-      if (probe === 'exists') {
-        if (!knownMissing) return { boundThreadId: bound, lostThreadId: undefined };
-        // 反向：线程又回来了（用户在 Codex 侧重新同步 / 换回了原来的库）。
-        // 之前的设计「不缓存『不存在』」就是为了这一天，所以这里必须真的恢复绑定，
-        // 否则标记会一直是 true、每次发消息都重复「换新线程」。
-        const restored = this.clearThreadMissing(sessionId, bound, record.bindingRevision);
-        if (restored === 'stale') continue; // 别人先改了身份：重读磁盘再来
-        if (restored === 'ok') {
-          record.threadMissing = false;
-          // 磁盘上的修订号刚被这次解除标记 +1：不同步回内存，本轮 spawn 之后的换绑 CAS
-          // 会拿旧修订号去比对，正常的 thread.started 反而会被判成「别的实例抢先了」
-          this.refreshRevision(sessionId, record);
-          this.emitDiagnosticWarning(`codex thread ${bound} is back; resuming it for ${sessionId}`);
-        }
-        return { boundThreadId: bound, lostThreadId: undefined };
+      // 开跑闸门：原子写 starting + attempt（写不进去就不 spawn——崩溃窗口的重启判定会失去依据）
+      const begun = this.beginRun(sessionId, record.bindingRevision ?? revision, decision.markMissingOf);
+      if (begun === 'stale') continue;
+      if (begun === 'failed') {
+        this.emitRunError(sessionId, '会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
+        throw new Error('会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
       }
-
-      if (probe === 'missing') {
-        // 一次原子转换：失效标记 + starting + updatedAt 在同一个临界区里写下去。
-        // 分两次写会在中间释放锁：另一个实例可以插进来清掉标记，磁盘就只剩下
-        // {threadId: 旧id, runState: starting, 无标记} —— 崩溃后重启会被恢复成 idle，
-        // 恰好破掉崩溃窗口的保证。
-        const begun = this.beginNewThreadFromMissing(sessionId, bound, record.bindingRevision);
-        if (begun === 'stale') continue; // 别人抢先换绑：重读磁盘再判断
-        if (begun === 'failed') {
-          this.emitRunError(sessionId, '会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
-          throw new Error('会话状态持久化失败，未启动 Codex 任务，请检查本地存储');
-        }
+      // 内存跟进（磁盘已接受）：starting + 本轮的 attempt/revision 一起记下来
+      record.runState = 'starting';
+      record.runAttempt = begun.attempt;
+      record.bindingRevision = begun.revision;
+      if (decision.markMissingOf) {
         // 保留 threadId 作「最后已知身份」，只打标记：删掉它会被 store 的「只增不减」合并回来
         record.threadMissing = true;
-        record.runState = 'starting';
-        // 原子转换把修订号 +1 了：这一轮后续的换绑 CAS 必须基于新值
-        this.refreshRevision(sessionId, record);
         this.emitDiagnosticWarning(
-          `codex thread ${bound} no longer exists; starting a new thread for ${sessionId}`,
+          `codex thread ${decision.markMissingOf} no longer exists; starting a new thread for ${sessionId}`,
         );
-        return { boundThreadId: undefined, lostThreadId: bound };
       }
-
-      // unknown：查询失败。已确认失效过 → 持久事实优先，别再拿死 id 去试（但不重复发提示）；
-      // 没失效过 → fail-open 照旧 resume，交给 Codex 自己判断。
-      if (knownMissing) {
-        record.runState = 'never_started';
-        this.emitDiagnosticWarning(
-          `codex thread ${bound} is known-missing but re-check failed; keeping degraded binding for ${sessionId}`,
-        );
-        return { boundThreadId: undefined, lostThreadId: undefined };
-      }
-      return { boundThreadId: bound, lostThreadId: undefined };
+      return {
+        boundThreadId: decision.boundThreadId,
+        lostThreadId: decision.lostThreadId,
+        run: { attempt: begun.attempt, revision: begun.revision, threadStartedHandled: false },
+      };
     }
 
     // 两轮都被人抢先改身份：说明另一个实例正在主动管理这个会话。
     //
-    // 这里**不发**这一轮。理由是上面两个分支的同一个教训：新线程就算起来了，它的
-    // `thread.started` 也一定会被 CAS 拒绝（修订号又变了），结果是 Codex 侧多出一个没有任何
-    // 记录指向它的线程——正是最初那类「手机端看不见、Codex 里却在」的幽灵会话。
-    // 而且两个 Bridge 同时给同一个会话开线程本身就不是「继续」，是分叉。
+    // 这里**不发**这一轮。新线程就算起来了，它的 `thread.started` 也一定会被 CAS 拒绝
+    // （修订号又变了），结果是 Codex 侧多出一个没有任何记录指向它的线程——正是最初那类
+    // 「手机端看不见、Codex 里却在」的幽灵会话。而且两个 Bridge 同时给同一个会话开线程
+    // 本身就不是「继续」，是分叉。
     this.emitDiagnosticWarning(
       `codex session binding kept changing for ${sessionId}; refusing to start a run`,
     );
@@ -1075,58 +1237,52 @@ export class CodexAdapter implements AgentAdapter {
     throw new Error('会话身份正在被另一个 Nienie 实例修改，本次未启动 Codex 任务');
   }
 
-  /** 把磁盘上的权威身份同步进内存记录（磁盘身份只由显式操作改写，不会比内存旧）。 */
-  private syncBindingFromDisk(sessionId: string, record: CodexSessionRecord): void {
-    const diskBinding = this.readDiskBinding(sessionId);
-    if (!diskBinding) return;
-    if (diskBinding.threadId && diskBinding.threadId !== record.threadId) {
-      record.threadId = diskBinding.threadId;
-    }
-    if (diskBinding.threadMissing === true) record.threadMissing = true;
-    record.bindingRevision = diskBinding.revision;
-  }
-
   /**
-   * 只对齐修订号：显式操作成功后磁盘上的修订号已经变了，内存里的旧值会让**下一次** CAS
-   * 拿一个注定失败的期望值去比对（把正常的换绑当成「别的实例抢先了」）。
-   */
-  private refreshRevision(sessionId: string, record: CodexSessionRecord): void {
-    const diskBinding = this.readDiskBinding(sessionId);
-    if (diskBinding) record.bindingRevision = diskBinding.revision;
-  }
-
-  /**
-   * 「已确认失效 → 开新线程」的原子转换（见 `store.beginNewThreadFromMissing`）。
+   * 开跑闸门：原子写 `runState='starting'` + `runAttempt` + `runOwner`。
    *
-   * - `ok`：磁盘已经是 `{threadMissing: true, runState: 'starting'}`，可以继续；
-   * - `stale`：`identity-mismatch`——别人抢先换绑，这条失效事实过时，调用方应重读磁盘；
-   * - `failed`：`not-found`（盘上没有这条记录）或抛错——写不进去就别 spawn，
-   *   否则「崩溃后恢复成 failed」的保证没有依据。
+   * `markMissingOf` 非空时用 `beginNewThreadFromMissing`（「标记失效 + starting」一次写完）。
+   * 返回的 `attempt` / `revision` 是**本次写入产生的**，后续换绑、收尾都以它们为期望值。
+   *
+   * `stale`：别人在决策与开跑之间改了身份——调用方重读磁盘重判；
+   * `failed`：盘上没有这条记录 / 写不进去——调用方中止这一轮。
    */
-  private beginNewThreadFromMissing(
+  private beginRun(
     sessionId: string,
-    expectedThreadId: string,
-    expectedRevision?: number,
-  ): 'ok' | 'stale' | 'failed' {
-    if (!this.sessionStore) return 'ok';
+    expectedRevision: number,
+    markMissingOf: string | undefined,
+  ): { attempt: string; revision: number } | 'stale' | 'failed' {
+    if (!this.sessionStore || !this.isOwnedSession(sessionId)) {
+      // 不归本索引管的会话（Codex 原生线程 / 没配持久化）：纯内存逻辑，没有 CAS 基准
+      return { attempt: `memory-${randomUUID()}`, revision: expectedRevision };
+    }
     try {
-      const outcome = this.sessionStore.beginNewThreadFromMissing(
-        sessionId,
-        expectedThreadId,
-        new Date().toISOString(),
-        expectedRevision,
-      );
-      if (outcome === 'identity-mismatch' || outcome === 'stale-revision') return 'stale';
-      if (outcome === 'not-found') {
+      const result: CodexBeginRunResult = markMissingOf
+        ? this.sessionStore.beginNewThreadFromMissing(
+            sessionId,
+            markMissingOf,
+            { revision: expectedRevision },
+            new Date().toISOString(),
+            this.ownerId,
+          )
+        : this.sessionStore.beginRun(
+            sessionId,
+            { revision: expectedRevision },
+            new Date().toISOString(),
+            this.ownerId,
+          );
+      if (result.outcome === 'started') {
+        return { attempt: result.attempt, revision: result.revision };
+      }
+      if (result.outcome === 'not-found') {
         this.emitDiagnosticWarning(
           `codex session ${sessionId} is not in ${this.sessionStorePath}; refusing to start a run`,
         );
         return 'failed';
       }
-      return 'ok';
+      return 'stale'; // stale-revision / identity-mismatch：别人的变更比这次决策新
     } catch (error) {
       this.emitDiagnosticWarning(
-        `codex session begin-new-thread failed for ${sessionId}: ${
+        `codex session begin-run failed for ${sessionId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -1135,47 +1291,46 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   /**
-   * `thread.started` 到达后的换绑：CAS + 失败可见。
+   * `thread.started` 到达后的收尾：**换绑 + `runState='started'` 一次写完**（带 attempt 的 fencing）。
    *
-   * `runStartRevision` 是这一轮 spawn 之前磁盘上的身份修订号。磁盘已经不是它了，说明另一个
-   * 实例在这期间改过身份（换绑、判失效、判恢复都算），这次 `thread.started` 属于**过期的执行**
-   * ——不能覆盖磁盘上的新身份。
-   *
-   * 为什么比较修订号而不是 `threadId`：线程 `missing → 恢复 → 又 missing` 之后 id 会回到旧样子，
-   * 只比 id 会把一份过时的认识当成「没变过」，于是延迟到达的旧 `thread.started` 仍然能覆盖磁盘。
-   *
-   * 返回是否接受了这次换绑（拒绝时不改内存，磁盘继续作为权威）。
+   * - `committed`：磁盘接受了这次收尾，携带新的身份修订号（换绑发生时会 +1）；
+   * - `rejected`：这一轮已经过期（attempt 被别的执行接管 / 修订号不是开跑那次的）——
+   *   **内存身份不跟着变**，磁盘继续作为权威；
+   * - `failed`：写盘失败（锁被占等），可以留到下一行 JSON 再试一次。
    */
-  private bindNewThread(
+  private commitThreadStarted(
     sessionId: string,
     threadId: string,
-    runStartRevision: number | undefined,
-  ): boolean {
-    if (!this.sessionStore) return true;
+    runStart: CodexRunContext,
+  ): { kind: 'committed'; revision: number } | { kind: 'rejected' } | { kind: 'failed' } {
+    if (!this.sessionStore || !this.isOwnedSession(sessionId)) {
+      return { kind: 'committed', revision: runStart.revision };
+    }
     try {
-      const outcome = this.sessionStore.bindThreadId(
+      const result = this.sessionStore.commitThreadStarted(
         sessionId,
+        { attempt: runStart.attempt, revision: runStart.revision },
         threadId,
-        runStartRevision === undefined ? undefined : { revision: runStartRevision },
+        new Date().toISOString(),
       );
-      if (outcome === 'mismatch') {
-        this.emitDiagnosticWarning(
-          `codex thread ${threadId} arrived for a stale run of ${sessionId}; disk binding wins`,
-        );
-        return false;
+      if (result.outcome === 'committed') {
+        return { kind: 'committed', revision: result.revision };
       }
-      return true;
+      this.emitDiagnosticWarning(
+        result.outcome === 'stale-attempt'
+          ? `codex thread ${threadId} arrived for a stale run of ${sessionId}; disk state wins`
+          : `codex thread ${threadId} arrived for a stale run of ${sessionId}; disk binding wins`,
+      );
+      return { kind: 'rejected' };
     } catch (error) {
       // 落盘失败不阻断这一轮（事件照常上报），但**内存身份不跟着变**：
-      // 磁盘写不进去时，内存里改成新 id 就变成「内存是新的、磁盘是旧的」，
-      // 下一轮 resolveThreadBinding 又以磁盘为准，来回抖动没有终点。
-      // 保持以磁盘为唯一权威：这一轮按旧身份跑完，下一轮再看。
+      // 磁盘写不进去时，内存里改成新 id 就变成「内存是新的、磁盘是旧的」，来回抖动没有终点。
       this.emitDiagnosticWarning(
         `codex session bind failed for ${sessionId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return false;
+      return { kind: 'failed' };
     }
   }
 
@@ -1183,24 +1338,29 @@ export class CodexAdapter implements AgentAdapter {
    * 线程重新出现后恢复绑定：清掉 `threadMissing`，**必须**走 store 的显式操作——
    * `save()` 不允许清除这条否定事实（否则另一个实例的旧快照会把它覆盖掉）。
    *
-   * `unchanged` 也算恢复：磁盘上本来就没有标记（可能刚被别的实例清掉），旧的是内存快照。
-   * `not-found` 同样放行——记录不在盘上时由随后的 save 建，内存里的清除不会被写回去。
-   * 只有 `mismatch`（磁盘已绑到别的线程）返回 `stale`，让调用方重读磁盘重新判断。
+   * `ok` 携带解除之后的修订号（它是下一次 CAS 的基准）；`stale` 是 `mismatch` / `in-flight`
+   * （别人已经换绑、或另一轮执行正在飞），调用方重读磁盘重新判断。
    */
   private clearThreadMissing(
     sessionId: string,
     threadId: string,
-    expectedRevision?: number,
-  ): 'ok' | 'stale' | 'failed' {
-    if (!this.sessionStore) return 'ok';
+    expectedRevision: number,
+  ): { kind: 'ok'; revision: number } | { kind: 'stale' } | { kind: 'failed' } {
+    if (!this.sessionStore || !this.isOwnedSession(sessionId)) {
+      return { kind: 'ok', revision: expectedRevision };
+    }
     try {
-      const outcome = this.sessionStore.confirmThreadPresent(
-        sessionId,
-        threadId,
-        expectedRevision === undefined ? undefined : { revision: expectedRevision },
-      );
-      if (outcome === 'mismatch') return 'stale';
-      return 'ok';
+      const outcome = this.sessionStore.confirmThreadPresent(sessionId, threadId, {
+        revision: expectedRevision,
+      });
+      if (outcome.outcome === 'updated' || outcome.outcome === 'unchanged') {
+        return { kind: 'ok', revision: outcome.revision ?? expectedRevision };
+      }
+      if (outcome.outcome === 'mismatch' || outcome.outcome === 'in-flight') {
+        return { kind: 'stale' };
+      }
+      // not-found：记录不在盘上（会被截断/重写）。不假装恢复成功，交给下一轮的 beginRun 判定
+      return { kind: 'failed' };
     } catch (error) {
       this.emitDiagnosticWarning(
         `codex session thread restore failed for ${sessionId}: ${
@@ -1208,18 +1368,23 @@ export class CodexAdapter implements AgentAdapter {
         }`,
       );
       // 清不掉标记不算致命：这一轮仍然 resume（线程确实存在），下一轮会再试
-      return 'failed';
+      return { kind: 'failed' };
     }
   }
 
-  /** 读磁盘上的权威绑定；读不到返回 undefined（调用方退回内存快照）。 */
-  private readDiskBinding(sessionId: string): CodexStoredBinding | undefined {
-    if (!this.sessionStore) return undefined;
+  /** 读磁盘上的权威绑定；`absent` / `unreadable` 的区分见 `CodexBindingRead`。 */
+  private readDiskBinding(sessionId: string): CodexBindingRead {
+    if (!this.sessionStore) return { status: 'absent' };
     try {
       return this.sessionStore.readBinding(sessionId);
     } catch {
-      return undefined;
+      return { status: 'unreadable' };
     }
+  }
+
+  /** 只有 Nienie 自建会话归本索引管；Codex 原生线程走纯内存逻辑。 */
+  private isOwnedSession(sessionId: string): boolean {
+    return sessionId.startsWith(NIENIE_SESSION_ID_PREFIX);
   }
 
   /// 等待某会话当前运行完成（测试与诊断用；sendMessage 本身不等待执行）
@@ -1233,9 +1398,10 @@ export class CodexAdapter implements AgentAdapter {
     // F3-2：启动中（spawn 确认前）或运行中被取消——都持久化 cancelled
     const record = this.sessions.get(sessionId);
     if (record && record.status !== 'failed') {
-      record.status = 'cancelled';
-      record.updatedAt = new Date().toISOString();
-      this.persistOwnedSessions();
+      this.persistRunOutcome(sessionId, record, record.runAttempt, {
+        status: 'cancelled',
+        runState: record.runState,
+      });
     }
     const proc = this.activeProcesses.get(sessionId);
     if (proc) {
@@ -1261,7 +1427,7 @@ export class CodexAdapter implements AgentAdapter {
     sessionId: string,
     record: CodexSessionRecord,
     line: string,
-    runStartRevision: number | undefined,
+    runStart: CodexRunContext | undefined,
   ): void {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -1275,18 +1441,29 @@ export class CodexAdapter implements AgentAdapter {
 
     const events = this.normalizer.normalize(sessionId, parsed);
     const threadId = this.normalizer.getThreadId(sessionId);
-    if (threadId && record.threadId !== threadId) {
-      // 身份变更**先落盘、后改内存**：换绑是 CAS（以这一轮开始时认识的身份为期望值），
-      // 只有磁盘接受才更新内存。反过来（先改内存再落盘）在换绑被拒时会留下
-      // 「内存是新身份、磁盘是旧身份」的分裂状态，后续 save 又按磁盘为准，越走越乱。
-      const accepted = this.bindNewThread(sessionId, threadId, runStartRevision);
-      if (accepted) {
+    // `thread.started` 有两种含义：换绑到新线程，或只是确认了本轮 resume 的旧线程。
+    // 两条路都必须走同一次收尾写入（换绑 + `runState='started'`）——只在「id 变了」时更新的话，
+    // resume 同一个 id 的 `runState` 会永远停在 `starting`，重启后被崩溃判定判成 failed：
+    // 一次正常完成的 resume 就这么变成「失败」。
+    if (
+      threadId &&
+      runStart &&
+      !runStart.threadStartedHandled &&
+      (record.threadId !== threadId || record.runState !== 'started')
+    ) {
+      // 先落盘、后改内存：磁盘拒绝（过期的执行 / 修订号过期）时不许推进内存身份。
+      // 反过来（先改内存再落盘）被拒时会留下「内存是新身份、磁盘是旧身份」的分裂状态。
+      const result = this.commitThreadStarted(sessionId, threadId, runStart);
+      if (result.kind !== 'failed') {
+        // 写成功只试一次；被拒（这一轮已经过期）也只试一次——重试只会重复写盘
+        runStart.threadStartedHandled = true;
+      }
+      if (result.kind === 'committed') {
         record.threadId = threadId;
         // 绑定到新线程 = 失效标记解除（旧线程的 id 已经被更可信的新身份取代）
         record.threadMissing = false;
         record.runState = 'started';
-        // 换绑把磁盘修订号 +1 了：下一次 CAS 要基于新值（否则会把正常换绑判成过期执行）
-        this.refreshRevision(sessionId, record);
+        record.bindingRevision = result.revision;
         // 本进程亲眼看到 thread.started：它就是存在的，不必再查库（见 probeThread）
         this.verifiedThreads.add(threadId);
         // 真实 threadId 一到就落盘：重启后靠它 resume + 回放历史
@@ -1330,17 +1507,26 @@ function restoreRunState(session: CodexStoredSession): CodexSessionRunState {
  * - 但「spawn 已发生、threadId 还没落盘」的会话是**中断**：再发消息会新建一个线程、
  *   悄悄丢掉原上下文，所以标记为 `failed`，让手机端看到「这一轮被打断了」。
  */
-function restoreStatus(status: AgentStatus, runState: CodexSessionRunState): AgentStatus {
+function restoreStatus(
+  status: AgentStatus,
+  runState: CodexSessionRunState,
+  runOwner: string | undefined,
+): AgentStatus {
   // 「跑了一半被打断」= 落盘时还停在 starting：spawn 已经发出，thread.started 从未落盘。
   //
-  // 这个推断**只看 runState**，不再要求「threadId 为空或 threadMissing」：
-  // 那两个字段是**身份**事实，别的实例在这一轮进行中可以合法地改它们（比如探测到线程又回来了，
-  // 于是 confirmThreadPresent 清掉失效标记）。一旦把它们串进崩溃判定，别人的一次合法操作
+  // 这个推断**只看 runState**，不再要求「threadId 为空或 threadMissing」：那两个字段是**身份**
+  // 事实，别的实例在这一轮进行中可以合法地改它们（例如探测到线程又回来了，于是
+  // confirmThreadPresent 清掉失效标记）。一旦把它们串进崩溃判定，别人的一次合法操作
   // 就能把「这一轮跑了一半」的事实抹掉，重启后恢复成 idle——用户的消息静默丢失。
-  // runState 则只有这一轮的主人会改（starting → started / 退回上一态），别人不碰。
+  // runState 则由执行操作（beginRun / commitThreadStarted / finishRun）带 attempt 地改写。
   //
-  // cancelled 例外：启动中被取消是**已了结**的一轮，不该事后翻成 failed。
-  if (runState === 'starting' && status !== 'cancelled') return 'failed';
+  // 但停在 starting 还有两种可能：这一轮真的死了，或者另一个 Bridge 还在跑。用归属进程的
+  // 存活区分——活着就显示 running（**不许断言失败**，那会诱导用户再发一次、第二条线程分叉），
+  // 死了 / 无法验证才判 failed。这是租约缺席时的替代判据。
+  if (runState === 'starting') {
+    if (status === 'cancelled') return 'cancelled'; // 启动中被取消是已了结的一轮
+    return isRunOwnerAlive(runOwner) ? 'running' : 'failed';
+  }
   return status === 'running' || status === 'starting' || status === 'waiting' ? 'idle' : status;
 }
 
