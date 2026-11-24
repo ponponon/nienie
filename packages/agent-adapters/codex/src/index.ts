@@ -60,6 +60,25 @@ export {
 /** Nienie 自己创建的会话 id 前缀——只有这类会话需要 Bridge 自己持久化。 */
 const NIENIE_SESSION_ID_PREFIX = 'codex_ses_';
 
+/** sidecar（`<store>.stale-outcomes`）里的一条「终态没写进索引」记录。 */
+type StaleOutcomeEntry = {
+  /** 稳定标识：写入时生成，claim/归还/收编全程保留，事件 eventId 从它派生（客户端可幂等去重）。 */
+  noticeId: string;
+  sessionId: string;
+  at: string;
+  message: string;
+};
+
+/**
+ * 进程内活跃的 claim 实例标识（`claimOwnerId`）。
+ *
+ * 孤儿收编不能只看 pid：**进程活着 ≠ 实例活着**——同进程的 Adapter 重建后，
+ * 旧实例 dispose 归还失败残留的 claim 文件持有本进程 pid，只认 pid 会把它
+ * 当成「活人不抢」永久滞留。实例标识在构造时注册、dispose 时注销；扫描时
+ * 本进程 pid 下只跳过仍活跃实例的 claim，死实例的残留可被新实例收编。
+ */
+const activeClaimOwners = new Set<string>();
+
 const execFileAsync = promisify(execFile);
 
 const capabilities = {
@@ -260,6 +279,23 @@ export class CodexAdapter implements AgentAdapter {
     message: string;
     event: CanonicalAgentEvent;
   }> = [];
+  /**
+   * 已摄取过的 sidecar 记录 `noticeId`（写入时生成的稳定标识）。
+   *
+   * 崩溃恢复后同一条记录可能同时存在于共享 sidecar 与未删掉的 claim 副本里
+   * （append 成功、删 claim 前崩溃）——两份都会被摄取，按 noticeId 去重后
+   * 只入队/送达一次。投递语义是 at-least-once + 稳定 ID 幂等。
+   */
+  private readonly seenNoticeIds = new Set<string>();
+  /**
+   * 通知意图的待写队列：give-up 的 sidecar append 失败时不许把意图丢掉——
+   * 定时补写（锁释放后自动恢复），dispose 做最后一次补写，仍写不进则落成本
+   * 实例名下的 claim 文件（dispose 注销实例后可被孤儿机制收编，不丢）。
+   */
+  private readonly pendingNoticeWrites = new Map<
+    string,
+    { entry: StaleOutcomeEntry; attempts: number; timer?: ReturnType<typeof setTimeout> }
+  >();
   /** 本实例已领取（rename 到手）的 sidecar 副本；全部送达后才删除。 */
   private readonly claimedStaleFiles: string[] = [];
   /**
@@ -268,6 +304,7 @@ export class CodexAdapter implements AgentAdapter {
    * 同一进程里可以有多个 Adapter 实例（测试、重建），只靠 pid 时它们会生成同名
    * claim 文件——`renameSync` 静默覆盖目的地，后领的批次把先领的批次顶掉（提示丢失）
    * 或共用一个删除入口（把对方未确认的副本删掉）。claim 文件名必须跨实例唯一。
+   * 它同时是实例生命周期标识（见 `activeClaimOwners`）：进程活着 ≠ 实例活着。
    */
   private readonly claimOwnerId = randomUUID();
   private staleClaimSeq = 0;
@@ -311,6 +348,7 @@ export class CodexAdapter implements AgentAdapter {
   private readonly historyRecoveryErrors: string[] = [];
 
   constructor(options: CodexAdapterOptions = {}) {
+    activeClaimOwners.add(this.claimOwnerId);
     this.executablePath = resolveCodexBinary(
       options.executablePath ?? process.env.NIENIE_CODEX_BIN,
     );
@@ -776,32 +814,99 @@ export class CodexAdapter implements AgentAdapter {
    *
    * append 与 claim 的 rename 共用 sidecar 锁：打开的 fd 一旦被 rename 带走，
    * 这条字节就写进别人的 claim 副本、随副本一起删掉——记到最后的提示不能这样消失。
+   *
+   * **append 失败不丢通知意图**：进待写队列定时补写（锁释放后自动恢复），
+   * 到重试上限仍写不进则留队列 + 明确诊断（不假装完成），dispose 做最后一次
+   * 补写，仍失败就把记录落成本实例名下的 claim 文件（dispose 注销实例后可被
+   * 孤儿机制收编）——「最终通知」的意图不允许随进程一起消失。
    */
   private persistStaleOutcomeNotice(sessionId: string): void {
     if (!this.sessionStorePath) return;
+    const entry: StaleOutcomeEntry = {
+      noticeId: randomUUID(),
+      sessionId,
+      at: new Date().toISOString(),
+      message: `codex session ${sessionId}: 终态最终未能写入本地索引（重试已放弃），其他窗口可能仍把它显示成运行中`,
+    };
+    if (this.writeStaleOutcomeEntry(entry)) return;
+    // append 失败：意图进队列等补写，绝不就此丢掉
+    const existing = this.pendingNoticeWrites.get(sessionId);
+    if (existing?.timer) clearTimeout(existing.timer);
+    this.pendingNoticeWrites.set(sessionId, { entry, attempts: 1 });
+    this.emitDiagnosticWarning(
+      `codex session ${sessionId}: stale outcome notice append failed; queued for retry`,
+    );
+    this.scheduleNoticeWriteRetry(sessionId);
+  }
+
+  /** 把一条 sidecar 记录 append 进共享路径（持 sidecar 锁）。成功返回 true。 */
+  private writeStaleOutcomeEntry(entry: StaleOutcomeEntry): boolean {
+    if (!this.sessionStorePath) return true;
     const sidecar = `${this.sessionStorePath}.stale-outcomes`;
     try {
       withFileWriteLock(
         `${sidecar}.lock`,
         () => {
-          writeFileSync(
-            sidecar,
-            `${JSON.stringify({
-              sessionId,
-              at: new Date().toISOString(),
-              message: `codex session ${sessionId}: 终态最终未能写入本地索引（重试已放弃），其他窗口可能仍把它显示成运行中`,
-            })}\n`,
-            { flag: 'a' },
-          );
+          writeFileSync(sidecar, `${JSON.stringify(entry)}\n`, { flag: 'a' });
         },
         'codex stale-outcomes sidecar',
       );
-    } catch (error) {
-      this.emitDiagnosticWarning(
-        `codex session ${sessionId}: stale outcome notice persist failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 待写通知的定时补写：锁释放后自动恢复；到上限停表但留队列，等 dispose/flush 的机会。 */
+  private scheduleNoticeWriteRetry(sessionId: string): void {
+    const pending = this.pendingNoticeWrites.get(sessionId);
+    if (!pending || pending.timer) return;
+    const timer = setTimeout(() => {
+      const current = this.pendingNoticeWrites.get(sessionId);
+      if (!current) return;
+      delete current.timer;
+      if (this.writeStaleOutcomeEntry(current.entry)) {
+        this.pendingNoticeWrites.delete(sessionId);
+        return;
+      }
+      current.attempts += 1;
+      if (current.attempts >= 5) {
+        // 到限停表：意图仍留在队列里（dispose/flush 还会补写），但必须明确暴露——
+        // 「最终通知可能丢」不许被一次 give-up 的顺手诊断假装完成
+        this.emitDiagnosticWarning(
+          `codex session ${sessionId}: stale outcome notice still unwritten after ${current.attempts} attempts; kept for dispose/flush retry`,
+        );
+        return;
+      }
+      this.scheduleNoticeWriteRetry(sessionId);
+    }, 50);
+    timer.unref?.();
+    pending.timer = timer;
+  }
+
+  /**
+   * 把没写进共享 sidecar 的通知落成本实例名下的 claim 文件（唯一文件名，不需要锁）。
+   * dispose 会注销本实例标识，之后任何实例的孤儿收编都能把它带走——不丢。
+   */
+  private fallbackNoticeToClaim(entry: StaleOutcomeEntry): boolean {
+    if (!this.sessionStorePath) return false;
+    const claim = `${this.sessionStorePath}.stale-outcomes.${process.pid}.${this.claimOwnerId}.${++this.staleClaimSeq}.claim`;
+    try {
+      writeFileSync(claim, `${JSON.stringify(entry)}\n`, 'utf8');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 待写队列的补写机会（loadSession / listSessions / onEvent 都会走到）：每个机会同步试一次。 */
+  private drainPendingNoticeWrites(): void {
+    for (const [sessionId, pending] of [...this.pendingNoticeWrites]) {
+      if (pending.timer) continue; // 定时补写链在跑的不抢（等它的回合）
+      if (this.writeStaleOutcomeEntry(pending.entry)) {
+        this.pendingNoticeWrites.delete(sessionId);
+      }
+      // 仍写不进就留队列（不重启定时链）：dispose 是最后的补写机会
     }
   }
 
@@ -850,9 +955,17 @@ export class CodexAdapter implements AgentAdapter {
               if (!name.startsWith(`${base}.`) || !name.endsWith('.claim')) continue;
               const full = join(dir, name);
               if (this.claimedStaleFiles.includes(full)) continue;
-              const pid = Number(name.slice(base.length + 1).split('.')[0]);
-              // 只收编持有者已经不在的孤儿；活着的（含本进程其他实例）不抢
-              if (Number.isFinite(pid) && pid > 0 && (pid === process.pid || isPidAlive(pid))) continue;
+              const segments = name.slice(base.length + 1).split('.');
+              const pid = Number(segments[0]);
+              const ownerUuid = segments[1];
+              if (pid === process.pid) {
+                // 本进程的遗留：**进程活着 ≠ 实例活着**。只跳过仍活跃实例（含自己）的
+                // claim；dispose 归还失败残留的死实例 claim 必须能被同进程的新实例
+                // 收编，否则只认 pid 会把它当「活人不抢」永久滞留
+                if (ownerUuid === this.claimOwnerId || (ownerUuid && activeClaimOwners.has(ownerUuid))) continue;
+              } else if (Number.isFinite(pid) && pid > 0 && isPidAlive(pid)) {
+                continue; // 其他还活着的进程：不抢
+              }
               // 孤儿收编走 rename：rename 成功才算认领成功，对方再扫时文件已挂上
               // 本实例的名字（活人 pid），不会再收编第二遍
               const adopt = `${file}.${process.pid}.${this.claimOwnerId}.${++this.staleClaimSeq}.claim`;
@@ -870,8 +983,14 @@ export class CodexAdapter implements AgentAdapter {
         },
         'codex stale-outcomes sidecar',
       );
-    } catch {
-      // sidecar 锁一直被占：这轮不领取（提示留在原地），下一轮 flush 再来
+    } catch (error) {
+      // 锁一直被占：这轮不领取（提示留在原地），下一轮 flush 再来——但不许静默：
+      // 崩溃遗留的锁会永久挡住 claim，至少把锁路径与持有者状态留进诊断
+      this.emitDiagnosticWarning(
+        `codex stale-outcomes claim skipped, lock ${file}.lock unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
       return;
     }
     for (const claim of fresh) {
@@ -881,30 +1000,51 @@ export class CodexAdapter implements AgentAdapter {
       } catch {
         continue;
       }
+      let anyQueued = false;
       for (const line of raw.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
-          const entry = JSON.parse(trimmed) as { sessionId?: string; message?: string };
-          const message = entry.message ?? `终态最终未能写入本地索引（上一个实例重试已放弃）`;
-          const sessionId = entry.sessionId ?? '';
+          const parsed = JSON.parse(trimmed) as Partial<StaleOutcomeEntry>;
+          // 稳定标识：写入时生成、全程保留。旧记录没有 noticeId 的现造一个
+          // （只保证本实例内去重）；崩溃双副本（共享路径 + 未删的 claim）都会
+          // 被摄取，按 noticeId 只入队一次
+          const noticeId = parsed.noticeId ?? randomUUID();
+          if (this.seenNoticeIds.has(noticeId)) continue;
+          this.seenNoticeIds.add(noticeId);
+          const message = parsed.message ?? `终态最终未能写入本地索引（上一个实例重试已放弃）`;
+          const sessionId = parsed.sessionId ?? '';
           this.pendingStaleNotices.push({
-            sessionId: entry.sessionId,
+            sessionId: parsed.sessionId,
             message,
             event: createCanonicalEvent({
               streamEpoch: this.normalizer.streamEpoch,
               agentId: 'codex',
               sessionId,
               timestamp: new Date().toISOString(),
-              eventId: `notice:${sessionId}:PERSIST_FAILED:${Date.now()}`,
+              // eventId 从稳定 noticeId 派生：崩溃后重新摄取还是同一个 eventId，
+              // 客户端按 eventId 幂等去重——at-least-once 投递不产生重复展示
+              eventId: `notice:${sessionId}:PERSIST_FAILED:${noticeId}`,
               sequence: this.normalizer.nextSequence(sessionId),
               type: 'error',
               payload: { code: 'PERSIST_FAILED', message, retryable: false },
             }),
           });
+          anyQueued = true;
           this.emitDiagnosticWarning(message);
         } catch {
           // 半行损坏不影响其他行
+        }
+      }
+      if (!anyQueued) {
+        // 整份副本都是已摄取过的重复记录（或全损坏）：副本没有存在的理由，直接删
+        //——否则队列为空时 flush 的「送达后删副本」永远不会走到它
+        const index = this.claimedStaleFiles.indexOf(claim);
+        if (index >= 0) this.claimedStaleFiles.splice(index, 1);
+        try {
+          rmSync(claim, { force: true });
+        } catch {
+          // 删不掉下次摄取时再试（noticeId 去重不受影响）
         }
       }
     }
@@ -919,6 +1059,8 @@ export class CodexAdapter implements AgentAdapter {
    * 重发——事件还没送到就不许删记录。
    */
   private flushStaleOutcomeNotices(): void {
+    // 待写通知的补写机会：锁已释放的（含到限停表的）在这里再试一次
+    this.drainPendingNoticeWrites();
     if (this.listeners.size > 0 && this.sessionStorePath) {
       // 有人听才领取（rename 抢占）：没送达不消费——没人听连领都不领
       this.claimStaleOutcomeFiles();
@@ -2134,7 +2276,8 @@ export class CodexAdapter implements AgentAdapter {
           );
           released = true;
         } catch {
-          // 放不回去（含锁被占）就留着 claim 文件，持有者 pid 已退出后可被孤儿收编
+          // 放不回去（含锁被占）就留着 claim 文件：实例标识在 dispose 末尾注销后，
+          // 同进程的新实例也能收编它（进程活着 ≠ 实例活着）
         }
         if (released) {
           try {
@@ -2145,6 +2288,22 @@ export class CodexAdapter implements AgentAdapter {
         }
       }
     }
+    // 通知意图的收尾：最后补写一次；仍写不进共享池就落成本实例名下的 claim 文件
+    //（实例标识随即注销，孤儿收编能带走）——不许随 dispose 丢掉最终通知
+    for (const [sessionId, pending] of [...this.pendingNoticeWrites]) {
+      if (pending.timer) clearTimeout(pending.timer);
+      if (this.writeStaleOutcomeEntry(pending.entry) || this.fallbackNoticeToClaim(pending.entry)) {
+        this.pendingNoticeWrites.delete(sessionId);
+        continue;
+      }
+      // 共享池与 claim 文件都写不进（目录不可写）：只能明确暴露，不假装完成
+      this.emitDiagnosticWarning(
+        `codex session ${sessionId}: stale outcome notice LOST on dispose (append and claim-file write both failed)`,
+      );
+      this.pendingNoticeWrites.delete(sessionId);
+    }
+    // 注销实例标识：本实例名下残留的 claim 从此可被同进程的新实例收编
+    activeClaimOwners.delete(this.claimOwnerId);
     this.pendingStaleNotices = [];
     this.listeners.clear();
   }

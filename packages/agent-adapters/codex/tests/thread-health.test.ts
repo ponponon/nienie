@@ -2383,7 +2383,7 @@ describe('Codex 线程恢复的真实性', () => {
     expect(existsSync(sidecar)).toBe(false);
   });
 
-  it('sidecar 的 append 与 claim 共用锁：锁被占时 append 不抢写（留诊断），锁释放后照常落', () => {
+  it('sidecar 的 append 与 claim 共用锁：锁被占时 append 不抢写（意图进队列），锁释放后自动补写', async () => {
     const codexHome = makeDir('nienie-codex-home-');
     const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
     new CodexSessionStore({ filePath: storePath }).save([{ ...STORE_BASE, id: 'codex_ses_lock' }]);
@@ -2403,16 +2403,18 @@ describe('Codex 线程恢复的真实性', () => {
     );
     (adapter as unknown as { persistStaleOutcomeNotice(sessionId: string): void })
       .persistStaleOutcomeNotice('codex_ses_lock');
-    // 不许锁外抢写（否则 fd 会被 claim 的 rename 带走、字节随副本被删）
+    // 不许锁外抢写（否则 fd 会被 claim 的 rename 带走、字节随副本被删）；
+    // 失败的意图进待写队列，不许就此丢掉
     expect(existsSync(sidecar)).toBe(false);
     expect(adapter.getDiagnostics().historyRecoveryErrors.join('\n')).toContain(
-      'stale outcome notice persist failed',
+      'stale outcome notice append failed; queued for retry',
     );
 
-    // 锁释放后照常落
+    // 锁释放后由待写队列**自动补写**（生产路径的定时重试，不是手动再调一次）
     rmSync(`${sidecar}.lock`, { force: true });
-    (adapter as unknown as { persistStaleOutcomeNotice(sessionId: string): void })
-      .persistStaleOutcomeNotice('codex_ses_lock');
+    expect(
+      await waitForCondition(() => existsSync(sidecar)),
+    ).toBe(true);
     expect(readFileSync(sidecar, 'utf8')).toContain('codex_ses_lock');
   });
 
@@ -2508,6 +2510,143 @@ describe('Codex 线程恢复的真实性', () => {
       (event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED',
     );
     expect(delivered).toHaveLength(1);
+  });
+
+  it('dispose 归还失败的 claim 不永久滞留：同进程新实例按实例标识收编，恰好送达一次', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_rel', threadId: 'th_live', runState: 'started' },
+    ]);
+    const sidecar = `${storePath}.stale-outcomes`;
+    const dir = dirname(storePath);
+    writeFileSync(
+      sidecar,
+      `${JSON.stringify({
+        noticeId: 'n_rel',
+        sessionId: 'codex_ses_rel',
+        at: '2026-11-24T09:00:00.000Z',
+        message: 'codex session codex_ses_rel: 终态最终未能写入本地索引（重试已放弃）',
+      })}\n`,
+      'utf8',
+    );
+
+    // A 领取但不确认送达（中间层）
+    const first = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    first.onEvent(() => false);
+    // 归还需要的锁被占：A dispose 归还失败，claim 副本（名字带 A 的实例标识）留在盘上
+    writeFileSync(
+      `${sidecar}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    await first.dispose();
+    expect(readdirSync(dir).filter((name) => name.endsWith('.claim'))).toHaveLength(1);
+
+    // 释锁 → B（同进程、新实例）：只认 pid 会把 A 的残留当「活人不抢」永久滞留——
+    // 进程活着 ≠ 实例活着，A 已 dispose（实例标识已注销），B 必须能收编
+    rmSync(`${sidecar}.lock`, { force: true });
+    const second = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const events: CanonicalAgentEvent[] = [];
+    second.onEvent((event) => events.push(event));
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1);
+    expect(readdirSync(dir).filter((name) => name.endsWith('.claim'))).toHaveLength(0);
+  });
+
+  it('通知意图不随 dispose 丢失：append 与归还都失败时落成 claim 副本，新实例收编送达', async () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_fb', threadId: 'th_live', runState: 'started' },
+    ]);
+    const sidecar = `${storePath}.stale-outcomes`;
+    const dir = dirname(storePath);
+    const first = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+
+    // give-up 写入撞锁：意图进待写队列（不丢），dispose 时锁仍被占
+    writeFileSync(
+      `${sidecar}.lock`,
+      JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }),
+      'utf8',
+    );
+    (first as unknown as { persistStaleOutcomeNotice(sessionId: string): void })
+      .persistStaleOutcomeNotice('codex_ses_fb');
+    await first.dispose(); // 最后补写仍撞锁 → 落成本实例名下的 claim 副本
+    expect(existsSync(sidecar)).toBe(false);
+    expect(readdirSync(dir).filter((name) => name.endsWith('.claim'))).toHaveLength(1);
+
+    // 锁释放后新实例收编：最终通知必须还能到达
+    rmSync(`${sidecar}.lock`, { force: true });
+    const second = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const events: CanonicalAgentEvent[] = [];
+    second.onEvent((event) => events.push(event));
+    expect(
+      events.filter((event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED'),
+    ).toHaveLength(1);
+  });
+
+  it('崩溃双副本按 noticeId 幂等：共享路径 + claim 副本同一条只送达一次（eventId 稳定）', () => {
+    const codexHome = makeDir('nienie-codex-home-');
+    const storePath = join(makeDir('nienie-store-'), 'codex-sessions.json');
+    seedThreads(codexHome, ['th_live']);
+    new CodexSessionStore({ filePath: storePath }).save([
+      { ...STORE_BASE, id: 'codex_ses_dup', threadId: 'th_live', runState: 'started' },
+    ]);
+    const sidecar = `${storePath}.stale-outcomes`;
+    // 崩溃场景：append 成功、删 claim 前进程没了——同一条记录在共享路径和 claim 副本各一份
+    const entry = {
+      noticeId: 'n_dup',
+      sessionId: 'codex_ses_dup',
+      at: '2026-11-24T09:30:00.000Z',
+      message: 'codex session codex_ses_dup: 终态最终未能写入本地索引（重试已放弃）',
+    };
+    writeFileSync(sidecar, `${JSON.stringify(entry)}\n`, 'utf8');
+    const deadPid = spawnSync(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' }).pid;
+    expect(deadPid).toBeGreaterThan(0);
+    writeFileSync(
+      `${sidecar}.${deadPid}.deadbeef-0000-0000-0000-000000000000.1.claim`,
+      `${JSON.stringify(entry)}\n`,
+      'utf8',
+    );
+
+    const adapter = new CodexAdapter({
+      codexHome,
+      defaultProjectPath: PROJECT,
+      sessionStorePath: storePath,
+      spawnProcess: (args) => createFakeProcess('th_live'),
+    });
+    const events: CanonicalAgentEvent[] = [];
+    adapter.onEvent((event) => events.push(event)); // 同一次 flush：领取共享副本 + 收编孤儿副本
+    const delivered = events.filter(
+      (event) => event.type === 'error' && event.payload.code === 'PERSIST_FAILED',
+    );
+    expect(delivered).toHaveLength(1);
+    // eventId 从稳定 noticeId 派生：崩溃后重新摄取还是同一个 eventId，客户端幂等去重有据
+    expect(delivered[0]?.eventId).toBe('notice:codex_ses_dup:PERSIST_FAILED:n_dup');
   });
 
   it('RUN_FAILED 的核对与发送在写锁临界区内：事件发出的瞬间写锁还占着，beginRun 插不进', async () => {

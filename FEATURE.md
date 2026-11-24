@@ -1160,3 +1160,13 @@
 - **测试**：TS 全仓 403（codex 129：thread-health 55 + session-store 53、bridge-core 86、desktop 8），Flutter 121。变异验证 8 处全红：close finalTry 改回 apply、safeCallListener 直通、register 异常吞成 unavailable、claim 文件名去 UUID、append 不持锁、claim 不持锁、孤儿原地认领、Registry 补发无视回执/不退缓冲/不隔离异常。
 - **过程教训（已记 FailureExperience.md）**：变异还原用 `git checkout --` 毁掉未提交工作两次（靠 file-history 快照恢复）——规则升级为「变异还原的唯一合法动作是 `cp <备份> <file>`」；Node strip-only 模式不支持 `constructor(readonly x)` 参数属性（save-worker 直载 session-store 时报 ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX）。
 - **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
+
+### 2026-11-24 第三方 review 第二十轮：sidecar outbox 的崩溃恢复语义收严（noticeId 幂等、补写队列、实例级收编）
+
+第十九轮 review 判「2d6ee9e 五项修复主体通过、0 P1 遗留」，沿 sidecar 失败恢复路径新发现 3 个 P2，明确「第 20 轮只处理 Sidecar 的生命周期、失败恢复和幂等性」「这套事件投递与执行 fencing 架构已经接近可以封板的状态」。
+
+- **P2-1 append 失败不丢通知意图**：give-up 的 sidecar append 是最终一次持久化尝试，锁被占就只剩一条诊断——通知意图随进程蒸发，恰是这套机制要消灭的丢失窗口。修法：意图进**待写队列**（带 noticeId 的完整记录），定时补写（锁释放后自动恢复，50ms × 5 到限停表但**留队列** + 明确诊断「不假装完成」）；`flushStaleOutcomeNotices` 每次都给一次同步补写机会；dispose 收尾做最后一次补写，仍写不进共享池则**落成本实例名下的 claim 文件**（唯一文件名不需要锁，实例标识注销后孤儿机制可收编）——共享池与 claim 文件都写不动才如实报 LOST。`claimStaleOutcomeFiles` 的锁失败不再静默吞掉：诊断带锁路径与持有者状态（崩溃遗留锁会永久挡住 claim，必须可发现）。测试改自旧「锁被占→手动再调」（review 指出那证明不了生产路径）：锁被占进队列 → 释锁 → **定时补写自动落盘**（生产路径）。
+- **P2-2 claim 收编认实例不认 PID**：dispose 归还失败残留的 claim 持有本进程 pid，旧收编规则「pid 是自己就跳过」把它当「活人不抢」——同进程 Adapter 重建后永久滞留。进程活着 ≠ 实例活着。修法：进程内活跃实例标识集合（`claimOwnerId` 构造注册、dispose 注销）；孤儿扫描解析 claim 文件名里的实例 UUID，本进程 pid 下**只跳过仍活跃实例**（含自己）的 claim，死实例残留照常 rename 收编。按 review 处方补测试：A 领取不确认 → 占锁 → A dispose 归还失败 → 释锁 → B 同进程启动 → 收编 A 的 claim → 恰好送达一次。
+- **P2-3 崩溃双副本按 noticeId 幂等**：dispose 的 append→rm 不是原子操作，崩溃在中间会让同一条记录同时躺在共享 sidecar 与 claim 副本里，两份都被摄取就发两次；且旧代码重新解析时用 `Date.now()` 造 eventId，客户端没法去重。修法：sidecar 记录写入时生成**稳定 `noticeId`**，claim/归还/收编全程保留；事件 `eventId` 从 noticeId 派生（`notice:<session>:PERSIST_FAILED:<noticeId>`，崩溃后重新摄取还是同一个 eventId）；实例摄取按 noticeId 去重（双副本只入队一次，纯重复副本直接删）。投递语义如实定为 **at-least-once + 稳定 ID 幂等**（文件系统 outbox 与内存事件历史之间没有原子事务，不宣称跨崩溃 exactly-once）。测试：共享路径 + 死进程 claim 副本同一条记录，同一次 flush 两份都摄取，PERSIST_FAILED 恰一条、eventId 等于 noticeId 派生值。
+- **测试**：TS 全仓 406（codex 132：thread-health 58 + session-store 53、bridge-core 86、desktop 8）、Flutter 121。变异验证 5 处全红：M1 append 失败丢意图、M2 收编退回只认 pid、M3 摄取不去重、M4 eventId 回 Date.now()、M5 dispose 不落 claim 兜底。原有双实例原子领取、Bridge 集成、监听器隔离与 fencing 测试全部继续通过。
+- **仍未做（review 列为路线图，不在本轮）**：跨进程执行租约；`writeSessions()` 的 `fsync`（P2）；PID 复用保护。
